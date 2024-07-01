@@ -1,15 +1,19 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.params import Query
+from pydantic import BaseModel
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
-from rag_pdf_api.chatbot.chatbot_creator import Chatbot
+from rag_pdf_api.chatbot.chatbot_creator import setup_chatbot
 
 configs = Config()
-chatbot = Chatbot(configs)
+chatbot, timestamp = setup_chatbot(configs)
 
-from rag_pdf_api import __name__, __version__
+
+class Query(BaseModel):
+    text: str
+    llm_only: bool = False
+
 
 app = FastAPI()
 
@@ -24,15 +28,6 @@ app.add_middleware(
     skip_paths=["/health", "/metrics"],
 )
 app.add_route("/metrics", handle_metrics)
-
-
-@app.get("/")
-async def root(
-    message: str = Query("Hello World", max_length=10),
-):
-    return {
-        "message": message,
-    }
 
 
 @app.get("/health")
@@ -58,8 +53,10 @@ async def info():
     }
 
 
-@app.get("/pdf/answer")
+@app.post("/pdf/answer")
 async def answer(query: Query):
+    """"""
+    print(f"Using data from: {timestamp}")
     try:
         if query.llm_only:
             response = chatbot.get_llm_answer(query.text)

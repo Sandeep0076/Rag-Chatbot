@@ -2,12 +2,17 @@ import os
 
 import chromadb
 import openai
-from llama_index.core import PromptHelper, ServiceContext, VectorStoreIndex
+from llama_index.core import ServiceContext, VectorStoreIndex
+from llama_index.core.storage.storage_context import StorageContext
+from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+from llama_index.llms.azure_openai import AzureOpenAI
+from llama_index.vector_stores.chroma import ChromaVectorStore
+
+from rag_pdf_api.chatbot.gcs_handler import GCSHandler
 
 # Set up Azure OpenAI API keys and endpoints
 os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get("AZURE_OPENAI_LLM_API_KEY", "")
 os.environ["AZURE_OPENAI_ENDPOINT"] = os.environ.get("AZURE_OPENAI_LLM_ENDPOINT", "")
-from llama_index.llms.azure_openai import AzureOpenAI
 
 os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get(
     "AZURE_OPENAI_EMBEDDING_API_KEY", ""
@@ -15,9 +20,6 @@ os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get(
 os.environ["AZURE_OPENAI_ENDPOINT"] = os.environ.get(
     "AZURE_OPENAI_EMBEDDING_ENDPOINT", ""
 )
-from llama_index.core.storage.storage_context import StorageContext
-from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
-from llama_index.vector_stores.chroma import ChromaVectorStore
 
 
 class Chatbot:
@@ -247,3 +249,23 @@ class Chatbot:
             return completion.choices[0].message.content
         else:
             return "FALSE"
+
+
+def setup_chatbot(configs):
+    """
+    Sets up the Chatbot instance and retrieves the latest timestamp folder.
+
+    Parameters:
+    configs (Config): Configuration object containing necessary settings.
+
+    Returns:
+    tuple: A tuple containing the Chatbot instance and the latest timestamp folder.
+
+    The function logs the start of the download process, creates a GCSHandler instance, downloads the latest timestamp files, retrieves the latest timestamp folder, and returns the Chatbot instance and timestamp folder.
+    """
+    print("Now downloading latest timestamp files.")
+    gcs_handler = GCSHandler(configs)
+    gcs_handler.download_latest_timestamp_files()
+    timestamp = gcs_handler.get_latest_time_stamp_folder()
+
+    return Chatbot(configs), timestamp
