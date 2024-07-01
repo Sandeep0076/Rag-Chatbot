@@ -6,7 +6,7 @@ variables:
 
 include:
   - project: dataalliance/infra/common/ci-templates
-    ref: v19.2.0
+    ref: v23.3.0
     file: /infra/pipelines/apps/main/include-all.yml
   - local: /ci/helm.yml
 
@@ -26,3 +26,8 @@ helm:tags:dryrun:
         - dev
         - preprod
         - prod
+      - MG_K8S_CLUSTER_NAME: k8s-eewac
+
+helm:lint:
+  variables:
+    MG_K8S_CLUSTER_NAME: k8s-biqua
