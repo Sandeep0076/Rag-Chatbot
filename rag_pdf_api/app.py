@@ -1,7 +1,13 @@
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.params import Query
 from starlette_exporter import PrometheusMiddleware, handle_metrics
+
+from configs.app_config import Config
+from rag_pdf_api.chatbot.chatbot_creator import Chatbot
+
+configs = Config()
+chatbot = Chatbot(configs)
 
 from rag_pdf_api import __name__, __version__
 
@@ -45,9 +51,25 @@ async def info():
     This could be the service name and some build info like
     e.g. the commit hash or the build time.
     """
-    return {"name": __name__, "version": __version__}
+    return {
+        "title": configs.chatbot.title,
+        "description": configs.chatbot.description,
+        "info_text": configs.chatbot.info_text,
+    }
+
+
+@app.get("/pdf/answer")
+async def answer(query: Query):
+    try:
+        if query.llm_only:
+            response = chatbot.get_llm_answer(query.text)
+        else:
+            response = chatbot.get_answer(query.text)
+        return {"response": response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def start():
     """Launched with `poetry run start` at root level"""
-    uvicorn.run("example_fast_api.app:app", host="0.0.0.0", port=8080, reload=False)
+    uvicorn.run("rag_pdf_api.app:app", host="0.0.0.0", port=8080, reload=False)
