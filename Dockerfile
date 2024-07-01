@@ -1,0 +1,58 @@
+#  ╭──────────────────────────────────────────────────────────╮
+#  │                        Base - Stage                      │
+#  ╰──────────────────────────────────────────────────────────╯
+FROM europe-west1-docker.pkg.dev/mgr-platform-prod-khsu/image-hub/dockerhub/python:3.11-slim as base
+ENV PYTHONUNBUFFERED=true
+
+# adding non root user "worker", with no password, uid needed for workflow
+RUN adduser \
+    --disabled-password \
+    --uid 4711 \
+    worker \
+    && mkdir -p /code /opt/poetry \
+    && chown -R worker:worker /code
+
+WORKDIR /code
+
+#  ╭──────────────────────────────────────────────────────────╮
+#  │                       Build - Stage                      │
+#  ╰──────────────────────────────────────────────────────────╯
+FROM base as build
+
+ENV POETRY_HOME=/opt/poetry
+ENV POETRY_VIRTUALENVS_IN_PROJECT=true
+ENV PATH="$POETRY_HOME/bin:$PATH"
+
+RUN apt-get update && apt-get install build-essential -y  && apt-get install -y --no-install-recommends \
+    curl gcc musl-dev build-essential\
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --upgrade pip \
+    && curl -sSL https://install.python-poetry.org | python3 -
+
+USER worker
+
+WORKDIR /code
+COPY --chown=nobody . ./
+
+RUN python3 -m pip install --user python-dev-tools
+ARG GITLAB_CI_TOKEN
+RUN poetry config repositories.python-packages https://gitlab.com/api/v4/projects/33281928/packages/pypi/simple/
+RUN poetry config http-basic.python-packages gitlab-ci-token ${GITLAB_CI_TOKEN} --no-interaction
+RUN poetry install --no-interaction --no-dev
+    # Clear the cache: it is mostly pip and poetry cache and the pipeline crashed without clearing it
+RUN rm -rf /home/nobody/.cache/pypoetry/cache \
+    && rm -rf /home/nobody/.cache/pypoetry/artifacts
+
+#  ╭──────────────────────────────────────────────────────────╮
+#  │                     Runtime - Stage                      │
+#  ╰──────────────────────────────────────────────────────────╯
+FROM base as runtime
+ENV PATH="/opt/poetry/bin:code/.venv/bin:$PATH"
+
+COPY --from=build /opt/poetry /opt/poetry
+COPY --from=build --chown=worker:worker /code /code
+
+EXPOSE 8080
+
+ENTRYPOINT ["poetry", "run"]
+CMD [ "start" ]

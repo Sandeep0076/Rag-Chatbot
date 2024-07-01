@@ -1,0 +1,29 @@
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: '1d48f551-d8bf-47ee-a99f-a298b15375b8'
+  title: rag-pdf-api
+  description: RAG PDF API
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+    sonarqube.org/project-key: dataalliance_rag-pdf-api
+spec:
+  type: service
+  owner: ecina
+  lifecycle: experimental
+  providesApis:
+    - 39e55275-d77a-4f08-82b2-b76a9d7bed98
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: 39e55275-d77a-4f08-82b2-b76a9d7bed98
+  title: rag-pdf-api
+  tags: [private]
+spec:
+  type: openapi
+  lifecycle: experimental
+  owner: ecina
+  definition:
+    $text: ./openapi.json

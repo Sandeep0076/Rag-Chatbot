@@ -1,0 +1,38 @@
+global:
+  env: "test"
+  port: 8080
+  vault:
+    secrets_prefix: "common"
+universal-helm-chart:
+  container:
+    image:
+      repository: "override-me-via-ci-pipeline"
+      tag: "override-me-via-ci-pipeline"
+    securityContext:
+      runAsUser: 1000
+    resources:
+      requests:
+        cpu: 4m
+        memory: 40Mi
+      limits:
+        cpu: 100m
+        memory: 512Mi
+    livenessProbe:
+      failureThreshold: 3
+      initialDelaySeconds: 15
+      periodSeconds: 15
+    readinessProbe:
+      initialDelaySeconds: 15
+      periodSeconds: 15
+  deployment:
+    podAnnotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/path: /metrics
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: "topology.kubernetes.io/zone"
+        whenUnsatisfiable: ScheduleAnyway
+  ingress:
+    enabled: true
+    domains:
+      - "rag-pdf-api.ecina.test.da-service.io"

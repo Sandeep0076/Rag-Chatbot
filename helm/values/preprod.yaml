@@ -1,0 +1,8 @@
+global:
+  env: preprod
+universal-helm-chart:
+  ingress:
+    domains:
+      - rag-pdf-api.itowe.gcp.preprod.da-service.io
+  deployment:
+    scaleDown: false #Placeholder for user input from developer portal

@@ -1,0 +1,22 @@
+# INFO: This just overrides the empty .helm_prepare_upgrade snippet to prepare actual helm upgrade (OPTIONAL)
+.helm_prepare_upgrade:
+  - mkdir -p helm/values/generated/
+
+  - |
+    set +u
+    export deployment_image_repo="europe-west1-docker.pkg.dev/${MG_REGISTRY_GCP_PROJECT_ID?}/${MG_IMAGE_NAME?}"
+    if [[ "${CI_COMMIT_TAG}" == "" ]]; then
+      export deployment_image_tag="${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}${MG_IMAGE_TAG_SUFFIX?}"
+    else
+      export deployment_image_tag="${CI_COMMIT_TAG}${MG_IMAGE_TAG_SUFFIX?}"
+    fi
+    set -u
+
+  - |
+    cat <<EOF >> helm/values/generated/${MG_ENV?}.yaml
+    universal-helm-chart:
+      container:
+        image:
+          repository: '${deployment_image_repo}'
+          tag: '${deployment_image_tag}'
+    EOF

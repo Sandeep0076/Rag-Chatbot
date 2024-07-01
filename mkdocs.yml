@@ -1,0 +1,13 @@
+site_name: 'rag-pdf-api'
+site_description: 'RAG PDF API'
+
+nav:
+  - Introduction: index.md
+
+plugins:
+  - techdocs-core
+
+markdown_extensions:
+  - tables
+  - plantuml_markdown:
+      server: https://www.plantuml.com/plantuml

@@ -1,0 +1,8 @@
+apiVersion: v2
+type: application
+name: rag-pdf-api
+version: "1.0.0"
+dependencies:
+  - name: universal-helm-chart
+    repository: oci://europe-west1-docker.pkg.dev/mgr-platform-prod-khsu/charts
+    version: 1.0.7-1.0.7

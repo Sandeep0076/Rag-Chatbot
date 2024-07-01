@@ -1,0 +1,28 @@
+variables:
+  MG_APP_NAME: $CI_PROJECT_NAME
+  MG_RENDERED_MANIFESTS_PUSH: "true"
+  MG_KANIKO_EXTRA_ARGS: |
+    --build-arg GITLAB_CI_TOKEN=${CI_JOB_TOKEN}
+
+include:
+  - project: dataalliance/infra/common/ci-templates
+    ref: v19.2.0
+    file: /infra/pipelines/apps/main/include-all.yml
+  - local: /ci/helm.yml
+
+poetry:test:
+  parallel:
+    matrix:
+      - PYTHON_VERSION:
+          - 3.11.6
+
+helm:tags:dryrun:
+  allow_failure: true #TODO remove after https://rtldata.atlassian.net/browse/DAINFRA-1387 has been resolved to make chart version bumping optional (again)
+
+.helm_push_manifests_job:
+  parallel:
+    matrix:
+      - MG_ENV:
+        - dev
+        - preprod
+        - prod

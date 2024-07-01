@@ -1,0 +1,11 @@
+[flake8]
+ignore = W503, E203
+max-line-length = 120
+max-complexity = 18
+select = B,C,E,F,W,T4,B9
+extend-immutable-calls =
+  fastapi.Depends,
+  fastapi.params.Depends,
+  fastapi.Query,
+  fastapi.params.Query,
+  Query
