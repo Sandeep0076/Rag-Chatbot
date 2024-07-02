@@ -53,8 +53,16 @@ async def info():
     }
 
 
-@app.post("/pdf/answer")
-async def answer(query: Query):
+@app.post("/pdf/preprocess")
+async def preprocess(file_ref: str):
+    """"""
+    # 1. download file from GCS
+    # 2. create embedding (VectorDbWrapper)
+    # 3. store back to GCS
+
+
+@app.post("/pdf/chat")
+async def chat(query: Query):
     """"""
     print(f"Using data from: {timestamp}")
     try:
