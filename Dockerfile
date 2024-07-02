@@ -38,7 +38,7 @@ RUN python3 -m pip install --user python-dev-tools
 ARG GITLAB_CI_TOKEN
 RUN poetry config repositories.python-packages https://gitlab.com/api/v4/projects/33281928/packages/pypi/simple/
 RUN poetry config http-basic.python-packages gitlab-ci-token ${GITLAB_CI_TOKEN} --no-interaction
-RUN poetry install --no-interaction --no-dev
+RUN poetry install --no-interaction --only main
     # Clear the cache: it is mostly pip and poetry cache and the pipeline crashed without clearing it
 RUN rm -rf /home/nobody/.cache/pypoetry/cache \
     && rm -rf /home/nobody/.cache/pypoetry/artifacts
