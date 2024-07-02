@@ -8,7 +8,7 @@ readme = 'README.md'
 [[tool.poetry.source]]
 name = "python-packages"
 url = "https://gitlab.com/api/v4/projects/42761560/packages/pypi/simple/"
-priority = secondary
+priority = "secondary"
 
 
 [tool.poetry.dependencies]
