@@ -68,7 +68,9 @@ class GCSHandler:
         else:
             return None
 
-    def download_files_from_gcs(self, latest_timestamp, local_destination="chroma_db"):
+    def download_chromadb_files_from_gcs(
+        self, latest_timestamp, local_destination="chroma_db"
+    ):
         """
         Download Chroma DB files from the GCS bucket.
 
@@ -94,13 +96,30 @@ class GCSHandler:
                     f"Downloaded gs://{self.bucket}/{blob.name} to {local_file_path} with name {file_name_on_local}"
                 )
 
+    def download_files_from_gcs(
+        self, bucket_name: str, source_blob_name: str, destination_file_path: str
+    ):
+        """
+        A generic method to download files from GCS.
+        """
+
+        # Get the bucket
+        bucket = self._storage_client.bucket(bucket_name)
+        blob = bucket.blob(source_blob_name)
+
+        # ensure the directory exists
+        os.makedirs(os.path.dirname(destination_file_path), exist_ok=True)
+
+        # and download the blob to a file
+        blob.download_to_filename(destination_file_path)
+
     def download_latest_timestamp_files(self):
         """
         Download files from the newest folder in GCS.
         """
         if self.latest_timestamp_folder:
             logging.info("Now calling download method")
-            self.download_files_from_gcs(
+            self.download_chromadb_files_from_gcs(
                 latest_timestamp=self.latest_timestamp_folder,
             )
         else:
