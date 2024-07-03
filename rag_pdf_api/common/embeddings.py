@@ -4,7 +4,7 @@ from configs.app_config import Config
 from rag_pdf_api.common.vector_db_creator import VectorDbWrapper
 
 
-def run_preprocessor(configs: Config, text_data_folder_path: str):
+def run_preprocessor(configs: Config, text_data_folder_path: str, specific_folder: str):
     """
     Runs the data preprocessor which reads PDF data, converts it into a vector database,
     and uploads the database files to Google Cloud Storage.
@@ -27,6 +27,8 @@ def run_preprocessor(configs: Config, text_data_folder_path: str):
         text_data_folder_path=text_data_folder_path,
         gcp_project="dat-itowe-dev",
         bucket_name="chatbotui",
+        gcs_subfolder="pdf-embeddings",
+        specific_folder=specific_folder
     )
 
     logging.info("Now creating and storing index")
@@ -48,7 +50,7 @@ def run_preprocessor(configs: Config, text_data_folder_path: str):
 
     # Delete local database artifacts to avoid memory issues
     my_wrapper.delete_db_artifacts("./chroma_db")
-
+    logging.info(f"Successfully processed and uploaded files for folder: {specific_folder}")
     """
     Command-line usage examples:
     - python src/main.py ./upload

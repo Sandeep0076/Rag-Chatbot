@@ -9,12 +9,11 @@ from rag_pdf_api.chatbot.gcs_handler import GCSHandler
 from rag_pdf_api.common.embeddings import run_preprocessor
 
 configs = Config()
-chatbot, timestamp = setup_chatbot(configs)
+#chatbot, timestamp = setup_chatbot(configs)
 
 
 class Query(BaseModel):
     text: str
-    llm_only: bool = False
 
 
 app = FastAPI()
@@ -31,7 +30,6 @@ app.add_middleware(
 )
 app.add_route("/metrics", handle_metrics)
 
-
 @app.get("/health")
 async def health():
     """
@@ -39,7 +37,6 @@ async def health():
     In the future this could do some actual checks.
     """
     return {"status": "up"}
-
 
 @app.get("/info")
 async def info():
@@ -54,39 +51,34 @@ async def info():
         "info_text": configs.chatbot.info_text,
     }
 
-
 @app.post("/pdf/preprocess")
 async def preprocess():
-    """"""
-
-    # TODO accept this from request parameters
     bucket_name = "chatbotui"
-    source_blob_name = "pdfs-raw/2bf2c97f-a40f/building-ontologies-for-reuse.pdf"
+    folder_path = "pdfs-raw"
+    specific_folder = "2bf2c97f-a40f"
+    destination_file_path = "local_data/"
 
-    # local path where the file should be saved
-    destination_file_name = "local_data/building-ontologies-for-reuse.pdf"
-
-    # Download the file
     gcs_handler = GCSHandler(configs)
-    gcs_handler.download_files_from_gcs(
-        bucket_name, source_blob_name, destination_file_name
-    )
+    
+    try:
+        folder_found = gcs_handler.check_and_download_folder(
+            bucket_name, folder_path, specific_folder, destination_file_path
+        )
 
-    # TODO
-    run_preprocessor(configs=configs, text_data_folder_path="./local_data")
-
-    return "ok"
-
-
+        if folder_found:
+            # TODO: Add any additional processing steps here
+            run_preprocessor(configs=configs, text_data_folder_path="./local_data",specific_folder=specific_folder)
+            return {"status": "Files downloaded successfully", "folder": specific_folder}
+        else:
+            raise HTTPException(status_code=404, detail=f"Folder {specific_folder} not found in {folder_path}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")  
+   
 @app.post("/pdf/chat")
 async def chat(query: Query):
-    """"""
-    print(f"Using data from: {timestamp}")
     try:
-        if query.llm_only:
-            response = chatbot.get_llm_answer(query.text)
-        else:
-            response = chatbot.get_answer(query.text)
+        response = chatbot.get_llm_answer(query.text)
+
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

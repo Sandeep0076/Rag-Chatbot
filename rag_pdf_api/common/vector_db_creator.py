@@ -22,6 +22,8 @@ class VectorDbWrapper:
         gcp_project,
         bucket_name,
         text_data_folder_path,
+        gcs_subfolder="pdf-embeddings",
+        specific_folder=None
     ):
         """Class to handle creation of Chromba DB Index
 
@@ -58,8 +60,10 @@ class VectorDbWrapper:
         self.bucket_name = bucket_name
         self.llm_model = self._init_llm_model()
         self.embedding_model = self._init_embedding_model()
+        self.gcs_subfolder = gcs_subfolder
+        self.specific_folder = specific_folder
         self.documents = self._create_list_of_documents()
-        self.current_ts = self._create_timestamp_folder_string()
+        #self.current_ts = self._create_timestamp_folder_string()
 
     def _create_list_of_documents(self) -> List:
         """Create a list of Llama_index Document classes
@@ -274,20 +278,20 @@ class VectorDbWrapper:
         Return:
             None, uploads all files from /chroma_db to the gcp bucket
         """
-        # Initialize a client
+        # Initialize a client and bucket
         storage_client = storage.Client(self.gcp_project)
-
-        # Initialize bucket
         bucket = storage_client.bucket(self.bucket_name)
-
         # Get chroma_db folder
         chroma_folder = Path.cwd() / "chroma_db"
 
-        # Upload files
+        # Use specific_folder instead of current_ts if provided
+        folder_name = self.specific_folder or self.current_ts
+
         self.upload_all_files_in_folder(
             bucket=bucket,
             folder_name=chroma_folder,
-            current_ts=self.current_ts,
+            current_ts=folder_name,
+            gcp_subfolder=self.gcs_subfolder
         )
 
         # Loop through has folder
@@ -297,8 +301,9 @@ class VectorDbWrapper:
         self.upload_all_files_in_folder(
             bucket=bucket,
             folder_name=hash_folder,
-            current_ts=self.current_ts,
+            current_ts=folder_name,
+            gcp_subfolder=self.gcs_subfolder,
             hash_folder=hash_folder,
         )
 
-        print("Successfully uploaded all Chroma DB files to bucket")
+        print(f"Successfully uploaded all Chroma DB files to bucket {self.bucket_name}/{self.gcs_subfolder}/{folder_name}")
