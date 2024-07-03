@@ -5,6 +5,8 @@ from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
 from rag_pdf_api.chatbot.chatbot_creator import setup_chatbot
+from rag_pdf_api.chatbot.gcs_handler import GCSHandler
+from rag_pdf_api.common.embeddings import run_preprocessor
 
 configs = Config()
 chatbot, timestamp = setup_chatbot(configs)
@@ -54,11 +56,26 @@ async def info():
 
 
 @app.post("/pdf/preprocess")
-async def preprocess(file_ref: str):
+async def preprocess():
     """"""
-    # 1. download file from GCS
-    # 2. create embedding (VectorDbWrapper)
-    # 3. store back to GCS
+
+    # TODO accept this from request parameters
+    bucket_name = "chatbotui"
+    source_blob_name = "pdfs-raw/2bf2c97f-a40f/building-ontologies-for-reuse.pdf"
+
+    # local path where the file should be saved
+    destination_file_name = "local_data/building-ontologies-for-reuse.pdf"
+
+    # Download the file
+    gcs_handler = GCSHandler(configs)
+    gcs_handler.download_files_from_gcs(
+        bucket_name, source_blob_name, destination_file_name
+    )
+
+    # TODO
+    run_preprocessor(configs=configs, text_data_folder_path="./local_data")
+
+    return "ok"
 
 
 @app.post("/pdf/chat")
