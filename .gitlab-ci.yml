@@ -17,6 +17,14 @@ poetry:test:
       - PYTHON_VERSION:
           - 3.11.6
 
+image:upload: # patch image upload job to give its Kubernetes pod more resources
+  # https://rtldata.atlassian.net/wiki/spaces/DEP/pages/308447599/Troubleshooting+My+Gitlab+CI+job+e.g.+Kaniko+was+killed.+How+to+troubleshoot+long-running+or+memory-intensive+CI+jobs
+  variables:
+    KUBERNETES_CPU_REQUEST: 4
+    KUBERNETES_CPU_LIMIT: 4
+    KUBERNETES_MEMORY_REQUEST: 10Gi
+    KUBERNETES_MEMORY_LIMIT: 10Gi
+
 helm:tags:dryrun:
   allow_failure: true #TODO remove after https://rtldata.atlassian.net/browse/DAINFRA-1387 has been resolved to make chart version bumping optional (again)
 
