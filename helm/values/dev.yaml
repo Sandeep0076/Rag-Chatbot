@@ -1,41 +1,10 @@
 global:
   env: dev
   vault:
-    secrets_prefix: "da/itowe/ci/data/common"
+    mount_path: "da/itowe/ci"
+    secrets_prefix: "common"
     envSecrets:
-      - chatbot/chatbot-api/AZURE_OPENAI_API_KEY
-      - chatbot/chatbot-api/AZURE_OPENAI_ENDPOINT
-      - chatbot/chatbot-api/AZURE_OPENAI_LLM_API_KEY
-      - chatbot/chatbot-api/AZURE_OPENAI_LLM_ENDPOINT
-      - chatbot/chatbot-api/AZURE_OPENAI_EMBEDDING_API_KEY
-      - chatbot/chatbot-api/AZURE_OPENAI_EMBEDDING_ENDPOINT
-      - chatbot/chatbot-api/TITLE
-      - chatbot/chatbot-api/DESCRIPTION
-      - chatbot/chatbot-api/INFO_TEXT
-      - chatbot/chatbot-api/GCP_PROJECT
-      - chatbot/chatbot-api/BUCKET_NAME
-      - chatbot/chatbot-api/VECTOR_DB_COLLECTION_NAME
-      - chatbot/chatbot-api/SYSTEM_PROMPT_PLAIN_LLM
-      - chatbot/chatbot-api/SYSTEM_PROMPT_RAG_LLM
-      - chatbot/chatbot-api/API_VERSION
-      - chatbot/chatbot-api/AZURE_DEPLOYMENT
-      - chatbot/chatbot-api/EMBEDDINGS_FOLDER
-      - chatbot/chatbot-api/AZURE_EMBEDDING_API_VERSION
-      - chatbot/chatbot-api/AZURE_EMBEDDING_DEPLOYMENT
-      - chatbot/chatbot-api/AZURE_EMBEDDING_MODEL_NAME
-      - chatbot/chatbot-api/AZURE_LLM_API_VERSION
-      - chatbot/chatbot-api/AZURE_LLM_DEPLOYMENT
-      - chatbot/chatbot-api/AZURE_LLM_MODEL_NAME
-      - chatbot/chatbot-api/IMAGE_FILE_PATH
-      - chatbot/chatbot-api/TEMPERATURE
-      - chatbot/chatbot-api/MAX_TOKENS
-      - chatbot/chatbot-api/TOP_P
-      - chatbot/chatbot-api/FREQUENCY_PENALTY
-      - chatbot/chatbot-api/PRESENCE_PENALTY
-      - chatbot/chatbot-api/MAX_INPUT_SIZE
-      - chatbot/chatbot-api/NUM_OUTPUTS
-      - chatbot/chatbot-api/MAX_CHUNK_OVERLAP
-      - chatbot/chatbot-api/CHUNK_SIZE_LIMIT
+      - chatbot/chatbot-api
 
 universal-helm-chart:
   ingress:
