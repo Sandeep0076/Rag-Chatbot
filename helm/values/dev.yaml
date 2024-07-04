@@ -1,7 +1,7 @@
 global:
   env: dev
   vault:
-    secrets_prefix: "da/itowe/ci/common"
+    secrets_prefix: "da/itowe/ci/data/common"
     envSecrets:
       - chatbot/chatbot-api/AZURE_OPENAI_API_KEY
       - chatbot/chatbot-api/AZURE_OPENAI_ENDPOINT
