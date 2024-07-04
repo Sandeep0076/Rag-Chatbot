@@ -1,6 +1,7 @@
 global:
   env: "test"
   port: 8080
+  probePath: /info
   vault:
     secrets_prefix: "common"
 universal-helm-chart:
