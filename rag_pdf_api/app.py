@@ -9,7 +9,6 @@ from rag_pdf_api.chatbot.gcs_handler import GCSHandler
 from rag_pdf_api.common.embeddings import run_preprocessor
 
 configs = Config()
-chatbot, timestamp = setup_chatbot(configs)
 
 
 class Query(BaseModel):
@@ -81,6 +80,8 @@ async def preprocess():
 @app.post("/pdf/chat")
 async def chat(query: Query):
     """"""
+    chatbot, timestamp = setup_chatbot(configs)
+
     print(f"Using data from: {timestamp}")
     try:
         if query.llm_only:
