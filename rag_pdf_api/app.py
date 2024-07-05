@@ -4,12 +4,14 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 from configs.app_config import Config
-from rag_pdf_api.chatbot.chatbot_creator import setup_chatbot, Chatbot
+from rag_pdf_api.chatbot.chatbot_creator import  Chatbot
 from rag_pdf_api.chatbot.gcs_handler import GCSHandler
 from rag_pdf_api.common.embeddings import run_preprocessor
 
+
 configs = Config()
 gcs_handler = GCSHandler(configs)
+
 
 
 class Query(BaseModel):
@@ -78,26 +80,44 @@ async def preprocess(request: PreprocessRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
-   
+##TODO: when we call directly for chat, if the folder is not present, 
+# it download only a folder, not whole
 @app.post("/pdf/chat")
 async def chat(query: Query):
     try:
         file_id = query.file_id
         chroma_db_path = f"./chroma_db/{file_id}"
         
+        
         if not os.path.exists(chroma_db_path):
+            print(f"Chroma DB path not found: {chroma_db_path}")
             # If not found locally, download from GCS
             gcs_handler.download_files_from_folder_by_id(file_id)
         
         # Setup chatbot with the specific file_id
-        chatbot, _ = setup_chatbot(configs, file_id)
+        try:
+            chatbot = Chatbot(configs,file_id)
+            print("Chatbot setup successful")
+        except Exception as e:
+            print(f"Error setting up chatbot: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error setting up chatbot: {str(e)}")
         
-        response = chatbot.get_llm_answer(query.text)
-        return {"response": response}
+        try:
+            response = chatbot.get_answer(query.text)
+            return {"response": response}
+        except Exception as e:
+            print(f"Error getting LLM answer: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error getting LLM answer: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Unexpected error in chat endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
+
+    
+        
+
+    
 def start():
     """Launched with `poetry run start` at root level"""
     uvicorn.run("rag_pdf_api.app:app", host="0.0.0.0", port=8080, reload=False)

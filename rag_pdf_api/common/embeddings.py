@@ -50,8 +50,8 @@ def run_preprocessor(configs: Config, text_data_folder_path: str, file_id: str, 
     my_wrapper.upload_db_files_to_gcs()
 
     # Delete local database artifacts to avoid memory issues
-    my_wrapper.delete_db_artifacts("./chroma_db")
-    logging.info(f"Successfully processed and uploaded files for folder: {file_id}")
+    #my_wrapper.delete_db_artifacts("./chroma_db")
+    #logging.info(f"Successfully processed and uploaded files for folder: {file_id}")
     """
     Command-line usage examples:
     - python src/main.py ./upload

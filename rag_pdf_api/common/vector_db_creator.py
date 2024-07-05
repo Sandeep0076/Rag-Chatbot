@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import List
+from chromadb.config import Settings
 
 import chromadb
 from google.cloud import storage
@@ -168,7 +169,10 @@ class VectorDbWrapper:
         Return:
             None, will store Chroma DB artifact in storage_folder
         """
-        db = chromadb.PersistentClient(path=storage_folder)
+        db = chromadb.PersistentClient(path=storage_folder,settings=Settings(
+                allow_reset=True,
+                is_persistent=True
+            ))
         chroma_collection = db.get_or_create_collection(collection_name)
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
 

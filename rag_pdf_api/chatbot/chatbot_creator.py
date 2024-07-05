@@ -1,32 +1,24 @@
 import os
-
 import chromadb
 import openai
-from llama_index.core import ServiceContext, VectorStoreIndex
-from llama_index.core.storage.storage_context import StorageContext
-from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
-from llama_index.llms.azure_openai import AzureOpenAI
-from llama_index.vector_stores.chroma import ChromaVectorStore
-
-from rag_pdf_api.chatbot.gcs_handler import GCSHandler
+from llama_index.core import PromptHelper, ServiceContext, VectorStoreIndex
+from chromadb.config import Settings
 
 # Set up Azure OpenAI API keys and endpoints
 os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get("AZURE_OPENAI_LLM_API_KEY", "")
 os.environ["AZURE_OPENAI_ENDPOINT"] = os.environ.get("AZURE_OPENAI_LLM_ENDPOINT", "")
+from llama_index.llms.azure_openai import AzureOpenAI
 
-os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get(
-    "AZURE_OPENAI_EMBEDDING_API_KEY", ""
-)
-os.environ["AZURE_OPENAI_ENDPOINT"] = os.environ.get(
-    "AZURE_OPENAI_EMBEDDING_ENDPOINT", ""
-)
+from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 
+from llama_index.core.storage.storage_context import StorageContext
+from llama_index.vector_stores.chroma import ChromaVectorStore
 
 class Chatbot:
     """
     Class to set up an in-memory vector database for chatbot functionality.
 
-    Attributes:
+    Attributes:This is
     configs: Configuration object containing necessary settings.
     _index: Index object created from the vector store.
     _vanilla_llm: Plain LLM instance for generating answers.
@@ -43,8 +35,8 @@ class Chatbot:
         configs (object): Configuration object containing necessary settings.
         """
         self.configs = configs
-        self._index = self._create_index()
         self.file_id = file_id
+        self._index = self._create_index()
         self._vanilla_llm = self._create_llm_instance_only()
         self.retriever = self._create_retriever()
         self.query_engine = self._create_query_engine()
@@ -76,18 +68,21 @@ class Chatbot:
             deployment_name=self.configs.azure_embedding.azure_embedding_deployment,
             api_version=self.configs.azure_embedding.azure_embedding_api_version,
         )
-        # functionalities previously handled by PromptHelper have been integrated into ServiceContext.
-        db = chromadb.PersistentClient(path=chroma_folder_path)
-        chroma_collection = db.get_collection(
-            self.configs.chatbot.vector_db_collection_name
-        )
+       # functionalities previously handled by PromptHelper have been integrated into ServiceContext. 
+        #db = chromadb.PersistentClient(path=chroma_folder_path)
+        #chroma_collection = db.get_collection(self.configs.chatbot.vector_db_collection_name)
+        db = chromadb.PersistentClient(path=chroma_folder_path, settings=Settings(
+        allow_reset=True,
+        is_persistent=True
+    ))
+        chroma_collection = db.get_or_create_collection(self.configs.chatbot.vector_db_collection_name)
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
         service_context = ServiceContext.from_defaults(
-            llm=llm_llama,
+            llm=llm_llama, 
             embed_model=embedding_function_llama,
             chunk_size=self.configs.chatbot.chunk_size_limit,
-            chunk_overlap=self.configs.chatbot.max_chunk_overlap,
+            chunk_overlap=self.configs.chatbot.max_chunk_overlap
         )
 
         index = VectorStoreIndex.from_vector_store(
@@ -121,9 +116,7 @@ class Chatbot:
         Returns:
         Retriever: Retriever instance.
         """
-        retriever = self._index.as_retriever(
-            similarity_top_k=self.configs.chatbot.n_neighbours
-        )
+        retriever = self._index.as_retriever(similarity_top_k=self.configs.chatbot.n_neighbours)
         return retriever
 
     def _create_query_engine(self):
@@ -191,9 +184,7 @@ class Chatbot:
         response = self.query_engine.query(query)
         return response.response
 
-    def get_n_nearest_neighbours(
-        self, query: str, n_neighbours: int, unpack_response=False
-    ) -> str:
+    def get_n_nearest_neighbours(self, query: str, n_neighbours: int, unpack_response=False) -> str:
         """
         Retrieves the n nearest neighbors for a given query based on similarity.
 
@@ -230,9 +221,9 @@ class Chatbot:
             {
                 "role": "user",
                 "content": f"Check the following statement. Does this statement refer to a statement from the attached list? "
-                f"If this is the case, then answer TRUE. If the statement appears in the list, also return the index of the matching element."
-                f"Otherwise answer FALSE. Statement: {current_prompt} "
-                f"List: {' '.join(temp_history_list)}",
+                           f"If this is the case, then answer TRUE. If the statement appears in the list, also return the index of the matching element."
+                           f"Otherwise answer FALSE. Statement: {current_prompt} "
+                           f"List: {' '.join(temp_history_list)}",
             }
         ]
 
@@ -251,7 +242,3 @@ class Chatbot:
             return completion.choices[0].message.content
         else:
             return "FALSE"
-
-
-def setup_chatbot(configs, file_id):
-    return Chatbot(configs, file_id), file_id
