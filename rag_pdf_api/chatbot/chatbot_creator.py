@@ -227,8 +227,10 @@ class Chatbot:
         message_text = [
             {
                 "role": "user",
-                "content": f"Check the following statement. Does this statement refer to a statement from the attached list? "
-                f"If this is the case, then answer TRUE. If the statement appears in the list, also return the index of the matching element."
+                "content": f"Check the following statement."
+                "Does this statement refer to a statement from the attached list? "
+                "If this is the case, then answer TRUE. "
+                "If the statement appears in the list, also return the index of the matching element."
                 f"Otherwise answer FALSE. Statement: {current_prompt} "
                 f"List: {' '.join(temp_history_list)}",
             }
@@ -261,7 +263,9 @@ def setup_chatbot(configs):
     Returns:
     tuple: A tuple containing the Chatbot instance and the latest timestamp folder.
 
-    The function logs the start of the download process, creates a GCSHandler instance, downloads the latest timestamp files, retrieves the latest timestamp folder, and returns the Chatbot instance and timestamp folder.
+    The function logs the start of the download process, creates a GCSHandler instance,
+    downloads the latest timestamp files, retrieves the latest timestamp folder,
+    and returns the Chatbot instance and timestamp folder.
     """
     print("Now downloading latest timestamp files.")
     gcs_handler = GCSHandler(configs)
