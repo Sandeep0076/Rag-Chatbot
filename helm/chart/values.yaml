@@ -13,10 +13,10 @@ universal-helm-chart:
       runAsUser: 1000
     resources:
       requests:
-        cpu: 4m
-        memory: 40Mi
+        cpu: 500m
+        memory: 256Mi
       limits:
-        cpu: 100m
+        cpu: 1000m
         memory: 512Mi
     livenessProbe:
       failureThreshold: 3
