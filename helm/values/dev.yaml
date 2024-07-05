@@ -11,4 +11,4 @@ universal-helm-chart:
     domains:
       - rag-pdf-api.itowe.gcp.dev.da-service.io
   deployment:
-    scaleDown: false #Placeholder for user input from developer portal
+    scaleDown: true
