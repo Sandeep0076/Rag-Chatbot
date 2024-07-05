@@ -1,20 +1,23 @@
 import uvicorn
+import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from starlette_exporter import PrometheusMiddleware, handle_metrics
-
 from configs.app_config import Config
-from rag_pdf_api.chatbot.chatbot_creator import setup_chatbot
+from rag_pdf_api.chatbot.chatbot_creator import setup_chatbot, Chatbot
 from rag_pdf_api.chatbot.gcs_handler import GCSHandler
 from rag_pdf_api.common.embeddings import run_preprocessor
 
 configs = Config()
-#chatbot, timestamp = setup_chatbot(configs)
+gcs_handler = GCSHandler(configs)
 
 
 class Query(BaseModel):
     text: str
+    file_id: str
 
+class PreprocessRequest(BaseModel):
+    file_id: str
 
 app = FastAPI()
 
@@ -52,33 +55,44 @@ async def info():
     }
 
 @app.post("/pdf/preprocess")
-async def preprocess():
+async def preprocess(request: PreprocessRequest):
     bucket_name = "chatbotui"
     folder_path = "pdfs-raw"
-    specific_folder = "2bf2c97f-a40f"
+    file_id = request.file_id
     destination_file_path = "local_data/"
-
-    gcs_handler = GCSHandler(configs)
     
     try:
         folder_found = gcs_handler.check_and_download_folder(
-            bucket_name, folder_path, specific_folder, destination_file_path
+            bucket_name, folder_path, file_id, destination_file_path
         )
 
         if folder_found:
-            # TODO: Add any additional processing steps here
-            run_preprocessor(configs=configs, text_data_folder_path="./local_data",specific_folder=specific_folder)
-            return {"status": "Files downloaded successfully", "folder": specific_folder}
+            # Create a folder with file_id inside chroma_db
+            chroma_db_path = f"./chroma_db/{file_id}"
+            os.makedirs(chroma_db_path, exist_ok=True)
+            
+            run_preprocessor(configs=configs, text_data_folder_path="./local_data", file_id=file_id, chroma_db_path=chroma_db_path)
+            return {"status": "Files downloaded and processed successfully", "folder": file_id}
         else:
-            raise HTTPException(status_code=404, detail=f"Folder {specific_folder} not found in {folder_path}")
+            raise HTTPException(status_code=404, detail=f"Folder {file_id} not found in {folder_path}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")  
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
    
 @app.post("/pdf/chat")
 async def chat(query: Query):
     try:
+        file_id = query.file_id
+        chroma_db_path = f"./chroma_db/{file_id}"
+        
+        if not os.path.exists(chroma_db_path):
+            # If not found locally, download from GCS
+            gcs_handler.download_files_from_folder_by_id(file_id)
+        
+        # Setup chatbot with the specific file_id
+        chatbot, _ = setup_chatbot(configs, file_id)
+        
         response = chatbot.get_llm_answer(query.text)
-
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

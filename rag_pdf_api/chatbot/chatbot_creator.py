@@ -35,7 +35,7 @@ class Chatbot:
     chat_engine: ChatGPT instance for generating chat responses.
     """
 
-    def __init__(self, configs):
+    def __init__(self, configs, file_id):
         """
         Initializes the Chatbot class.
 
@@ -44,12 +44,13 @@ class Chatbot:
         """
         self.configs = configs
         self._index = self._create_index()
+        self.file_id = file_id
         self._vanilla_llm = self._create_llm_instance_only()
         self.retriever = self._create_retriever()
         self.query_engine = self._create_query_engine()
         self.chat_engine = self._create_chat_gpt_instance()
 
-    def _create_index(self, chroma_folder_path: str = "chroma_db"):
+    def _create_index(self):
         """
         Creates a vector store index from stored documents.
 
@@ -59,6 +60,7 @@ class Chatbot:
         Returns:
         VectorStoreIndex: Index object created from the vector store.
         """
+        chroma_folder_path = f"./chroma_db/{self.file_id}"
         llm_llama = AzureOpenAI(
             api_key=self.configs.azure_llm.azure_llm_api_key,
             azure_endpoint=self.configs.azure_llm.azure_llm_endpoint,
@@ -251,21 +253,5 @@ class Chatbot:
             return "FALSE"
 
 
-def setup_chatbot(configs):
-    """
-    Sets up the Chatbot instance and retrieves the latest timestamp folder.
-
-    Parameters:
-    configs (Config): Configuration object containing necessary settings.
-
-    Returns:
-    tuple: A tuple containing the Chatbot instance and the latest timestamp folder.
-
-    The function logs the start of the download process, creates a GCSHandler instance, downloads the latest timestamp files, retrieves the latest timestamp folder, and returns the Chatbot instance and timestamp folder.
-    """
-    print("Now downloading latest timestamp files.")
-    gcs_handler = GCSHandler(configs)
-    gcs_handler.download_latest_timestamp_files()
-    timestamp = gcs_handler.get_latest_time_stamp_folder()
-
-    return Chatbot(configs), timestamp
+def setup_chatbot(configs, file_id):
+    return Chatbot(configs, file_id), file_id
