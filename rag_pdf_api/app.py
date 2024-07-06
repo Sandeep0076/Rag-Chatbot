@@ -92,7 +92,10 @@ async def chat(query: Query):
         if not os.path.exists(chroma_db_path):
             print(f"Chroma DB path not found: {chroma_db_path}")
             # If not found locally, download from GCS
-            gcs_handler.download_files_from_folder_by_id(file_id)
+            try:
+                gcs_handler.download_files_from_folder_by_id(file_id)
+            except FileNotFoundError as e:
+                raise HTTPException(status_code=404, detail=str(e))
         
         # Setup chatbot with the specific file_id
         try:

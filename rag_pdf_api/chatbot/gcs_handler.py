@@ -66,7 +66,7 @@ class GCSHandler:
             logging.info(f"No folder found with ID: {folder_id}")
             return None
 
-    def download_chromadb_files_from_gcs(self, folder_id, local_destination="chroma_db"):
+    def download_chromadb_files_from_gcs2(self, folder_id, local_destination="chroma_db"):
         """
         Download Chroma DB files from the GCS bucket.
 
@@ -89,6 +89,7 @@ class GCSHandler:
                 logging.info(
                     f"Downloaded gs://{self.bucket}/{blob.name} to {local_file_path} with name {file_name_on_local}"
                 )
+    
 
     def download_files_from_gcs(self, bucket_name: str, source_blob_name: str, destination_file_path: str):
         """
@@ -149,3 +150,39 @@ class GCSHandler:
             logging.info(f"Downloaded {blob.name} to {local_file_path}")
 
         return True
+    
+    def download_files_from_folder_by_id(self, file_id):
+        """
+        Download all files from a specific folder in GCS based on the folder ID.
+        If no folder is found, log a message and raise an exception.
+
+        Parameters:
+        file_id (str): The ID of the folder to download files from.
+
+        Raises:
+        FileNotFoundError: If no embeddings are found for the given file_id.
+        """
+        prefix = f"pdf-embeddings/{file_id}/"
+        blobs = list(self.bucket.list_blobs(prefix=prefix))
+
+        if not blobs:
+            error_message = f"No embeddings found for file ID: {file_id}"
+            logging.error(error_message)
+            raise FileNotFoundError(error_message)
+
+        for blob in blobs:
+            if blob.name.endswith('/'):  # Skip directory markers
+                continue
+            
+            # Construct the local file path
+            relative_path = blob.name[len(prefix):]
+            local_file_path = os.path.join("chroma_db", file_id, relative_path)
+            
+            # Ensure the directory exists
+            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+            
+            # Download the file
+            blob.download_to_filename(local_file_path)
+            logging.info(f"Downloaded {blob.name} to {local_file_path}")
+
+        logging.info(f"Finished downloading all files for folder ID: {file_id}")
