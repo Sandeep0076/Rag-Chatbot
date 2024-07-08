@@ -103,8 +103,8 @@ class GCSHandler:
 
         # and download the blob to a file
         blob.download_to_filename(destination_file_path)
-
-    def download_files_from_folder_by_id(self, folder_id):
+    #deprecated
+    def download_files_from_folder_by_id2(self, folder_id):
         """
         Download files from a specific folder in GCS based on the folder ID.
 
