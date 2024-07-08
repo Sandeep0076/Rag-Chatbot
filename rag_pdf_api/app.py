@@ -13,7 +13,6 @@ configs = Config()
 gcs_handler = GCSHandler(configs)
 
 
-
 class Query(BaseModel):
     text: str
     file_id: str
@@ -84,6 +83,7 @@ async def preprocess(request: PreprocessRequest):
 # it download only a folder, not whole
 @app.post("/pdf/chat")
 async def chat(query: Query):
+    """"""
     try:
         file_id = query.file_id
         chroma_db_path = f"./chroma_db/{file_id}"

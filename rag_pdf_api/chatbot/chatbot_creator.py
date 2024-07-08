@@ -220,10 +220,12 @@ class Chatbot:
         message_text = [
             {
                 "role": "user",
-                "content": f"Check the following statement. Does this statement refer to a statement from the attached list? "
-                           f"If this is the case, then answer TRUE. If the statement appears in the list, also return the index of the matching element."
-                           f"Otherwise answer FALSE. Statement: {current_prompt} "
-                           f"List: {' '.join(temp_history_list)}",
+                "content": f"Check the following statement."
+                "Does this statement refer to a statement from the attached list? "
+                "If this is the case, then answer TRUE. "
+                "If the statement appears in the list, also return the index of the matching element."
+                f"Otherwise answer FALSE. Statement: {current_prompt} "
+                f"List: {' '.join(temp_history_list)}",
             }
         ]
 

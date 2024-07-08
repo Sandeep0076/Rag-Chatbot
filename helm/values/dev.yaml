@@ -1,8 +1,14 @@
 global:
   env: dev
+  vault:
+    mount_path: "da/itowe/ci"
+    secrets_prefix: "common"
+    envSecrets:
+      - chatbot/chatbot-api
+
 universal-helm-chart:
   ingress:
     domains:
       - rag-pdf-api.itowe.gcp.dev.da-service.io
   deployment:
-    scaleDown: false #Placeholder for user input from developer portal
+    scaleDown: true

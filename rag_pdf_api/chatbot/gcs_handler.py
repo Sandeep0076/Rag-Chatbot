@@ -31,7 +31,8 @@ class GCSHandler:
             self._storage_client = storage.Client(
                 self.configs.gcp_resource.gcp_project, credentials=self.credentials
             )
-        except:
+        except Exception:
+            # Used for production
             self._storage_client = storage.Client(self.configs.gcp_resource.gcp_project)
 
         self.bucket = self._storage_client.get_bucket(
