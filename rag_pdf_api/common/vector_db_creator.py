@@ -2,12 +2,11 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import List
-from chromadb.config import Settings
 
 import chromadb
+from chromadb.config import Settings
 from google.cloud import storage
-from llama_index.core import (ServiceContext, SimpleDirectoryReader,
-                              VectorStoreIndex)
+from llama_index.core import ServiceContext, SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.storage.storage_context import StorageContext
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
@@ -24,7 +23,7 @@ class VectorDbWrapper:
         bucket_name,
         text_data_folder_path,
         gcs_subfolder="pdf-embeddings",
-        file_id=None
+        file_id=None,
     ):
         """Class to handle creation of Chromba DB Index
 
@@ -169,10 +168,9 @@ class VectorDbWrapper:
         Return:
             None, will store Chroma DB artifact in storage_folder
         """
-        db = chromadb.PersistentClient(path=storage_folder,settings=Settings(
-                allow_reset=True,
-                is_persistent=True
-            ))
+        db = chromadb.PersistentClient(
+            path=storage_folder, settings=Settings(allow_reset=True, is_persistent=True)
+        )
         chroma_collection = db.get_or_create_collection(collection_name)
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
 
@@ -279,7 +277,7 @@ class VectorDbWrapper:
             bucket=bucket,
             folder_name=chroma_folder,
             current_ts=self.file_id,
-            gcp_subfolder=self.gcs_subfolder
+            gcp_subfolder=self.gcs_subfolder,
         )
 
         hash_folder = [item for item in chroma_folder.iterdir() if item.is_dir()][0]
@@ -292,4 +290,7 @@ class VectorDbWrapper:
             hash_folder=hash_folder,
         )
 
-        print(f"Successfully uploaded all Chroma DB files to bucket {self.bucket_name}/{self.gcs_subfolder}/{self.file_id}")
+        print(
+            "Successfully uploaded all Chroma DB files to bucket "
+            f"{self.bucket_name}/{self.gcs_subfolder}/{self.file_id}"
+        )

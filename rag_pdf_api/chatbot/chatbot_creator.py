@@ -1,18 +1,18 @@
 import os
+
 import chromadb
 import openai
-from llama_index.core import PromptHelper, ServiceContext, VectorStoreIndex
 from chromadb.config import Settings
+from llama_index.core import ServiceContext, VectorStoreIndex
+from llama_index.core.storage.storage_context import StorageContext
+from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+from llama_index.llms.azure_openai import AzureOpenAI
+from llama_index.vector_stores.chroma import ChromaVectorStore
 
 # Set up Azure OpenAI API keys and endpoints
 os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get("AZURE_OPENAI_LLM_API_KEY", "")
 os.environ["AZURE_OPENAI_ENDPOINT"] = os.environ.get("AZURE_OPENAI_LLM_ENDPOINT", "")
-from llama_index.llms.azure_openai import AzureOpenAI
 
-from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
-
-from llama_index.core.storage.storage_context import StorageContext
-from llama_index.vector_stores.chroma import ChromaVectorStore
 
 class Chatbot:
     """
@@ -68,21 +68,23 @@ class Chatbot:
             deployment_name=self.configs.azure_embedding.azure_embedding_deployment,
             api_version=self.configs.azure_embedding.azure_embedding_api_version,
         )
-       # functionalities previously handled by PromptHelper have been integrated into ServiceContext. 
-        #db = chromadb.PersistentClient(path=chroma_folder_path)
-        #chroma_collection = db.get_collection(self.configs.chatbot.vector_db_collection_name)
-        db = chromadb.PersistentClient(path=chroma_folder_path, settings=Settings(
-        allow_reset=True,
-        is_persistent=True
-    ))
-        chroma_collection = db.get_or_create_collection(self.configs.chatbot.vector_db_collection_name)
+        # functionalities previously handled by PromptHelper have been integrated into ServiceContext.
+        # db = chromadb.PersistentClient(path=chroma_folder_path)
+        # chroma_collection = db.get_collection(self.configs.chatbot.vector_db_collection_name)
+        db = chromadb.PersistentClient(
+            path=chroma_folder_path,
+            settings=Settings(allow_reset=True, is_persistent=True),
+        )
+        chroma_collection = db.get_or_create_collection(
+            self.configs.chatbot.vector_db_collection_name
+        )
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
         service_context = ServiceContext.from_defaults(
-            llm=llm_llama, 
+            llm=llm_llama,
             embed_model=embedding_function_llama,
             chunk_size=self.configs.chatbot.chunk_size_limit,
-            chunk_overlap=self.configs.chatbot.max_chunk_overlap
+            chunk_overlap=self.configs.chatbot.max_chunk_overlap,
         )
 
         index = VectorStoreIndex.from_vector_store(
@@ -116,7 +118,9 @@ class Chatbot:
         Returns:
         Retriever: Retriever instance.
         """
-        retriever = self._index.as_retriever(similarity_top_k=self.configs.chatbot.n_neighbours)
+        retriever = self._index.as_retriever(
+            similarity_top_k=self.configs.chatbot.n_neighbours
+        )
         return retriever
 
     def _create_query_engine(self):
@@ -184,7 +188,9 @@ class Chatbot:
         response = self.query_engine.query(query)
         return response.response
 
-    def get_n_nearest_neighbours(self, query: str, n_neighbours: int, unpack_response=False) -> str:
+    def get_n_nearest_neighbours(
+        self, query: str, n_neighbours: int, unpack_response=False
+    ) -> str:
         """
         Retrieves the n nearest neighbors for a given query based on similarity.
 

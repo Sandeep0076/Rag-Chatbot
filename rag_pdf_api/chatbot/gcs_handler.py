@@ -58,7 +58,9 @@ class GCSHandler:
         folder_names = {blob.name.split("/")[1] for blob in blobs}
 
         # Find the folder with the given ID
-        matching_folder = next((name for name in folder_names if name == folder_id), None)
+        matching_folder = next(
+            (name for name in folder_names if name == folder_id), None
+        )
 
         if matching_folder:
             logging.info(f"Found folder with ID: {folder_id}")
@@ -67,7 +69,9 @@ class GCSHandler:
             logging.info(f"No folder found with ID: {folder_id}")
             return None
 
-    def download_chromadb_files_from_gcs2(self, folder_id, local_destination="chroma_db"):
+    def download_chromadb_files_from_gcs2(
+        self, folder_id, local_destination="chroma_db"
+    ):
         """
         Download Chroma DB files from the GCS bucket.
 
@@ -83,16 +87,19 @@ class GCSHandler:
                 blob.name.startswith(embeddings_folder)
                 and blob.name != embeddings_folder
             ):
-                file_name_on_local = blob.name.split(f"{embeddings_folder}{folder_id}/")[-1]
+                file_name_on_local = blob.name.split(
+                    f"{embeddings_folder}{folder_id}/"
+                )[-1]
                 local_file_path = os.path.join(local_destination, file_name_on_local)
                 os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
                 blob.download_to_filename(local_file_path)
                 logging.info(
                     f"Downloaded gs://{self.bucket}/{blob.name} to {local_file_path} with name {file_name_on_local}"
                 )
-    
 
-    def download_files_from_gcs(self, bucket_name: str, source_blob_name: str, destination_file_path: str):
+    def download_files_from_gcs(
+        self, bucket_name: str, source_blob_name: str, destination_file_path: str
+    ):
         """
         A generic method to download files from GCS.
         """
@@ -104,7 +111,8 @@ class GCSHandler:
 
         # and download the blob to a file
         blob.download_to_filename(destination_file_path)
-    #deprecated
+
+    # deprecated
     def download_files_from_folder_by_id2(self, folder_id):
         """
         Download files from a specific folder in GCS based on the folder ID.
@@ -120,7 +128,13 @@ class GCSHandler:
         else:
             logging.info("No folder found with the given ID.")
 
-    def check_and_download_folder(self, bucket_name: str, folder_path: str, folder_name: str, destination_path: str):
+    def check_and_download_folder(
+        self,
+        bucket_name: str,
+        folder_path: str,
+        folder_name: str,
+        destination_path: str,
+    ):
         """
         Check if a specific folder exists in the given path and download its contents if it does.
 
@@ -142,16 +156,16 @@ class GCSHandler:
             return False
 
         for blob in blobs:
-            if blob.name.endswith('/'):  # Skip directory markers
+            if blob.name.endswith("/"):  # Skip directory markers
                 continue
-            file_name = blob.name.split('/')[-1]
+            file_name = blob.name.split("/")[-1]
             local_file_path = os.path.join(destination_path, file_name)
             os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
             blob.download_to_filename(local_file_path)
             logging.info(f"Downloaded {blob.name} to {local_file_path}")
 
         return True
-    
+
     def download_files_from_folder_by_id(self, file_id):
         """
         Download all files from a specific folder in GCS based on the folder ID.
@@ -172,16 +186,16 @@ class GCSHandler:
             raise FileNotFoundError(error_message)
 
         for blob in blobs:
-            if blob.name.endswith('/'):  # Skip directory markers
+            if blob.name.endswith("/"):  # Skip directory markers
                 continue
-            
+
             # Construct the local file path
-            relative_path = blob.name[len(prefix):]
+            relative_path = blob.name[len(prefix) :]
             local_file_path = os.path.join("chroma_db", file_id, relative_path)
-            
+
             # Ensure the directory exists
             os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-            
+
             # Download the file
             blob.download_to_filename(local_file_path)
             logging.info(f"Downloaded {blob.name} to {local_file_path}")
