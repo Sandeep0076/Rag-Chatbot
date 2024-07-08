@@ -5,4 +5,4 @@ version: "1.0.0"
 dependencies:
   - name: universal-helm-chart
     repository: oci://europe-west1-docker.pkg.dev/mgr-platform-prod-khsu/charts
-    version: 1.0.7-1.0.7
+    version: 2.1.3-2.1.3
