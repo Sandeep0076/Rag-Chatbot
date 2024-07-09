@@ -38,3 +38,5 @@ universal-helm-chart:
     enabled: true
     domains:
       - "rag-pdf-api.ecina.test.da-service.io"
+gcp:
+  project_id: ""
