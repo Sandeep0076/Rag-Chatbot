@@ -63,7 +63,8 @@ async def info():
 
 @app.post("/pdf/preprocess")
 async def preprocess(request: PreprocessRequest):
-    bucket_name = "chatbotui"
+    """"""
+    bucket_name = configs.gcp_resource.bucket_name
     folder_path = "pdfs-raw"
     file_id = request.file_id
     destination_file_path = "local_data/"

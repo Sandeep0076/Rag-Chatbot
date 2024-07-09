@@ -27,8 +27,8 @@ def run_preprocessor(
         azure_api_key=configs.azure_embedding.azure_embedding_api_key,
         azure_endpoint=configs.azure_embedding.azure_embedding_endpoint,
         text_data_folder_path=text_data_folder_path,
-        gcp_project="dat-itowe-dev",
-        bucket_name="chatbotui",
+        gcp_project=configs.gcp_resource.gcp_project,
+        bucket_name=configs.gcp_resource.bucket_name,
         gcs_subfolder="pdf-embeddings",
         file_id=file_id,
     )
