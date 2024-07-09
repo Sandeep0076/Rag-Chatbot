@@ -18,6 +18,9 @@ class Query(BaseModel):
     text: str
     file_id: str
     model_choice: str = "gpt-3.5-turbo"  # Default model
+    model_config = {
+        'protected_namespaces': ()
+    }
 
 class PreprocessRequest(BaseModel):
     file_id: str
@@ -114,8 +117,15 @@ async def chat(query: Query):
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
-
-    
+@app.get("/available-models")
+async def get_available_models():
+    return {
+        "models": [
+            "gpt_3_5_turbo",
+            "gpt_4",
+            # Add other available models here
+        ]
+    }    
         
 
     

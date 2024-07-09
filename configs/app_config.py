@@ -9,6 +9,9 @@ class ModelConfig(BaseModel):
     deployment: str
     api_version: str
     model_name: str
+    model_config = {
+        'protected_namespaces': ()
+    }
 
 class AzureLLMConfig(BaseModel):
     azure_llm_api_key: str
