@@ -17,6 +17,7 @@ gcs_handler = GCSHandler(configs)
 class Query(BaseModel):
     text: str
     file_id: str
+    model_choice: str = "gpt-3.5-turbo"  # Default model
 
 class PreprocessRequest(BaseModel):
     file_id: str
@@ -80,27 +81,24 @@ async def preprocess(request: PreprocessRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
-##TODO: when we call directly for chat, if the folder is not present, 
-# it download only a folder, not whole
 @app.post("/pdf/chat")
 async def chat(query: Query):
     try:
         file_id = query.file_id
         chroma_db_path = f"./chroma_db/{file_id}"
         
-        
         if not os.path.exists(chroma_db_path):
             print(f"Chroma DB path not found: {chroma_db_path}")
-            # If not found locally, download from GCS
             try:
                 gcs_handler.download_files_from_folder_by_id(file_id)
             except FileNotFoundError as e:
                 raise HTTPException(status_code=404, detail=str(e))
         
-        # Setup chatbot with the specific file_id
         try:
-            chatbot = Chatbot(configs,file_id)
+            chatbot = Chatbot(configs, file_id, model_choice=query.model_choice)
             print("Chatbot setup successful")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             print(f"Error setting up chatbot: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error setting up chatbot: {str(e)}")

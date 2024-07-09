@@ -1,8 +1,14 @@
 from typing import List, Optional
-
+from typing import Dict
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 
+class ModelConfig(BaseModel):
+    api_key: str
+    endpoint: str
+    deployment: str
+    api_version: str
+    model_name: str
 
 class AzureLLMConfig(BaseModel):
     azure_llm_api_key: str
@@ -10,6 +16,7 @@ class AzureLLMConfig(BaseModel):
     azure_llm_api_version: str
     azure_llm_deployment: str
     azure_llm_model_name: str
+    models: Dict[str, ModelConfig]
 
 
 class AzureEmbeddingConfig(BaseModel):
@@ -56,3 +63,7 @@ class Config(BaseSettings):
     chatbot: ChatbotConfig
     llm_hyperparams: LLMHyperParams
     gcp_resource: GCPResourceConfig
+    class Config:
+        env_nested_delimiter = '__'
+
+
