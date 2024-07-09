@@ -19,6 +19,8 @@ class GCSHandler:
         _configs (object): Configuration object containing GCP resource settings.
         """
         self.configs = _configs
+        self.credentials = None
+
         if os.environ.get("GOOGLE_OAUTH_ACCESS_TOKEN", None) is not None:
             logging.info("Found GOOGLE_OAUTH_ACCESS_TOKEN token, now using it.")
             self.credentials = google.oauth2.credentials.Credentials(
@@ -26,7 +28,6 @@ class GCSHandler:
             )
 
         try:
-            # Used for end-to-end test pipeline
             self._storage_client = storage.Client(
                 self.configs.gcp_resource.gcp_project, credentials=self.credentials
             )
@@ -37,49 +38,49 @@ class GCSHandler:
         self.bucket = self._storage_client.get_bucket(
             self.configs.gcp_resource.bucket_name
         )
-        self.latest_timestamp_folder = self.get_latest_time_stamp_folder()
 
-    def get_latest_time_stamp_folder(self):
+    def find_folder_by_id(self, folder_id):
         """
-        Retrieve the folder with the latest timestamp name in GCS.
+        Find the folder in GCS based on the given ID.
+
+        Parameters:
+        folder_id (str): The ID of the folder to find.
 
         Returns:
-        str: The name of the folder with the latest timestamp, or None if no folders are found.
+        str: The name of the folder with the given ID, or None if no folder is found.
         """
-        logging.info("Now retrieving the latest timestamp folder")
+        logging.info(f"Now retrieving the folder with ID: {folder_id}")
         blobs = self.bucket.list_blobs(
             prefix=self.configs.gcp_resource.embeddings_folder
         )
 
-        # Extract timestamps from blob names
-        timestamps = [blob.name.split("/")[1] for blob in blobs]
+        # Extract folder names from blob names
+        folder_names = {blob.name.split("/")[1] for blob in blobs}
 
-        # Sort timestamps in descending order
-        timestamps.sort(reverse=True)
-
-        # Logging information
-        logging.info(
-            f"There were a total of {len(timestamps)} blobs in the bucket. The latest ts folder is {timestamps[0]}"
+        # Find the folder with the given ID
+        matching_folder = next(
+            (name for name in folder_names if name == folder_id), None
         )
 
-        # Return the latest timestamp folder
-        if timestamps:
-            return timestamps[0]
+        if matching_folder:
+            logging.info(f"Found folder with ID: {folder_id}")
+            return matching_folder
         else:
+            logging.info(f"No folder found with ID: {folder_id}")
             return None
 
-    def download_chromadb_files_from_gcs(
-        self, latest_timestamp, local_destination="chroma_db"
+    def download_chromadb_files_from_gcs2(
+        self, folder_id, local_destination="chroma_db"
     ):
         """
         Download Chroma DB files from the GCS bucket.
 
         Parameters:
-        latest_timestamp (str): The folder name with the latest timestamp in GCS.
+        folder_id (str): The ID of the folder in GCS.
         local_destination (str): The local destination folder to save downloaded files.
         """
         embeddings_folder = self.configs.gcp_resource.embeddings_folder
-        blobs = self.bucket.list_blobs(prefix=embeddings_folder + latest_timestamp)
+        blobs = self.bucket.list_blobs(prefix=f"{embeddings_folder}{folder_id}")
 
         for blob in blobs:
             if (
@@ -87,7 +88,7 @@ class GCSHandler:
                 and blob.name != embeddings_folder
             ):
                 file_name_on_local = blob.name.split(
-                    embeddings_folder + latest_timestamp + "/"
+                    f"{embeddings_folder}{folder_id}/"
                 )[-1]
                 local_file_path = os.path.join(local_destination, file_name_on_local)
                 os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
@@ -102,8 +103,6 @@ class GCSHandler:
         """
         A generic method to download files from GCS.
         """
-
-        # Get the bucket
         bucket = self._storage_client.bucket(bucket_name)
         blob = bucket.blob(source_blob_name)
 
@@ -113,14 +112,92 @@ class GCSHandler:
         # and download the blob to a file
         blob.download_to_filename(destination_file_path)
 
-    def download_latest_timestamp_files(self):
+    # deprecated
+    def download_files_from_folder_by_id2(self, folder_id):
         """
-        Download files from the newest folder in GCS.
+        Download files from a specific folder in GCS based on the folder ID.
+
+        Parameters:
+        folder_id (str): The ID of the folder to download files from.
         """
-        if self.latest_timestamp_folder:
+        if folder_id:
             logging.info("Now calling download method")
             self.download_chromadb_files_from_gcs(
-                latest_timestamp=self.latest_timestamp_folder,
+                folder_id=folder_id,
             )
         else:
-            logging.info("No timestamp folders found.")
+            logging.info("No folder found with the given ID.")
+
+    def check_and_download_folder(
+        self,
+        bucket_name: str,
+        folder_path: str,
+        folder_name: str,
+        destination_path: str,
+    ):
+        """
+        Check if a specific folder exists in the given path and download its contents if it does.
+
+        Parameters:
+        bucket_name (str): Name of the GCS bucket
+        folder_path (str): Path to the parent folder in the bucket
+        folder_name (str): Name of the specific folder to check for
+        destination_path (str): Local path to save downloaded files
+
+        Returns:
+        bool: True if the folder was found and files were downloaded, False otherwise
+        """
+        bucket = self._storage_client.bucket(bucket_name)
+        prefix = f"{folder_path}/{folder_name}/"
+        blobs = list(bucket.list_blobs(prefix=prefix))
+
+        if not blobs:
+            logging.info(f"Folder {folder_name} not found in {folder_path}")
+            return False
+
+        for blob in blobs:
+            if blob.name.endswith("/"):  # Skip directory markers
+                continue
+            file_name = blob.name.split("/")[-1]
+            local_file_path = os.path.join(destination_path, file_name)
+            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+            blob.download_to_filename(local_file_path)
+            logging.info(f"Downloaded {blob.name} to {local_file_path}")
+
+        return True
+
+    def download_files_from_folder_by_id(self, file_id):
+        """
+        Download all files from a specific folder in GCS based on the folder ID.
+        If no folder is found, log a message and raise an exception.
+
+        Parameters:
+        file_id (str): The ID of the folder to download files from.
+
+        Raises:
+        FileNotFoundError: If no embeddings are found for the given file_id.
+        """
+        prefix = f"pdf-embeddings/{file_id}/"
+        blobs = list(self.bucket.list_blobs(prefix=prefix))
+
+        if not blobs:
+            error_message = f"No embeddings found for file ID: {file_id}"
+            logging.error(error_message)
+            raise FileNotFoundError(error_message)
+
+        for blob in blobs:
+            if blob.name.endswith("/"):  # Skip directory markers
+                continue
+
+            # Construct the local file path
+            relative_path = blob.name[len(prefix) :]
+            local_file_path = os.path.join("chroma_db", file_id, relative_path)
+
+            # Ensure the directory exists
+            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+
+            # Download the file
+            blob.download_to_filename(local_file_path)
+            logging.info(f"Downloaded {blob.name} to {local_file_path}")
+
+        logging.info(f"Finished downloading all files for folder ID: {file_id}")

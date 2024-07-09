@@ -4,7 +4,9 @@ from configs.app_config import Config
 from rag_pdf_api.common.vector_db_creator import VectorDbWrapper
 
 
-def run_preprocessor(configs: Config, text_data_folder_path: str):
+def run_preprocessor(
+    configs: Config, text_data_folder_path: str, file_id: str, chroma_db_path: str
+):
     """
     Runs the data preprocessor which reads PDF data, converts it into a vector database,
     and uploads the database files to Google Cloud Storage.
@@ -25,8 +27,10 @@ def run_preprocessor(configs: Config, text_data_folder_path: str):
         azure_api_key=configs.azure_embedding.azure_embedding_api_key,
         azure_endpoint=configs.azure_embedding.azure_embedding_endpoint,
         text_data_folder_path=text_data_folder_path,
-        gcp_project="dat-itowe-dev",
-        bucket_name="chatbotui",
+        gcp_project=configs.gcp_resource.gcp_project,
+        bucket_name=configs.gcp_resource.bucket_name,
+        gcs_subfolder="pdf-embeddings",
+        file_id=file_id,
     )
 
     logging.info("Now creating and storing index")
@@ -36,7 +40,7 @@ def run_preprocessor(configs: Config, text_data_folder_path: str):
 
     # Create and store index in the specified storage folder
     my_wrapper.create_and_store_index(
-        storage_folder="./chroma_db",
+        storage_folder=chroma_db_path,
         collection_name=configs.chatbot.vector_db_collection_name,
         chunk_size=configs.chatbot.chunk_size_limit,
         chunk_overlap=configs.chatbot.max_chunk_overlap,
@@ -47,8 +51,8 @@ def run_preprocessor(configs: Config, text_data_folder_path: str):
     my_wrapper.upload_db_files_to_gcs()
 
     # Delete local database artifacts to avoid memory issues
-    my_wrapper.delete_db_artifacts("./chroma_db")
-
+    # my_wrapper.delete_db_artifacts("./chroma_db")
+    # logging.info(f"Successfully processed and uploaded files for folder: {file_id}")
     """
     Command-line usage examples:
     - python src/main.py ./upload

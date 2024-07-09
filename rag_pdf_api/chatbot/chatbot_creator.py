@@ -2,31 +2,23 @@ import os
 
 import chromadb
 import openai
+from chromadb.config import Settings
 from llama_index.core import ServiceContext, VectorStoreIndex
 from llama_index.core.storage.storage_context import StorageContext
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 from llama_index.llms.azure_openai import AzureOpenAI
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
-from rag_pdf_api.chatbot.gcs_handler import GCSHandler
-
 # Set up Azure OpenAI API keys and endpoints
 os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get("AZURE_OPENAI_LLM_API_KEY", "")
 os.environ["AZURE_OPENAI_ENDPOINT"] = os.environ.get("AZURE_OPENAI_LLM_ENDPOINT", "")
-
-os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get(
-    "AZURE_OPENAI_EMBEDDING_API_KEY", ""
-)
-os.environ["AZURE_OPENAI_ENDPOINT"] = os.environ.get(
-    "AZURE_OPENAI_EMBEDDING_ENDPOINT", ""
-)
 
 
 class Chatbot:
     """
     Class to set up an in-memory vector database for chatbot functionality.
 
-    Attributes:
+    Attributes:This is
     configs: Configuration object containing necessary settings.
     _index: Index object created from the vector store.
     _vanilla_llm: Plain LLM instance for generating answers.
@@ -35,7 +27,7 @@ class Chatbot:
     chat_engine: ChatGPT instance for generating chat responses.
     """
 
-    def __init__(self, configs):
+    def __init__(self, configs, file_id):
         """
         Initializes the Chatbot class.
 
@@ -43,13 +35,14 @@ class Chatbot:
         configs (object): Configuration object containing necessary settings.
         """
         self.configs = configs
+        self.file_id = file_id
         self._index = self._create_index()
         self._vanilla_llm = self._create_llm_instance_only()
         self.retriever = self._create_retriever()
         self.query_engine = self._create_query_engine()
         self.chat_engine = self._create_chat_gpt_instance()
 
-    def _create_index(self, chroma_folder_path: str = "chroma_db"):
+    def _create_index(self):
         """
         Creates a vector store index from stored documents.
 
@@ -59,6 +52,7 @@ class Chatbot:
         Returns:
         VectorStoreIndex: Index object created from the vector store.
         """
+        chroma_folder_path = f"./chroma_db/{self.file_id}"
         llm_llama = AzureOpenAI(
             api_key=self.configs.azure_llm.azure_llm_api_key,
             azure_endpoint=self.configs.azure_llm.azure_llm_endpoint,
@@ -75,8 +69,13 @@ class Chatbot:
             api_version=self.configs.azure_embedding.azure_embedding_api_version,
         )
         # functionalities previously handled by PromptHelper have been integrated into ServiceContext.
-        db = chromadb.PersistentClient(path=chroma_folder_path)
-        chroma_collection = db.get_collection(
+        # db = chromadb.PersistentClient(path=chroma_folder_path)
+        # chroma_collection = db.get_collection(self.configs.chatbot.vector_db_collection_name)
+        db = chromadb.PersistentClient(
+            path=chroma_folder_path,
+            settings=Settings(allow_reset=True, is_persistent=True),
+        )
+        chroma_collection = db.get_or_create_collection(
             self.configs.chatbot.vector_db_collection_name
         )
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
@@ -251,25 +250,3 @@ class Chatbot:
             return completion.choices[0].message.content
         else:
             return "FALSE"
-
-
-def setup_chatbot(configs):
-    """
-    Sets up the Chatbot instance and retrieves the latest timestamp folder.
-
-    Parameters:
-    configs (Config): Configuration object containing necessary settings.
-
-    Returns:
-    tuple: A tuple containing the Chatbot instance and the latest timestamp folder.
-
-    The function logs the start of the download process, creates a GCSHandler instance,
-    downloads the latest timestamp files, retrieves the latest timestamp folder,
-    and returns the Chatbot instance and timestamp folder.
-    """
-    print("Now downloading latest timestamp files.")
-    gcs_handler = GCSHandler(configs)
-    gcs_handler.download_latest_timestamp_files()
-    timestamp = gcs_handler.get_latest_time_stamp_folder()
-
-    return Chatbot(configs), timestamp

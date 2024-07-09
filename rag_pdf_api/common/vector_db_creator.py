@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import List
 
 import chromadb
+from chromadb.config import Settings
 from google.cloud import storage
-from llama_index.core import (ServiceContext, SimpleDirectoryReader,
-                              VectorStoreIndex)
+from llama_index.core import ServiceContext, SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.storage.storage_context import StorageContext
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
@@ -22,6 +22,8 @@ class VectorDbWrapper:
         gcp_project,
         bucket_name,
         text_data_folder_path,
+        gcs_subfolder="pdf-embeddings",
+        file_id=None,
     ):
         """Class to handle creation of Chromba DB Index
 
@@ -47,6 +49,8 @@ class VectorDbWrapper:
             bucket_name (str): GCP bucket to which files should be uploaded
             text_data_folder_path (str): Relative folder name where text data
                 which is meant to be embedded is stored
+            gcs_subfolder (str): Subfolder in GCS bucket for storing embeddings
+            file_id (str): Unique identifier for the file being processed
 
         Return:
             Class VectorDbWrapper
@@ -58,8 +62,9 @@ class VectorDbWrapper:
         self.bucket_name = bucket_name
         self.llm_model = self._init_llm_model()
         self.embedding_model = self._init_embedding_model()
+        self.gcs_subfolder = gcs_subfolder
+        self.file_id = file_id
         self.documents = self._create_list_of_documents()
-        self.current_ts = self._create_timestamp_folder_string()
 
     def _create_list_of_documents(self) -> List:
         """Create a list of Llama_index Document classes
@@ -163,7 +168,9 @@ class VectorDbWrapper:
         Return:
             None, will store Chroma DB artifact in storage_folder
         """
-        db = chromadb.PersistentClient(path=storage_folder)
+        db = chromadb.PersistentClient(
+            path=storage_folder, settings=Settings(allow_reset=True, is_persistent=True)
+        )
         chroma_collection = db.get_or_create_collection(collection_name)
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
 
@@ -262,43 +269,28 @@ class VectorDbWrapper:
                 os.rmdir(item_path)
 
     def upload_db_files_to_gcs(self) -> None:
-        """Upload Chroma DB artifacts to a GCP bucket
-
-        Use the function to upload all files in storage_folder from method
-        self.create_and_store_index(). Note the folder structure described in
-        the docstring of that method.
-
-        This function calls self.upload_all_files_in_folder(), also see the
-        docstring of that method for more details.
-
-        Return:
-            None, uploads all files from /chroma_db to the gcp bucket
-        """
-        # Initialize a client
         storage_client = storage.Client(self.gcp_project)
-
-        # Initialize bucket
         bucket = storage_client.bucket(self.bucket_name)
+        chroma_folder = Path(f"./chroma_db/{self.file_id}")
 
-        # Get chroma_db folder
-        chroma_folder = Path.cwd() / "chroma_db"
-
-        # Upload files
         self.upload_all_files_in_folder(
             bucket=bucket,
             folder_name=chroma_folder,
-            current_ts=self.current_ts,
+            current_ts=self.file_id,
+            gcp_subfolder=self.gcs_subfolder,
         )
 
-        # Loop through has folder
         hash_folder = [item for item in chroma_folder.iterdir() if item.is_dir()][0]
-        print(f"Now looping thorough {hash_folder} and uploading each file")
 
         self.upload_all_files_in_folder(
             bucket=bucket,
             folder_name=hash_folder,
-            current_ts=self.current_ts,
+            current_ts=self.file_id,
+            gcp_subfolder=self.gcs_subfolder,
             hash_folder=hash_folder,
         )
 
-        print("Successfully uploaded all Chroma DB files to bucket")
+        print(
+            "Successfully uploaded all Chroma DB files to bucket "
+            f"{self.bucket_name}/{self.gcs_subfolder}/{self.file_id}"
+        )
