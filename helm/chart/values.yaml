@@ -38,5 +38,7 @@ universal-helm-chart:
     enabled: true
     domains:
       - "rag-pdf-api.ecina.test.da-service.io"
+  serviceAccount:
+    name: "chatbot-api"
 gcp:
   project_id: ""
