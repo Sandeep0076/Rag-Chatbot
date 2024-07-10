@@ -5,3 +5,4 @@
 __pycache__/
 chroma_db/
 local_data/
+.DS_Store
