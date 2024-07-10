@@ -114,16 +114,6 @@ class VectorDbWrapper:
 
         return embedding_model
 
-    def _create_timestamp_folder_string(self):
-        """Create current time stamp"""
-        # Get current date and time
-        current_datetime = datetime.now()
-
-        # Format the datetime object into yyyymmdd_hhmmss format
-        timestamp_string = current_datetime.strftime("%Y%m%d_%H%M%S")
-
-        return timestamp_string
-
     def create_and_store_index(
         self,
         storage_folder: str = "./chroma_db",
