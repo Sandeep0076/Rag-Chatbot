@@ -1,6 +1,5 @@
 import logging
 import os
-
 import google.auth
 import google.oauth2.credentials
 from google.cloud import storage
@@ -9,6 +8,12 @@ from google.cloud import storage
 class GCSHandler:
     """
     A class to handle interactions with Google Cloud Storage (GCS) for downloading and managing data files.
+
+    Attributes:
+    configs (Config): Configuration object containing GCP resource settings.
+    credentials (google.oauth2.credentials.Credentials): Google OAuth credentials.
+    _storage_client (storage.Client): Google Cloud Storage client.
+    bucket (storage.Bucket): GCS bucket object.
     """
 
     def __init__(self, _configs):
@@ -38,68 +43,9 @@ class GCSHandler:
         self.bucket = self._storage_client.get_bucket(
             self.configs.gcp_resource.bucket_name
         )
+   
 
-    def find_folder_by_id(self, folder_id):
-        """
-        Find the folder in GCS based on the given ID.
-
-        Parameters:
-        folder_id (str): The ID of the folder to find.
-
-        Returns:
-        str: The name of the folder with the given ID, or None if no folder is found.
-        """
-        logging.info(f"Now retrieving the folder with ID: {folder_id}")
-        blobs = self.bucket.list_blobs(
-            prefix=self.configs.gcp_resource.embeddings_folder
-        )
-
-        # Extract folder names from blob names
-        folder_names = {blob.name.split("/")[1] for blob in blobs}
-
-        # Find the folder with the given ID
-        matching_folder = next(
-            (name for name in folder_names if name == folder_id), None
-        )
-
-        if matching_folder:
-            logging.info(f"Found folder with ID: {folder_id}")
-            return matching_folder
-        else:
-            logging.info(f"No folder found with ID: {folder_id}")
-            return None
-
-    def download_chromadb_files_from_gcs2(
-        self, folder_id, local_destination="chroma_db"
-    ):
-        """
-        Download Chroma DB files from the GCS bucket.
-
-        Parameters:
-        folder_id (str): The ID of the folder in GCS.
-        local_destination (str): The local destination folder to save downloaded files.
-        """
-        embeddings_folder = self.configs.gcp_resource.embeddings_folder
-        blobs = self.bucket.list_blobs(prefix=f"{embeddings_folder}{folder_id}")
-
-        for blob in blobs:
-            if (
-                blob.name.startswith(embeddings_folder)
-                and blob.name != embeddings_folder
-            ):
-                file_name_on_local = blob.name.split(
-                    f"{embeddings_folder}{folder_id}/"
-                )[-1]
-                local_file_path = os.path.join(local_destination, file_name_on_local)
-                os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-                blob.download_to_filename(local_file_path)
-                logging.info(
-                    f"Downloaded gs://{self.bucket}/{blob.name} to {local_file_path} with name {file_name_on_local}"
-                )
-
-    def download_files_from_gcs(
-        self, bucket_name: str, source_blob_name: str, destination_file_path: str
-    ):
+    def download_files_from_gcs(self, bucket_name: str, source_blob_name: str, destination_file_path: str):
         """
         A generic method to download files from GCS.
         """
@@ -112,21 +58,6 @@ class GCSHandler:
         # and download the blob to a file
         blob.download_to_filename(destination_file_path)
 
-    # deprecated
-    def download_files_from_folder_by_id2(self, folder_id):
-        """
-        Download files from a specific folder in GCS based on the folder ID.
-
-        Parameters:
-        folder_id (str): The ID of the folder to download files from.
-        """
-        if folder_id:
-            logging.info("Now calling download method")
-            self.download_chromadb_files_from_gcs(
-                folder_id=folder_id,
-            )
-        else:
-            logging.info("No folder found with the given ID.")
 
     def check_and_download_folder(
         self,

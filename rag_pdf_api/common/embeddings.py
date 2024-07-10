@@ -11,16 +11,17 @@ def run_preprocessor(
     Runs the data preprocessor which reads PDF data, converts it into a vector database,
     and uploads the database files to Google Cloud Storage.
 
-    Parameters:
+    Args:
+    configs (Config): Configuration object containing necessary settings.
     text_data_folder_path (str): The path to the folder containing the text data to be processed.
+    file_id (str): Unique identifier for the file being processed.
+    chroma_db_path (str): Path to store the Chroma database.
 
     The function performs the following steps:
     1. Initializes the VectorDbWrapper with Azure and GCP configurations.
     2. Logs the start of the index creation and storage process.
     3. Creates and stores the index using specified chunk size and overlap.
     4. Uploads the created database files to GCS.
-    5. Deletes local database artifacts to avoid memory issues.
-    6. Logs documents for testing purposes.
     """
     # Initialize VectorDbWrapper with environment variables and text data path
     my_wrapper = VectorDbWrapper(

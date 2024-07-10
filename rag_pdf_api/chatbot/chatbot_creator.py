@@ -1,13 +1,13 @@
 import os
-
 import chromadb
 import openai
+from llama_index.core import PromptHelper, ServiceContext, VectorStoreIndex
 from chromadb.config import Settings
-from llama_index.core import ServiceContext, VectorStoreIndex
-from llama_index.core.storage.storage_context import StorageContext
-from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 from llama_index.llms.azure_openai import AzureOpenAI
+from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+from llama_index.core.storage.storage_context import StorageContext
 from llama_index.vector_stores.chroma import ChromaVectorStore
+
 
 # Set up Azure OpenAI API keys and endpoints
 os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get("AZURE_OPENAI_LLM_API_KEY", "")
@@ -18,29 +18,42 @@ class Chatbot:
     """
     Class to set up an in-memory vector database for chatbot functionality.
 
-    Attributes:This is
-    configs: Configuration object containing necessary settings.
-    _index: Index object created from the vector store.
-    _vanilla_llm: Plain LLM instance for generating answers.
-    retriever: Retriever instance for fetching similar documents.
-    query_engine: Query engine instance for processing queries.
-    chat_engine: ChatGPT instance for generating chat responses.
+    Attributes:
+    configs (Config): Configuration object containing necessary settings.
+    file_id (str): Unique identifier for the file being processed.
+    model_choice (str): The chosen language model.
+    model_config (dict): Configuration for the chosen model.
+    _index (VectorStoreIndex): Index object created from the vector store.
+    _vanilla_llm (AzureOpenAI): Plain LLM instance for generating answers.
+    retriever (Retriever): Retriever instance for fetching similar documents.
+    query_engine (QueryEngine): Query engine instance for processing queries.
+    chat_engine (AzureOpenAI): ChatGPT instance for generating chat responses.
     """
 
-    def __init__(self, configs, file_id):
+    def __init__(self, configs, file_id, model_choice="gpt-3.5-turbo"):
         """
         Initializes the Chatbot class.
 
-        Parameters:
-        configs (object): Configuration object containing necessary settings.
+        Args:
+        configs (Config): Configuration object containing necessary settings.
+        file_id (str): Unique identifier for the file being processed.
+        model_choice (str): The chosen language model (default: "gpt-3.5-turbo").
         """
         self.configs = configs
         self.file_id = file_id
+        self.model_choice = model_choice
+        self.model_config = self._get_model_config()
         self._index = self._create_index()
         self._vanilla_llm = self._create_llm_instance_only()
         self.retriever = self._create_retriever()
         self.query_engine = self._create_query_engine()
         self.chat_engine = self._create_chat_gpt_instance()
+
+    # Retrieves the configuration for the chosen model.
+    def _get_model_config(self):
+        if self.model_choice not in self.configs.azure_llm.models:
+            raise ValueError(f"Invalid model choice. Choose from: {list(self.configs.azure_llm.models.keys())}")
+        return self.configs.azure_llm.models[self.model_choice]
 
     def _create_index(self):
         """
@@ -54,10 +67,11 @@ class Chatbot:
         """
         chroma_folder_path = f"./chroma_db/{self.file_id}"
         llm_llama = AzureOpenAI(
-            api_key=self.configs.azure_llm.azure_llm_api_key,
-            azure_endpoint=self.configs.azure_llm.azure_llm_endpoint,
-            azure_deployment=self.configs.azure_llm.azure_llm_deployment,
-            api_version=self.configs.azure_llm.azure_llm_api_version,
+            api_key=self.model_config.api_key,
+            azure_endpoint=self.model_config.endpoint,
+            azure_deployment=self.model_config.deployment,
+            api_version=self.model_config.api_version,
+            model=self.model_config.model_name,
             system_prompt=self.configs.chatbot.system_prompt_rag_llm,
         )
 
@@ -68,16 +82,11 @@ class Chatbot:
             deployment_name=self.configs.azure_embedding.azure_embedding_deployment,
             api_version=self.configs.azure_embedding.azure_embedding_api_version,
         )
-        # functionalities previously handled by PromptHelper have been integrated into ServiceContext.
-        # db = chromadb.PersistentClient(path=chroma_folder_path)
-        # chroma_collection = db.get_collection(self.configs.chatbot.vector_db_collection_name)
-        db = chromadb.PersistentClient(
-            path=chroma_folder_path,
-            settings=Settings(allow_reset=True, is_persistent=True),
-        )
-        chroma_collection = db.get_or_create_collection(
-            self.configs.chatbot.vector_db_collection_name
-        )
+        db = chromadb.PersistentClient(path=chroma_folder_path, settings=Settings(
+        allow_reset=True,
+        is_persistent=True
+    ))
+        chroma_collection = db.get_or_create_collection(self.configs.chatbot.vector_db_collection_name)
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
         service_context = ServiceContext.from_defaults(
@@ -103,12 +112,10 @@ class Chatbot:
         AzureOpenAI: Plain LLM instance.
         """
         llm_llama = openai.AzureOpenAI(
-            api_key=self.configs.azure_llm.azure_llm_api_key,
-            azure_endpoint=self.configs.azure_llm.azure_llm_endpoint,
-            azure_deployment=self.configs.azure_llm.azure_llm_deployment,
-            api_version=self.configs.azure_llm.azure_llm_api_version,
+            api_key=self.model_config.api_key,
+            azure_endpoint=self.model_config.endpoint,
+            api_version=self.model_config.api_version,
         )
-
         return llm_llama
 
     def _create_retriever(self):
@@ -143,9 +150,9 @@ class Chatbot:
         AzureOpenAI: ChatGPT instance.
         """
         client = openai.AzureOpenAI(
-            api_key=self.configs.azure_llm.azure_llm_api_key,
-            azure_endpoint=self.configs.azure_llm.azure_llm_endpoint,
-            api_version=self.configs.azure_llm.azure_llm_api_version,
+            api_key=self.model_config.api_key,
+            azure_endpoint=self.model_config.endpoint,
+            api_version=self.model_config.api_version,
         )
         return client
 
@@ -168,7 +175,7 @@ class Chatbot:
         ]
         completion = self._vanilla_llm.chat.completions.create(
             messages=messages_prompt,
-            model=self.configs.azure_llm.azure_llm_deployment,
+            model=self.model_config.deployment,
             temperature=self.configs.llm_hyperparams.temperature,
             max_tokens=self.configs.llm_hyperparams.max_tokens,
         )

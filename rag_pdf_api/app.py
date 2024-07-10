@@ -1,28 +1,44 @@
 import os
-
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from starlette_exporter import PrometheusMiddleware, handle_metrics
-
 from configs.app_config import Config
 from rag_pdf_api.chatbot.chatbot_creator import Chatbot
 from rag_pdf_api.chatbot.gcs_handler import GCSHandler
 from rag_pdf_api.common.embeddings import run_preprocessor
 
-configs = Config()
-gcs_handler = GCSHandler(configs)
-
+"""
+Main FastAPI application for the RAG PDF API.
+"""
 
 class Query(BaseModel):
+    """
+    Pydantic model for chat query requests.
+    
+    Attributes:
+    text (str): The query text.
+    file_id (str): The ID of the file to query against.
+    model_choice (str): The model to use for the query (default: "gpt-3.5-turbo").
+    """
     text: str
     file_id: str
-
+    model_choice: str = "gpt-3.5-turbo"
+    model_config = {
+        'protected_namespaces': ()
+    }
 
 class PreprocessRequest(BaseModel):
+    """
+    Pydantic model for preprocessing requests.
+    
+    Attributes:
+    file_id (str): The ID of the file to preprocess.
+    """
     file_id: str
 
-
+configs = Config()
+gcs_handler = GCSHandler(configs)
 app = FastAPI()
 
 # expose prometheus metrics at /metrics rest endpoint
@@ -63,6 +79,11 @@ async def info():
 
 @app.post("/pdf/preprocess")
 async def preprocess(request: PreprocessRequest):
+    """
+    Endpoint to preprocess a PDF file. Downloads the pdf from Bucket, creates embeddings 
+    and upload the generated embeddings to Bucket
+    """
+    #bucket_name = "chatbotui"
     """"""
     bucket_name = configs.gcp_resource.bucket_name
     folder_path = "pdfs-raw"
@@ -96,28 +117,28 @@ async def preprocess(request: PreprocessRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
-
-# TODO: when we call directly for chat, if the folder is not present,
-# it download only a folder, not whole
 @app.post("/pdf/chat")
 async def chat(query: Query):
-    """"""
+    """
+    Endpoint to chat with the RAG model. Downloads the embeddings from Bucket and
+    answers all the questions realted to PDF.
+    """
     try:
         file_id = query.file_id
         chroma_db_path = f"./chroma_db/{file_id}"
-
+        
         if not os.path.exists(chroma_db_path):
             print(f"Chroma DB path not found: {chroma_db_path}")
-            # If not found locally, download from GCS
             try:
                 gcs_handler.download_files_from_folder_by_id(file_id)
             except FileNotFoundError as e:
                 raise HTTPException(status_code=404, detail=str(e))
-
-        # Setup chatbot with the specific file_id
+        
         try:
-            chatbot = Chatbot(configs, file_id)
+            chatbot = Chatbot(configs, file_id, model_choice=query.model_choice)
             print("Chatbot setup successful")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             print(f"Error setting up chatbot: {str(e)}")
             raise HTTPException(
@@ -137,6 +158,21 @@ async def chat(query: Query):
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
+@app.get("/available-models")
+async def get_available_models():
+    """
+    Endpoint to get the list of available models.
+    """    
+    return {
+        "models": [
+            "gpt_3_5_turbo",
+            "gpt_4",
+            # Add other available models here
+        ]
+    }      
 def start():
-    """Launched with `poetry run start` at root level"""
+    """
+    Function to start the FastAPI application.
+    Launched with `poetry run start` at root level
+    """
     uvicorn.run("rag_pdf_api.app:app", host="0.0.0.0", port=8080, reload=False)
