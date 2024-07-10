@@ -13,6 +13,7 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get("AZURE_OPENAI_LLM_API_KEY", "")
 os.environ["AZURE_OPENAI_ENDPOINT"] = os.environ.get("AZURE_OPENAI_LLM_ENDPOINT", "")
 
+
 class Chatbot:
     """
     Class to set up an in-memory vector database for chatbot functionality.
@@ -89,10 +90,10 @@ class Chatbot:
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
         service_context = ServiceContext.from_defaults(
-            llm=llm_llama, 
+            llm=llm_llama,
             embed_model=embedding_function_llama,
             chunk_size=self.configs.chatbot.chunk_size_limit,
-            chunk_overlap=self.configs.chatbot.max_chunk_overlap
+            chunk_overlap=self.configs.chatbot.max_chunk_overlap,
         )
 
         index = VectorStoreIndex.from_vector_store(
@@ -124,7 +125,9 @@ class Chatbot:
         Returns:
         Retriever: Retriever instance.
         """
-        retriever = self._index.as_retriever(similarity_top_k=self.configs.chatbot.n_neighbours)
+        retriever = self._index.as_retriever(
+            similarity_top_k=self.configs.chatbot.n_neighbours
+        )
         return retriever
 
     def _create_query_engine(self):
@@ -192,7 +195,9 @@ class Chatbot:
         response = self.query_engine.query(query)
         return response.response
 
-    def get_n_nearest_neighbours(self, query: str, n_neighbours: int, unpack_response=False) -> str:
+    def get_n_nearest_neighbours(
+        self, query: str, n_neighbours: int, unpack_response=False
+    ) -> str:
         """
         Retrieves the n nearest neighbors for a given query based on similarity.
 
@@ -228,10 +233,12 @@ class Chatbot:
         message_text = [
             {
                 "role": "user",
-                "content": f"Check the following statement. Does this statement refer to a statement from the attached list? "
-                           f"If this is the case, then answer TRUE. If the statement appears in the list, also return the index of the matching element."
-                           f"Otherwise answer FALSE. Statement: {current_prompt} "
-                           f"List: {' '.join(temp_history_list)}",
+                "content": f"Check the following statement."
+                "Does this statement refer to a statement from the attached list? "
+                "If this is the case, then answer TRUE. "
+                "If the statement appears in the list, also return the index of the matching element."
+                f"Otherwise answer FALSE. Statement: {current_prompt} "
+                f"List: {' '.join(temp_history_list)}",
             }
         ]
 

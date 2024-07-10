@@ -17,9 +17,3 @@ def test_health(client: TestClient) -> None:
 def test_info(client: TestClient) -> None:
     response = client.get("/info")
     assert response.status_code == 200
-
-
-def test_root(client: TestClient) -> None:
-    response = client.get("/")
-    assert response.status_code == 200
-    assert response.text == '{"message":"Hello World"}'

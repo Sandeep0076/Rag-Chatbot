@@ -1,10 +1,10 @@
-import uvicorn
 import os
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 from configs.app_config import Config
-from rag_pdf_api.chatbot.chatbot_creator import  Chatbot
+from rag_pdf_api.chatbot.chatbot_creator import Chatbot
 from rag_pdf_api.chatbot.gcs_handler import GCSHandler
 from rag_pdf_api.common.embeddings import run_preprocessor
 
@@ -53,6 +53,7 @@ app.add_middleware(
 )
 app.add_route("/metrics", handle_metrics)
 
+
 @app.get("/health")
 async def health():
     """
@@ -60,6 +61,7 @@ async def health():
     In the future this could do some actual checks.
     """
     return {"status": "up"}
+
 
 @app.get("/info")
 async def info():
@@ -74,17 +76,20 @@ async def info():
         "info_text": configs.chatbot.info_text,
     }
 
+
 @app.post("/pdf/preprocess")
 async def preprocess(request: PreprocessRequest):
     """
     Endpoint to preprocess a PDF file. Downloads the pdf from Bucket, creates embeddings 
     and upload the generated embeddings to Bucket
     """
-    bucket_name = "chatbotui"
+    #bucket_name = "chatbotui"
+    """"""
+    bucket_name = configs.gcp_resource.bucket_name
     folder_path = "pdfs-raw"
     file_id = request.file_id
     destination_file_path = "local_data/"
-    
+
     try:
         folder_found = gcs_handler.check_and_download_folder(
             bucket_name, folder_path, file_id, destination_file_path
@@ -94,11 +99,21 @@ async def preprocess(request: PreprocessRequest):
             # Create a folder with file_id inside chroma_db
             chroma_db_path = f"./chroma_db/{file_id}"
             os.makedirs(chroma_db_path, exist_ok=True)
-            
-            run_preprocessor(configs=configs, text_data_folder_path="./local_data", file_id=file_id, chroma_db_path=chroma_db_path)
-            return {"status": "Files downloaded and processed successfully", "folder": file_id}
+
+            run_preprocessor(
+                configs=configs,
+                text_data_folder_path="./local_data",
+                file_id=file_id,
+                chroma_db_path=chroma_db_path,
+            )
+            return {
+                "status": "Files downloaded and processed successfully",
+                "folder": file_id,
+            }
         else:
-            raise HTTPException(status_code=404, detail=f"Folder {file_id} not found in {folder_path}")
+            raise HTTPException(
+                status_code=404, detail=f"Folder {file_id} not found in {folder_path}"
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
@@ -126,14 +141,18 @@ async def chat(query: Query):
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             print(f"Error setting up chatbot: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error setting up chatbot: {str(e)}")
-        
+            raise HTTPException(
+                status_code=500, detail=f"Error setting up chatbot: {str(e)}"
+            )
+
         try:
             response = chatbot.get_answer(query.text)
             return {"response": response}
         except Exception as e:
             print(f"Error getting LLM answer: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error getting LLM answer: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Error getting LLM answer: {str(e)}"
+            )
     except Exception as e:
         print(f"Unexpected error in chat endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
