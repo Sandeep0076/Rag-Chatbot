@@ -9,6 +9,12 @@ from google.cloud import storage
 class GCSHandler:
     """
     A class to handle interactions with Google Cloud Storage (GCS) for downloading and managing data files.
+
+    Attributes:
+    configs (Config): Configuration object containing GCP resource settings.
+    credentials (google.oauth2.credentials.Credentials): Google OAuth credentials.
+    _storage_client (storage.Client): Google Cloud Storage client.
+    bucket (storage.Bucket): GCS bucket object.
     """
 
     def __init__(self, _configs):

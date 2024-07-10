@@ -3,36 +3,40 @@ import chromadb
 import openai
 from llama_index.core import PromptHelper, ServiceContext, VectorStoreIndex
 from chromadb.config import Settings
+from llama_index.llms.azure_openai import AzureOpenAI
+from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+from llama_index.core.storage.storage_context import StorageContext
+from llama_index.vector_stores.chroma import ChromaVectorStore
+
 
 # Set up Azure OpenAI API keys and endpoints
 os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get("AZURE_OPENAI_LLM_API_KEY", "")
 os.environ["AZURE_OPENAI_ENDPOINT"] = os.environ.get("AZURE_OPENAI_LLM_ENDPOINT", "")
-from llama_index.llms.azure_openai import AzureOpenAI
-
-from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
-
-from llama_index.core.storage.storage_context import StorageContext
-from llama_index.vector_stores.chroma import ChromaVectorStore
 
 class Chatbot:
     """
     Class to set up an in-memory vector database for chatbot functionality.
 
-    Attributes:This is
-    configs: Configuration object containing necessary settings.
-    _index: Index object created from the vector store.
-    _vanilla_llm: Plain LLM instance for generating answers.
-    retriever: Retriever instance for fetching similar documents.
-    query_engine: Query engine instance for processing queries.
-    chat_engine: ChatGPT instance for generating chat responses.
+    Attributes:
+    configs (Config): Configuration object containing necessary settings.
+    file_id (str): Unique identifier for the file being processed.
+    model_choice (str): The chosen language model.
+    model_config (dict): Configuration for the chosen model.
+    _index (VectorStoreIndex): Index object created from the vector store.
+    _vanilla_llm (AzureOpenAI): Plain LLM instance for generating answers.
+    retriever (Retriever): Retriever instance for fetching similar documents.
+    query_engine (QueryEngine): Query engine instance for processing queries.
+    chat_engine (AzureOpenAI): ChatGPT instance for generating chat responses.
     """
 
     def __init__(self, configs, file_id, model_choice="gpt-3.5-turbo"):
         """
         Initializes the Chatbot class.
 
-        Parameters:
-        configs (object): Configuration object containing necessary settings.
+        Args:
+        configs (Config): Configuration object containing necessary settings.
+        file_id (str): Unique identifier for the file being processed.
+        model_choice (str): The chosen language model (default: "gpt-3.5-turbo").
         """
         self.configs = configs
         self.file_id = file_id
@@ -44,6 +48,7 @@ class Chatbot:
         self.query_engine = self._create_query_engine()
         self.chat_engine = self._create_chat_gpt_instance()
 
+    # Retrieves the configuration for the chosen model.
     def _get_model_config(self):
         if self.model_choice not in self.configs.azure_llm.models:
             raise ValueError(f"Invalid model choice. Choose from: {list(self.configs.azure_llm.models.keys())}")
@@ -76,9 +81,6 @@ class Chatbot:
             deployment_name=self.configs.azure_embedding.azure_embedding_deployment,
             api_version=self.configs.azure_embedding.azure_embedding_api_version,
         )
-       # functionalities previously handled by PromptHelper have been integrated into ServiceContext. 
-        #db = chromadb.PersistentClient(path=chroma_folder_path)
-        #chroma_collection = db.get_collection(self.configs.chatbot.vector_db_collection_name)
         db = chromadb.PersistentClient(path=chroma_folder_path, settings=Settings(
         allow_reset=True,
         is_persistent=True

@@ -3,7 +3,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 from chromadb.config import Settings
-
 import chromadb
 from google.cloud import storage
 from llama_index.core import (ServiceContext, SimpleDirectoryReader,
@@ -16,6 +15,25 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 
 
 class VectorDbWrapper:
+    """
+    Class to handle creation of Chroma DB Index
+
+    This class is meant to handle the creation and uploading of a Chroma
+    Vector DB. Specifically, it:
+    - Creates Chroma DB artifacts from any kind of text files in a folder
+    - Uploads those artifacts into a GCP bucket
+
+    Attributes:
+    azure_api_key (str): API key to access a private Azure endpoint
+    azure_endpoint (str): Azure endpoint where an LLM and embeddings model are deployed
+    text_data_folder_path (str): Relative folder name where text data to be embedded is stored
+    gcp_project (str): GCP project where bucket is into which files should be uploaded
+    bucket_name (str): GCP bucket to which files should be uploaded
+    llm_model (AzureOpenAI): LLM model instance
+    embedding_model (AzureOpenAIEmbedding): Embedding model instance
+    gcs_subfolder (str): Subfolder in GCS bucket for storing embeddings
+    file_id (str): Unique identifier for the file being processed
+    """
     def __init__(
         self,
         azure_api_key,
@@ -26,36 +44,6 @@ class VectorDbWrapper:
         gcs_subfolder="pdf-embeddings",
         file_id=None
     ):
-        """Class to handle creation of Chromba DB Index
-
-        This class is meant to handle the creation and uploading of a Chroma
-        Vector DB. Specifically, it
-
-        - Creates Chroma DB artifacts from any kind of text files in a folder
-            (text_data_folder_path), which are .json files in our case.
-        - Uploads those artifacts into a GCP bucket
-
-        The Chroma artifacts created are several .bin files, one .pickle file,
-        a chroma.sqlite3 file and several json files.
-
-        Requirements to instantiate this class are an AZURE API token and
-        Azure endpoint where both an embedding model and LLM model are deployed.
-
-        Args:
-            azure_api_key (str): API key to access a private Azure endpoint
-            azure_endpoint (str): Azure endpoint where an LLM and embeddings
-                model are deployed
-            gcp_project (str): GCP project where bucket is into which files
-                should be uploaded
-            bucket_name (str): GCP bucket to which files should be uploaded
-            text_data_folder_path (str): Relative folder name where text data
-                which is meant to be embedded is stored
-            gcs_subfolder (str): Subfolder in GCS bucket for storing embeddings
-            file_id (str): Unique identifier for the file being processed
-
-        Return:
-            Class VectorDbWrapper
-        """
         self.azure_api_key = azure_api_key
         self.azure_endpoint = azure_endpoint
         self.text_data_folder_path = text_data_folder_path
@@ -86,7 +74,7 @@ class VectorDbWrapper:
             recursive=False,
         ).load_data()
 
-        # TODO ask Andreas what this is for
+       
         doc_text = "\n\n".join([d.get_content() for d in documents])
 
         print(f"The total number of words in the docs is {len(doc_text.split())}")
