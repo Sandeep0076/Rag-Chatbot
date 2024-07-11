@@ -1,13 +1,13 @@
 import os
+
 import chromadb
 import openai
-from llama_index.core import PromptHelper, ServiceContext, VectorStoreIndex
 from chromadb.config import Settings
-from llama_index.llms.azure_openai import AzureOpenAI
-from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+from llama_index.core import PromptHelper, ServiceContext, VectorStoreIndex
 from llama_index.core.storage.storage_context import StorageContext
+from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
+from llama_index.llms.azure_openai import AzureOpenAI
 from llama_index.vector_stores.chroma import ChromaVectorStore
-
 
 # Set up Azure OpenAI API keys and endpoints
 os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get("AZURE_OPENAI_LLM_API_KEY", "")
@@ -52,7 +52,9 @@ class Chatbot:
     # Retrieves the configuration for the chosen model.
     def _get_model_config(self):
         if self.model_choice not in self.configs.azure_llm.models:
-            raise ValueError(f"Invalid model choice. Choose from: {list(self.configs.azure_llm.models.keys())}")
+            raise ValueError(
+                f"Invalid model choice. Choose from: {list(self.configs.azure_llm.models.keys())}"
+            )
         return self.configs.azure_llm.models[self.model_choice]
 
     def _create_index(self):
@@ -82,11 +84,13 @@ class Chatbot:
             deployment_name=self.configs.azure_embedding.azure_embedding_deployment,
             api_version=self.configs.azure_embedding.azure_embedding_api_version,
         )
-        db = chromadb.PersistentClient(path=chroma_folder_path, settings=Settings(
-        allow_reset=True,
-        is_persistent=True
-    ))
-        chroma_collection = db.get_or_create_collection(self.configs.chatbot.vector_db_collection_name)
+        db = chromadb.PersistentClient(
+            path=chroma_folder_path,
+            settings=Settings(allow_reset=True, is_persistent=True),
+        )
+        chroma_collection = db.get_or_create_collection(
+            self.configs.chatbot.vector_db_collection_name
+        )
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
         service_context = ServiceContext.from_defaults(

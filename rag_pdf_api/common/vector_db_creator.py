@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import List
+
 import chromadb
 from chromadb.config import Settings
 from google.cloud import storage
@@ -33,6 +34,7 @@ class VectorDbWrapper:
     gcs_subfolder (str): Subfolder in GCS bucket for storing embeddings
     file_id (str): Unique identifier for the file being processed
     """
+
     def __init__(
         self,
         azure_api_key,
@@ -73,7 +75,6 @@ class VectorDbWrapper:
             recursive=False,
         ).load_data()
 
-       
         doc_text = "\n\n".join([d.get_content() for d in documents])
 
         print(f"The total number of words in the docs is {len(doc_text.split())}")

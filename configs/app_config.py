@@ -1,7 +1,8 @@
-from typing import List, Optional
-from typing import Dict
+from typing import Dict, List, Optional
+
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
+
 
 class ModelConfig(BaseModel):
     api_key: str
@@ -9,9 +10,8 @@ class ModelConfig(BaseModel):
     deployment: str
     api_version: str
     model_name: str
-    model_config = {
-        'protected_namespaces': ()
-    }
+    model_config = {"protected_namespaces": ()}
+
 
 class AzureLLMConfig(BaseModel):
     azure_llm_api_key: str
@@ -66,7 +66,6 @@ class Config(BaseSettings):
     chatbot: ChatbotConfig
     llm_hyperparams: LLMHyperParams
     gcp_resource: GCPResourceConfig
+
     class Config:
-        env_nested_delimiter = '__'
-
-
+        env_nested_delimiter = "__"

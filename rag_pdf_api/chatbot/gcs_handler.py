@@ -1,5 +1,6 @@
 import logging
 import os
+
 import google.auth
 import google.oauth2.credentials
 from google.cloud import storage
@@ -43,9 +44,10 @@ class GCSHandler:
         self.bucket = self._storage_client.get_bucket(
             self.configs.gcp_resource.bucket_name
         )
-   
 
-    def download_files_from_gcs(self, bucket_name: str, source_blob_name: str, destination_file_path: str):
+    def download_files_from_gcs(
+        self, bucket_name: str, source_blob_name: str, destination_file_path: str
+    ):
         """
         A generic method to download files from GCS.
         """
@@ -57,7 +59,6 @@ class GCSHandler:
 
         # and download the blob to a file
         blob.download_to_filename(destination_file_path)
-
 
     def check_and_download_folder(
         self,
