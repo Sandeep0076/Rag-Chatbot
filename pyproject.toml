@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "rag_pdf_api"
+name = "rtl_rag_chatbot_api"
 version = "1.0.0"
-description = "rag-pdf-api"
+description = "rtl-rag-chatbot-api"
 authors = []
 readme = 'README.md'
 
@@ -49,4 +49,4 @@ build-backend = "poetry.core.masonry.api"
 [tool.pytest.ini_options]
 
 [tool.poetry.scripts]
-start = "rag_pdf_api.app:start"
+start = "rtl_rag_chatbot_api.app:start"

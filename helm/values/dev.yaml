@@ -9,7 +9,7 @@ global:
 universal-helm-chart:
   ingress:
     domains:
-      - rag-pdf-api.itowe.gcp.dev.da-service.io
+      - rtl-rag-chatbot-api.itowe.gcp.dev.da-service.io
   deployment:
     scaleDown: true
 

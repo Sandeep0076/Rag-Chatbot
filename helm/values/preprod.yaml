@@ -3,6 +3,6 @@ global:
 universal-helm-chart:
   ingress:
     domains:
-      - rag-pdf-api.itowe.gcp.preprod.da-service.io
+      - rtl-rag-chatbot-api.itowe.gcp.preprod.da-service.io
   deployment:
     scaleDown: false #Placeholder for user input from developer portal

@@ -1,5 +1,5 @@
-site_name: 'rag-pdf-api'
-site_description: 'RAG PDF API'
+site_name: 'rtl-rag-chatbot-api'
+site_description: 'RTL RAG CHATBOT API'
 
 nav:
   - Introduction: index.md

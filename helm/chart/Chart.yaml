@@ -1,6 +1,6 @@
 apiVersion: v2
 type: application
-name: rag-pdf-api
+name: rtl-rag-chatbot-api
 version: "1.0.0"
 dependencies:
   - name: universal-helm-chart

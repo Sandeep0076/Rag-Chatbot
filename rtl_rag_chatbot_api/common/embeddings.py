@@ -1,7 +1,7 @@
 import logging
 
 from configs.app_config import Config
-from rag_pdf_api.common.vector_db_creator import VectorDbWrapper
+from rtl_rag_chatbot_api.common.vector_db_creator import VectorDbWrapper
 
 
 def run_preprocessor(
