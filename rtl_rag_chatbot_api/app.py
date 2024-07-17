@@ -1,11 +1,10 @@
 import os
-
+import logging
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
-from configs.app_config import Config
+from configs.app_config import Config, Query, PreprocessRequest
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
@@ -13,34 +12,6 @@ from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 """
 Main FastAPI application for the RAG PDF API.
 """
-
-
-class Query(BaseModel):
-    """
-    Pydantic model for chat query requests.
-
-    Attributes:
-    text (str): The query text.
-    file_id (str): The ID of the file to query against.
-    model_choice (str): The model to use for the query (default: "gpt-3.5-turbo").
-    """
-
-    text: str
-    file_id: str
-    model_choice: str = "gpt-3.5-turbo"
-    model_config = {"protected_namespaces": ()}
-
-
-class PreprocessRequest(BaseModel):
-    """
-    Pydantic model for preprocessing requests.
-
-    Attributes:
-    file_id (str): The ID of the file to preprocess.
-    """
-
-    file_id: str
-
 
 configs = Config()
 gcs_handler = GCSHandler(configs)
@@ -82,16 +53,15 @@ async def info():
     }
 
 
-@app.post("/pdf/preprocess")
+@app.post("/file/preprocess")
 async def preprocess(request: PreprocessRequest):
     """
     Endpoint to preprocess a PDF file. Downloads the pdf from Bucket, creates embeddings
     and upload the generated embeddings to Bucket
     """
-    # bucket_name = "chatbotui"
-    """"""
     bucket_name = configs.gcp_resource.bucket_name
-    folder_path = "pdfs-raw"
+    logging.info(bucket_name)
+    folder_path = "files-raw"
     file_id = request.file_id
     destination_file_path = "local_data/"
 
@@ -123,11 +93,11 @@ async def preprocess(request: PreprocessRequest):
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
-@app.post("/pdf/chat")
+@app.post("/file/chat")
 async def chat(query: Query):
     """
     Endpoint to chat with the RAG model. Downloads the embeddings from Bucket and
-    answers all the questions realted to PDF.
+    answers all the questions related to PDF.
     """
     try:
         file_id = query.file_id

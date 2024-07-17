@@ -109,7 +109,7 @@ class GCSHandler:
         Raises:
         FileNotFoundError: If no embeddings are found for the given file_id.
         """
-        prefix = f"pdf-embeddings/{file_id}/"
+        prefix = f"file-embeddings/{file_id}/"
         blobs = list(self.bucket.list_blobs(prefix=prefix))
 
         if not blobs:

@@ -30,7 +30,7 @@ def run_preprocessor(
         text_data_folder_path=text_data_folder_path,
         gcp_project=configs.gcp_resource.gcp_project,
         bucket_name=configs.gcp_resource.bucket_name,
-        gcs_subfolder="pdf-embeddings",
+        gcs_subfolder="file-embeddings",
         file_id=file_id,
     )
 

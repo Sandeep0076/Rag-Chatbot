@@ -41,7 +41,7 @@ class VectorDbWrapper:
         gcp_project,
         bucket_name,
         text_data_folder_path,
-        gcs_subfolder="pdf-embeddings",
+        gcs_subfolder="file-embeddings",
         file_id=None,
     ):
         self.azure_api_key = azure_api_key
@@ -197,7 +197,7 @@ class VectorDbWrapper:
         bucket,
         folder_name,
         current_ts,
-        gcp_subfolder="pdf-embeddings",
+        gcp_subfolder="file-embeddings",
         hash_folder=None,
     ) -> None:
         """Upload all files in a folder, excluding subfolder
