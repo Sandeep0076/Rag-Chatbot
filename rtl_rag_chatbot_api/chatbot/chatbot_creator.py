@@ -3,7 +3,7 @@ import os
 import chromadb
 import openai
 from chromadb.config import Settings
-from llama_index.core import PromptHelper, ServiceContext, VectorStoreIndex
+from llama_index.core import ServiceContext, VectorStoreIndex
 from llama_index.core.storage.storage_context import StorageContext
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 from llama_index.llms.azure_openai import AzureOpenAI

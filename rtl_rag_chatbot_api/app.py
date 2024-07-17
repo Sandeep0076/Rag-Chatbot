@@ -6,9 +6,9 @@ from pydantic import BaseModel
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
-from rag_pdf_api.chatbot.chatbot_creator import Chatbot
-from rag_pdf_api.chatbot.gcs_handler import GCSHandler
-from rag_pdf_api.common.embeddings import run_preprocessor
+from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
+from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
+from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 
 """
 Main FastAPI application for the RAG PDF API.
@@ -183,4 +183,4 @@ def start():
     Function to start the FastAPI application.
     Launched with `poetry run start` at root level
     """
-    uvicorn.run("rag_pdf_api.app:app", host="0.0.0.0", port=8080, reload=False)
+    uvicorn.run("rtl_rag_chatbot_api.app:app", host="0.0.0.0", port=8080, reload=False)

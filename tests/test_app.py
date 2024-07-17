@@ -1,7 +1,7 @@
 import pytest
 from starlette.testclient import TestClient
 
-from rag_pdf_api.app import app
+from rtl_rag_chatbot_api.app import app
 
 
 @pytest.fixture()

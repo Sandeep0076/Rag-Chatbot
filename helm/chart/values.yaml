@@ -37,7 +37,7 @@ universal-helm-chart:
   ingress:
     enabled: true
     domains:
-      - "rag-pdf-api.ecina.test.da-service.io"
+      - "rtl-rag-chatbot-api.ecina.test.da-service.io"
   serviceAccount:
     name: "chatbot-api"
 gcp:

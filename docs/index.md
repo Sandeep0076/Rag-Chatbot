@@ -1,7 +1,7 @@
-# rag-pdf-api
+# RTL-RAG-CHABOT-API
 
 ## Description
-RAG PDF API
+RTL RAG CHABOT API
 
 ## Links
 This is an FastAPI project.

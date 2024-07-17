@@ -1,4 +1,4 @@
-PROJECT_NAME=rag-pdf-api
+PROJECT_NAME=rtl-rag-chatbot-api
 
 install:
 	@poetry update

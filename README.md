@@ -30,7 +30,7 @@ RAG PDF API is a FastAPI-based application that implements a Retrieval-Augmented
 3. Clone the repository:
    ```
    git clone [repository-url]
-   cd rag-pdf-api
+   cd rtl-rag-chatbot-api
    ```
 
 4. Configure Poetry:
