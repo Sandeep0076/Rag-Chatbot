@@ -4,9 +4,11 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
-from configs.app_config import Config, Query, PreprocessRequest
+from configs.app_config import Config
+from rtl_rag_chatbot_api.common.models import Query, PreprocessRequest
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
+from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 
 """
