@@ -61,49 +61,60 @@ async def preprocess(request: PreprocessRequest):
     file_id = request.file_id
     chroma_db_path = f"./chroma_db/{file_id}"
     bucket_name = configs.gcp_resource.bucket_name
-    folder_path = "files-raw"
+    embeddings_folder = "file-embeddings"
+    raw_files_folder = "files-raw"
     destination_file_path = "local_data/"
 
     try:
-        # Clean up existing Chroma DB if it exists
+        # 1. Check if embeddings exist locally
         if os.path.exists(chroma_db_path):
             logging.info(f"Embeddings are ready {file_id}")
-        else:
-        # Ensure the Chroma DB directory exists and has write permissions
+            return {"status": "Embeddings are ready", "folder": file_id}
+
+        # 2. Check if embeddings exist in GCS
+        embeddings_prefix = f"{embeddings_folder}/{file_id}/"
+        embeddings_blobs = list(gcs_handler.bucket.list_blobs(prefix=embeddings_prefix))
+
+        if embeddings_blobs:
+            # 3. Download embeddings from GCS
+            logging.info(f"Downloading embeddings for {file_id} from GCS")
+            gcs_handler.download_files_from_folder_by_id(file_id)
+            logging.info(f"Embeddings downloaded for {file_id}")
+            return {"status": "Embeddings downloaded from GCS", "folder": file_id}
+
+        # 4. Check for raw files and run preprocessor
+        folder_found = gcs_handler.check_and_download_folder(
+            bucket_name, raw_files_folder, file_id, destination_file_path
+        )
+
+        if folder_found:
+            logging.info(f"Raw files downloaded for {file_id}. Running preprocessor.")
+            
+            # Initialize Chroma DB with proper permissions
             os.makedirs(chroma_db_path, exist_ok=True)
             os.chmod(chroma_db_path, 0o755)  # Ensure write permissions
-
-            # Download files from GCS
-            folder_found = gcs_handler.check_and_download_folder(
-                bucket_name, folder_path, file_id, destination_file_path
+            db = chromadb.PersistentClient(
+                path=chroma_db_path,
+                settings=Settings(allow_reset=True, is_persistent=True)
             )
 
-            if folder_found:
-                logging.info(f"Files downloaded for {file_id}. Running preprocessor.")
-                
-                # Initialize Chroma DB with proper permissions
-                db = chromadb.PersistentClient(
-                    path=chroma_db_path,
-                    settings=Settings(allow_reset=True, is_persistent=True)
-                )
-
-                run_preprocessor(
-                    configs=configs,
-                    text_data_folder_path=destination_file_path,
-                    file_id=file_id,
-                    chroma_db_path=chroma_db_path,
-                    chroma_db=db
-                )
-                
-                return {
-                    "status": "Files processed successfully",
-                    "folder": file_id,
-                }
-            else:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Folder {file_id} not found in {folder_path}"
-                )
+            run_preprocessor(
+                configs=configs,
+                text_data_folder_path=destination_file_path,
+                file_id=file_id,
+                chroma_db_path=chroma_db_path,
+                chroma_db=db
+            )
+            
+            return {
+                "status": "Files processed successfully",
+                "folder": file_id,
+            }
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No embeddings or raw files found for {file_id}"
+            )
     except Exception as e:
         logging.error(f"Error during preprocessing: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")

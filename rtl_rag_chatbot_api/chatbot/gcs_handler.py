@@ -152,3 +152,4 @@ class GCSHandler:
                 logging.info(f"Cleaned up contents of {folder}")
             else:
                 logging.info(f"{folder} does not exist, skipping cleanup")
+    
