@@ -154,7 +154,7 @@ async def chat(query: Query):
 @app.get("/available-models")
 async def get_available_models():
     """
-    Endpoint to get the list of available models.
+     Endpoint to get the list of available models.
     """
     return {
         "models": [
