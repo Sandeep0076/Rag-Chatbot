@@ -3,7 +3,6 @@ import logging
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from starlette_exporter import PrometheusMiddleware, handle_metrics
-
 from configs.app_config import Config
 from rtl_rag_chatbot_api.common.models import Query, PreprocessRequest
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
@@ -148,6 +147,20 @@ async def get_available_models():
             # Add other available models here
         ]
     }
+
+@app.post("/file/cleanup")
+async def cleanup_files():
+    """
+    Endpoint to clean up local files in chroma_db and local_data folders,
+    as well as cache files in the project.
+    """
+    try:
+        gcs_handler = GCSHandler(configs)
+        gcs_handler.cleanup_local_files()
+        return {"status": "Cleanup completed successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred during cleanup: {str(e)}")
+
 
 
 def start():
