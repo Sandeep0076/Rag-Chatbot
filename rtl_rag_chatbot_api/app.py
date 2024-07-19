@@ -167,7 +167,7 @@ async def get_available_models():
 @app.post("/file/cleanup")
 async def cleanup_files():
     """
-    Endpoint to clean up local files in chroma_db and local_data folders,
+    Endpoint to clean-up local files in chroma_db and local_data folders,
     as well as cache files in the project.
     """
     try:
@@ -176,7 +176,6 @@ async def cleanup_files():
         return {"status": "Cleanup completed successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred during cleanup: {str(e)}")
-
 
 
 def start():
