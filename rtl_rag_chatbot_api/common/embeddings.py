@@ -28,22 +28,6 @@ def run_preprocessor(
     3. Creates and stores the index using specified chunk size and overlap.
     4. Uploads the created database files to GCS.
     """
-    # Initialize VectorDbWrapper with environment variables and text data path
-    my_wrapper = VectorDbWrapper(
-        azure_api_key=configs.azure_embedding.azure_embedding_api_key,
-        azure_endpoint=configs.azure_embedding.azure_embedding_endpoint,
-        text_data_folder_path=text_data_folder_path,
-        gcp_project=configs.gcp_resource.gcp_project,
-        bucket_name=configs.gcp_resource.bucket_name,
-        gcs_subfolder="file-embeddings",
-        file_id=file_id,
-    )
-
-    logging.info("Now creating and storing index")
-    logging.info(
-        f"Now creating index with these parameters \n chunk_size: {configs.chatbot.chunk_size_limit} \n chunk_overlap: {configs.chatbot.max_chunk_overlap}"  # noqa
-    )
-
     # Create and store index in the specified storage folder
     # Initialize VectorDbWrapper with environment variables and text data path
     my_wrapper = VectorDbWrapper(

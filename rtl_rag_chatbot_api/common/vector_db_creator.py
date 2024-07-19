@@ -34,19 +34,9 @@ class VectorDbWrapper:
     file_id (str): Unique identifier for the file being processed
     """
 
-    def __init__(
-        self,
-        azure_api_key,
-        azure_endpoint,
-        gcp_project,
-        bucket_name,
-        text_data_folder_path,
-        gcs_subfolder="file-embeddings",
-        file_id=None,
-        chroma_db=None
-    ):
+    def __init__(self, azure_api_key, azure_endpoint, gcp_project, bucket_name, 
+                 text_data_folder_path, gcs_subfolder="file-embeddings", file_id=None, chroma_db=None):
         self.azure_api_key = azure_api_key
-        self.chroma_db = chroma_db
         self.azure_endpoint = azure_endpoint
         self.text_data_folder_path = text_data_folder_path
         self.gcp_project = gcp_project
@@ -55,6 +45,7 @@ class VectorDbWrapper:
         self.embedding_model = self._init_embedding_model()
         self.gcs_subfolder = gcs_subfolder
         self.file_id = file_id
+        self.chroma_db = chroma_db
         self.documents = self._create_list_of_documents()
 
     def _create_list_of_documents(self) -> List:
@@ -122,45 +113,24 @@ class VectorDbWrapper:
         chunk_size: int = 400,
         chunk_overlap: int = 40,
     ) -> None:
-        """Create a Chroma Vector DB and store artifacts on local
-
-        This function creates all artifacts that make up a Chroma Vector DB
-        and stores them in a local folder called storage_folder.
-
-        Args:
-            storage_folder (str): Folder where Chroma DB artifacts are stored
-                Note that the following file types and folder structure inside
-                of storage_folder will be created by the code:
-                - storage_folder
-                    - hash_folder
-                        - file1.bin
-                        - file2.bin
-                        -...
-                    - chroma.sqlite3
-                    - doctore.json
-                    - ... (other .json files)
-            collection_name (str): Name for Chroma DB internals, how collection
-                should be called. Will be required when loading the blobs to
-                re-instantiate the Chroma DB again
-            chunk_size (int):
-            chunk_overlap (int):
-
-        Return:
-            None, will store Chroma DB artifact in storage_folder
-        """
         if self.chroma_db:
             db = self.chroma_db
         else:
             db = chromadb.PersistentClient(
-                path=storage_folder, settings=Settings(allow_reset=True, is_persistent=True)
+                path=storage_folder,
+                settings=Settings(allow_reset=True, is_persistent=True)
             )
-            chroma_collection = db.get_or_create_collection(collection_name)
-            vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
 
-            storage_context = StorageContext.from_defaults(vector_store=vector_store)
-            service_context = ServiceContext.from_defaults(
-                llm=self.llm_model, embed_model=self.embedding_model
-            )
+        chroma_collection = db.get_or_create_collection(collection_name)
+        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+
+        storage_context = StorageContext.from_defaults(vector_store=vector_store)
+        
+        # Always create the service_context
+        service_context = ServiceContext.from_defaults(
+            llm=self.llm_model,
+            embed_model=self.embedding_model
+        )
 
         node_parser = SimpleNodeParser.from_defaults(
             chunk_size=chunk_size,
