@@ -43,8 +43,10 @@ class VectorDbWrapper:
         text_data_folder_path,
         gcs_subfolder="file-embeddings",
         file_id=None,
+        chroma_db=None
     ):
         self.azure_api_key = azure_api_key
+        self.chroma_db = chroma_db
         self.azure_endpoint = azure_endpoint
         self.text_data_folder_path = text_data_folder_path
         self.gcp_project = gcp_project
@@ -146,16 +148,19 @@ class VectorDbWrapper:
         Return:
             None, will store Chroma DB artifact in storage_folder
         """
-        db = chromadb.PersistentClient(
-            path=storage_folder, settings=Settings(allow_reset=True, is_persistent=True)
-        )
-        chroma_collection = db.get_or_create_collection(collection_name)
-        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+        if self.chroma_db:
+            db = self.chroma_db
+        else:
+            db = chromadb.PersistentClient(
+                path=storage_folder, settings=Settings(allow_reset=True, is_persistent=True)
+            )
+            chroma_collection = db.get_or_create_collection(collection_name)
+            vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
 
-        storage_context = StorageContext.from_defaults(vector_store=vector_store)
-        service_context = ServiceContext.from_defaults(
-            llm=self.llm_model, embed_model=self.embedding_model
-        )
+            storage_context = StorageContext.from_defaults(vector_store=vector_store)
+            service_context = ServiceContext.from_defaults(
+                llm=self.llm_model, embed_model=self.embedding_model
+            )
 
         node_parser = SimpleNodeParser.from_defaults(
             chunk_size=chunk_size,

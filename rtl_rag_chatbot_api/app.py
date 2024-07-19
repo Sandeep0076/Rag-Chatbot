@@ -1,6 +1,7 @@
 import os
 import logging
 import uvicorn
+import shutil
 from fastapi import FastAPI, HTTPException
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 from configs.app_config import Config
@@ -8,7 +9,8 @@ from rtl_rag_chatbot_api.common.models import Query, PreprocessRequest
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
-from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
+import chromadb
+from chromadb.config import Settings
 
 """
 Main FastAPI application for the RAG PDF API.
@@ -56,41 +58,55 @@ async def info():
 
 @app.post("/file/preprocess")
 async def preprocess(request: PreprocessRequest):
-    """
-    Endpoint to preprocess a PDF file. Downloads the pdf from Bucket, creates embeddings
-    and upload the generated embeddings to Bucket
-    """
-    bucket_name = configs.gcp_resource.bucket_name
-    logging.info(bucket_name)
-    folder_path = "files-raw"
     file_id = request.file_id
+    chroma_db_path = f"./chroma_db/{file_id}"
+    bucket_name = configs.gcp_resource.bucket_name
+    folder_path = "files-raw"
     destination_file_path = "local_data/"
 
     try:
+        # Clean up existing Chroma DB if it exists
+        if os.path.exists(chroma_db_path):
+            logging.info(f"Removing existing Chroma DB for {file_id}")
+            shutil.rmtree(chroma_db_path)
+
+        # Ensure the Chroma DB directory exists and has write permissions
+        os.makedirs(chroma_db_path, exist_ok=True)
+        os.chmod(chroma_db_path, 0o755)  # Ensure write permissions
+
+        # Download files from GCS
         folder_found = gcs_handler.check_and_download_folder(
             bucket_name, folder_path, file_id, destination_file_path
         )
 
         if folder_found:
-            # Create a folder with file_id inside chroma_db
-            chroma_db_path = f"./chroma_db/{file_id}"
-            os.makedirs(chroma_db_path, exist_ok=True)
+            logging.info(f"Files downloaded for {file_id}. Running preprocessor.")
+            
+            # Initialize Chroma DB with proper permissions
+            db = chromadb.PersistentClient(
+                path=chroma_db_path,
+                settings=Settings(allow_reset=True, is_persistent=True)
+            )
 
             run_preprocessor(
                 configs=configs,
-                text_data_folder_path="./local_data",
+                text_data_folder_path=destination_file_path,
                 file_id=file_id,
                 chroma_db_path=chroma_db_path,
+                chroma_db=db
             )
+            
             return {
-                "status": "Files downloaded and processed successfully",
+                "status": "Files processed successfully",
                 "folder": file_id,
             }
         else:
             raise HTTPException(
-                status_code=404, detail=f"Folder {file_id} not found in {folder_path}"
+                status_code=404,
+                detail=f"Folder {file_id} not found in {folder_path}"
             )
     except Exception as e:
+        logging.error(f"Error during preprocessing: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
