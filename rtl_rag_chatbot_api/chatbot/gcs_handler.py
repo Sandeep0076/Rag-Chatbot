@@ -1,6 +1,6 @@
 import logging
 import os
-
+import shutil
 import google.auth
 import google.oauth2.credentials
 from google.cloud import storage
@@ -109,7 +109,7 @@ class GCSHandler:
         Raises:
         FileNotFoundError: If no embeddings are found for the given file_id.
         """
-        prefix = f"pdf-embeddings/{file_id}/"
+        prefix = f"file-embeddings/{file_id}/"
         blobs = list(self.bucket.list_blobs(prefix=prefix))
 
         if not blobs:
@@ -133,3 +133,23 @@ class GCSHandler:
             logging.info(f"Downloaded {blob.name} to {local_file_path}")
 
         logging.info(f"Finished downloading all files for folder ID: {file_id}")
+
+    def cleanup_local_files(self):
+        """
+        Clean up files inside chroma_db and local_data folders,
+        as well as __pycache__ directories.
+        """
+        folders_to_clean = ['chroma_db', 'local_data']
+        for folder in folders_to_clean:
+            folder_path = os.path.join(os.getcwd(), folder)
+            if os.path.exists(folder_path):
+                for item in os.listdir(folder_path):
+                    item_path = os.path.join(folder_path, item)
+                    if os.path.isfile(item_path):
+                        os.unlink(item_path)
+                    elif os.path.isdir(item_path):
+                        shutil.rmtree(item_path)
+                logging.info(f"Cleaned up contents of {folder}")
+            else:
+                logging.info(f"{folder} does not exist, skipping cleanup")
+    
