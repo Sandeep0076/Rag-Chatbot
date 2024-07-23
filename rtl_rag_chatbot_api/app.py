@@ -77,7 +77,7 @@ async def preprocess(request: PreprocessRequest):
         # 2. Check if embeddings exist in GCS
         embeddings_prefix = f"{embeddings_folder}/{file_id}/"
         embeddings_blobs = list(gcs_handler.bucket.list_blobs(prefix=embeddings_prefix))
-
+        
         if embeddings_blobs:
             # 3. Download embeddings from GCS
             logging.info(f"Downloading embeddings for {file_id} from GCS")
@@ -209,11 +209,10 @@ async def upload_file(file: UploadFile = File(...)):
     try:
         file_id = str(uuid.uuid4())
         original_filename = file.filename
-        file_extension = os.path.splitext(original_filename)[1]
-        encrypted_filename = f"{file_id}{file_extension}.encrypted"
+        encrypted_filename = f"{original_filename}.encrypted"
 
         # Create a temporary file to store the uploaded content
-        temp_file_path = f"temp_{file_id}{file_extension}"
+        temp_file_path = f"temp_{file_id}_{original_filename}"
         with open(temp_file_path, "wb") as buffer:
             content = await file.read()
             buffer.write(content)

@@ -5,6 +5,7 @@ import google.auth
 import google.oauth2.credentials
 from google.cloud import storage
 from rtl_rag_chatbot_api.common.encryption_utils import decrypt_file
+from typing import Tuple, Optional, List
 
 
 class GCSHandler:
@@ -67,7 +68,28 @@ class GCSHandler:
         folder_path: str,
         folder_name: str,
         destination_path: str,
-    ):
+    ) -> Tuple[bool, Optional[List[str]]]:
+        """
+        Check for the existence of a folder in a Google Cloud Storage bucket,
+        download its contents, and decrypt any encrypted files.
+
+        This method checks for the existence of a specified folder within a GCS bucket.
+        If the folder exists, it downloads all files within that folder to a local
+        destination. Any files with a '.encrypted' extension are automatically decrypted
+        after download, and the encrypted versions are deleted locally.
+
+        Args:
+            bucket_name (str): The name of the GCS bucket.
+            folder_path (str): The path within the bucket where the folder is located.
+            folder_name (str): The name of the folder to check and download.
+            destination_path (str): The local path where files should be downloaded.
+
+        Returns:
+            Tuple[bool, Optional[List[str]]]: A tuple containing:
+                - A boolean indicating whether any files were downloaded (True) or not (False).
+                - A list of paths to the downloaded (and potentially decrypted) files,
+                or None if no files were downloaded.
+        """
         bucket = self._storage_client.bucket(bucket_name)
         prefix = f"{folder_path}/{folder_name}/"
         blobs = list(bucket.list_blobs(prefix=prefix))
