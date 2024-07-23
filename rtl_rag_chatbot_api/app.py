@@ -11,7 +11,10 @@ from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 import chromadb
 from chromadb.config import Settings
-
+from fastapi import File, UploadFile
+from fastapi.responses import JSONResponse
+from rtl_rag_chatbot_api.common.encryption_utils import encrypt_file
+import uuid
 """
 Main FastAPI application for the RAG PDF API.
 """
@@ -82,39 +85,52 @@ async def preprocess(request: PreprocessRequest):
             logging.info(f"Embeddings downloaded for {file_id}")
             return {"status": "Embeddings downloaded from GCS", "folder": file_id}
 
-        # 4. Check for raw files and run preprocessor
-        folder_found = gcs_handler.check_and_download_folder(
+        # 4. If no embeddings, process the raw files
+        logging.info(f"No embeddings found for {file_id}. Processing raw files.")
+
+        # Check for raw files in GCS
+        raw_files_found, raw_file_paths = gcs_handler.check_and_download_folder(
             bucket_name, raw_files_folder, file_id, destination_file_path
         )
 
-        if folder_found:
-            logging.info(f"Raw files downloaded for {file_id}. Running preprocessor.")
-            
-            # Initialize Chroma DB with proper permissions
-            os.makedirs(chroma_db_path, exist_ok=True)
-            os.chmod(chroma_db_path, 0o755)  # Ensure write permissions
-            db = chromadb.PersistentClient(
-                path=chroma_db_path,
-                settings=Settings(allow_reset=True, is_persistent=True)
-            )
-
-            run_preprocessor(
-                configs=configs,
-                text_data_folder_path=destination_file_path,
-                file_id=file_id,
-                chroma_db_path=chroma_db_path,
-                chroma_db=db
-            )
-            
-            return {
-                "status": "Files processed successfully",
-                "folder": file_id,
-            }
-        else:
+        if not raw_files_found:
             raise HTTPException(
                 status_code=404,
-                detail=f"No embeddings or raw files found for {file_id}"
+                detail=f"No raw files found for {file_id}"
             )
+
+        # Ensure the Chroma DB directory exists and has write permissions
+        os.makedirs(chroma_db_path, exist_ok=True)
+        os.chmod(chroma_db_path, 0o755)  # Ensure write permissions
+
+        # Initialize Chroma DB with proper permissions
+        db = chromadb.PersistentClient(
+            path=chroma_db_path,
+            settings=Settings(allow_reset=True, is_persistent=True)
+        )
+
+        # Run preprocessor
+        run_preprocessor(
+            configs=configs,
+            text_data_folder_path=destination_file_path,
+            file_id=file_id,
+            chroma_db_path=chroma_db_path,
+            chroma_db=db
+        )
+
+        # Clean up the downloaded files after preprocessing
+        for file_path in raw_file_paths:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
+        # 5. Upload new embeddings to GCS
+        #gcs_handler.upload_embeddings_to_gcs(chroma_db_path, file_id)
+
+        return {
+            "status": "Files processed and embeddings created successfully",
+            "folder": file_id,
+        }
+
     except Exception as e:
         logging.error(f"Error during preprocessing: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
@@ -188,6 +204,44 @@ async def cleanup_files():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred during cleanup: {str(e)}")
 
+@app.post("/file/upload")
+async def upload_file(file: UploadFile = File(...)):
+    try:
+        file_id = str(uuid.uuid4())
+        original_filename = file.filename
+        file_extension = os.path.splitext(original_filename)[1]
+        encrypted_filename = f"{file_id}{file_extension}.encrypted"
+
+        # Create a temporary file to store the uploaded content
+        temp_file_path = f"temp_{file_id}{file_extension}"
+        with open(temp_file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+
+        # Encrypt the file
+        encrypted_file_path = encrypt_file(temp_file_path)
+
+        # Upload the encrypted file to GCS
+        gcs_handler = GCSHandler(configs)
+        bucket_name = configs.gcp_resource.bucket_name
+        destination_blob_name = f"files-raw/{file_id}/{encrypted_filename}"
+        
+        gcs_handler.upload_file_to_gcs(bucket_name, encrypted_file_path, destination_blob_name)
+
+        # Clean up temporary files
+        os.remove(temp_file_path)
+        os.remove(encrypted_file_path)
+
+        return JSONResponse(content={
+            "message": "File uploaded and encrypted successfully",
+            "file_id": file_id,
+            "original_filename": original_filename
+        }, status_code=200)
+
+    except Exception as e:
+        return JSONResponse(content={
+            "message": f"An error occurred: {str(e)}"
+        }, status_code=500)
 
 def start():
     """
