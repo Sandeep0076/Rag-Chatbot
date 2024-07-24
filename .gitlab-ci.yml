@@ -35,7 +35,7 @@ helm:tags:dryrun:
         - dev
         - preprod
         - prod
-      - MG_K8S_CLUSTER_NAME: 
+      - MG_K8S_CLUSTER_NAME:
         - k8s-eewac
         - k8s-fihuf
         - k8s-biqua
