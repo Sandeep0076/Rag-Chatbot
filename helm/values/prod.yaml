@@ -6,3 +6,6 @@ universal-helm-chart:
       - rtl-rag-chatbot-api.itowe.gcp.prod.da-service.io
   deployment:
     scaleDown: false #Placeholder for user input from developer portal
+
+gcp:
+  project_id: "dat-itowe-prd"
