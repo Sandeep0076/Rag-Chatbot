@@ -4,6 +4,7 @@ variables:
   MG_KANIKO_EXTRA_ARGS: |
     --build-arg GITLAB_CI_TOKEN=${CI_JOB_TOKEN}
   MG_POETRY_VERSION: 1.8.3
+  MG_POETRY_RUN_RELEASE: "false"
 
 include:
   - project: dataalliance/infra/common/ci-templates
