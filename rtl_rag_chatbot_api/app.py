@@ -1,20 +1,21 @@
-import os
 import logging
+import os
+import uuid
+
+import chromadb
 import uvicorn
-import shutil
-from fastapi import FastAPI, HTTPException
+from chromadb.config import Settings
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 from starlette_exporter import PrometheusMiddleware, handle_metrics
+
 from configs.app_config import Config
-from rtl_rag_chatbot_api.common.models import Query, PreprocessRequest
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
-import chromadb
-from chromadb.config import Settings
-from fastapi import File, UploadFile
-from fastapi.responses import JSONResponse
 from rtl_rag_chatbot_api.common.encryption_utils import encrypt_file
-import uuid
+from rtl_rag_chatbot_api.common.models import PreprocessRequest, Query
+
 """
 Main FastAPI application for the RAG PDF API.
 """
@@ -77,7 +78,7 @@ async def preprocess(request: PreprocessRequest):
         # 2. Check if embeddings exist in GCS
         embeddings_prefix = f"{embeddings_folder}/{file_id}/"
         embeddings_blobs = list(gcs_handler.bucket.list_blobs(prefix=embeddings_prefix))
-        
+
         if embeddings_blobs:
             # 3. Download embeddings from GCS
             logging.info(f"Downloading embeddings for {file_id} from GCS")
@@ -95,8 +96,7 @@ async def preprocess(request: PreprocessRequest):
 
         if not raw_files_found:
             raise HTTPException(
-                status_code=404,
-                detail=f"No raw files found for {file_id}"
+                status_code=404, detail=f"No raw files found for {file_id}"
             )
 
         # Ensure the Chroma DB directory exists and has write permissions
@@ -105,8 +105,7 @@ async def preprocess(request: PreprocessRequest):
 
         # Initialize Chroma DB with proper permissions
         db = chromadb.PersistentClient(
-            path=chroma_db_path,
-            settings=Settings(allow_reset=True, is_persistent=True)
+            path=chroma_db_path, settings=Settings(allow_reset=True, is_persistent=True)
         )
 
         # Run preprocessor
@@ -115,7 +114,7 @@ async def preprocess(request: PreprocessRequest):
             text_data_folder_path=destination_file_path,
             file_id=file_id,
             chroma_db_path=chroma_db_path,
-            chroma_db=db
+            chroma_db=db,
         )
 
         # Clean up the downloaded files after preprocessing
@@ -124,7 +123,7 @@ async def preprocess(request: PreprocessRequest):
                 os.remove(file_path)
 
         # 5. Upload new embeddings to GCS
-        #gcs_handler.upload_embeddings_to_gcs(chroma_db_path, file_id)
+        # gcs_handler.upload_embeddings_to_gcs(chroma_db_path, file_id)
 
         return {
             "status": "Files processed and embeddings created successfully",
@@ -134,7 +133,6 @@ async def preprocess(request: PreprocessRequest):
     except Exception as e:
         logging.error(f"Error during preprocessing: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
-
 
 
 @app.post("/file/chat")
@@ -181,7 +179,7 @@ async def chat(query: Query):
 @app.get("/available-models")
 async def get_available_models():
     """
-     Endpoint to get the list of available models.
+    Endpoint to get the list of available models.
     """
     return {
         "models": [
@@ -190,6 +188,7 @@ async def get_available_models():
             # Add other available models here
         ]
     }
+
 
 @app.post("/file/cleanup")
 async def cleanup_files():
@@ -202,7 +201,10 @@ async def cleanup_files():
         gcs_handler.cleanup_local_files()
         return {"status": "Cleanup completed successfully"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred during cleanup: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"An error occurred during cleanup: {str(e)}"
+        )
+
 
 @app.post("/file/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -224,23 +226,29 @@ async def upload_file(file: UploadFile = File(...)):
         gcs_handler = GCSHandler(configs)
         bucket_name = configs.gcp_resource.bucket_name
         destination_blob_name = f"files-raw/{file_id}/{encrypted_filename}"
-        
-        gcs_handler.upload_file_to_gcs(bucket_name, encrypted_file_path, destination_blob_name)
+
+        gcs_handler.upload_file_to_gcs(
+            bucket_name, encrypted_file_path, destination_blob_name
+        )
 
         # Clean up temporary files
         os.remove(temp_file_path)
         os.remove(encrypted_file_path)
 
-        return JSONResponse(content={
-            "message": "File uploaded and encrypted successfully",
-            "file_id": file_id,
-            "original_filename": original_filename
-        }, status_code=200)
+        return JSONResponse(
+            content={
+                "message": "File encrypted and uploaded successfully",
+                "file_id": file_id,
+                "original_filename": original_filename,
+            },
+            status_code=200,
+        )
 
     except Exception as e:
-        return JSONResponse(content={
-            "message": f"An error occurred: {str(e)}"
-        }, status_code=500)
+        return JSONResponse(
+            content={"message": f"An error occurred: {str(e)}"}, status_code=500
+        )
+
 
 def start():
     """
