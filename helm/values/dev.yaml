@@ -5,13 +5,11 @@ global:
     secrets_prefix: "common"
     envSecrets:
       - chatbot/chatbot-api
-
 universal-helm-chart:
   ingress:
     domains:
       - rtl-rag-chatbot-api.itowe.gcp.dev.da-service.io
   deployment:
     scaleDown: true
-
 gcp:
   project_id: "dat-itowe-dev"
