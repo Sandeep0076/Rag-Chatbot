@@ -113,6 +113,26 @@ class VectorDbWrapper:
         chunk_size: int = 400,
         chunk_overlap: int = 40,
     ) -> None:
+        """
+        Create and store a vector index for a RAG (Retrieval-Augmented Generation) chatbot using Chroma DB.
+
+        This method processes the documents stored in the instance, chunks them into nodes,
+        creates a vector index, and stores it in a persistent Chroma DB. The index can be
+        used later for efficient similarity searches in the RAG chatbot.
+
+        Args:
+            storage_folder (str, optional): The path where the Chroma DB will be stored.
+                Defaults to "./chroma_db".
+            collection_name (str, optional): The name of the collection in Chroma DB.
+                Defaults to "RAG_CHATBOT".
+            chunk_size (int, optional): The size of each text chunk when parsing documents.
+                Defaults to 400.
+            chunk_overlap (int, optional): The number of overlapping tokens between chunks.
+                Defaults to 40.
+
+        Returns:
+            None
+        """
         if self.chroma_db:
             db = self.chroma_db
         else:
