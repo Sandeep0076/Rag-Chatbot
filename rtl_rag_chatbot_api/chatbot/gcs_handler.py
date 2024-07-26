@@ -1,11 +1,13 @@
 import logging
 import os
 import shutil
+from typing import List, Optional, Tuple
+
 import google.auth
 import google.oauth2.credentials
 from google.cloud import storage
+
 from rtl_rag_chatbot_api.common.encryption_utils import decrypt_file
-from typing import Tuple, Optional, List
 
 
 class GCSHandler:
@@ -108,12 +110,14 @@ class GCSHandler:
             blob.download_to_filename(local_file_path)
             logging.info(f"Downloaded {blob.name} to {local_file_path}")
 
-            if file_name.endswith('.encrypted'):
+            if file_name.endswith(".encrypted"):
                 try:
                     decrypted_file_path = decrypt_file(local_file_path)
                     downloaded_files.append(decrypted_file_path)
                     os.remove(local_file_path)  # Remove the encrypted file
-                    logging.info(f"Decrypted {local_file_path} to {decrypted_file_path}")
+                    logging.info(
+                        f"Decrypted {local_file_path} to {decrypted_file_path}"
+                    )
                 except Exception as e:
                     logging.error(f"Failed to decrypt {local_file_path}: {str(e)}")
                     # If decryption fails, don't add the file to downloaded_files
@@ -163,7 +167,7 @@ class GCSHandler:
         Clean up files inside chroma_db and local_data folders,
         as well as __pycache__ directories.
         """
-        folders_to_clean = ['chroma_db', 'local_data']
+        folders_to_clean = ["chroma_db", "local_data"]
         for folder in folders_to_clean:
             folder_path = os.path.join(os.getcwd(), folder)
             if os.path.exists(folder_path):
@@ -177,8 +181,9 @@ class GCSHandler:
             else:
                 logging.info(f"{folder} does not exist, skipping cleanup")
 
-    
-    def upload_file_to_gcs(self, bucket_name: str, source_file_path: str, destination_blob_name: str):
+    def upload_file_to_gcs(
+        self, bucket_name: str, source_file_path: str, destination_blob_name: str
+    ):
         """Upload a file to the bucket."""
         bucket = self._storage_client.bucket(bucket_name)
         blob = bucket.blob(destination_blob_name)
@@ -186,7 +191,6 @@ class GCSHandler:
         blob.upload_from_filename(source_file_path)
 
         print(f"File {source_file_path} uploaded to {destination_blob_name}.")
-    
 
     def download_and_decrypt_file(self, file_id: str, destination_path: str):
         """
@@ -203,9 +207,9 @@ class GCSHandler:
         os.makedirs(os.path.dirname(encrypted_file_path), exist_ok=True)
 
         blob.download_to_filename(encrypted_file_path)
-        
+
         decrypted_file_path = decrypt_file(encrypted_file_path)
-        
+
         # Clean up the encrypted file
         os.remove(encrypted_file_path)
 

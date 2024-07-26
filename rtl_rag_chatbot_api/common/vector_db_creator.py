@@ -34,8 +34,17 @@ class VectorDbWrapper:
     file_id (str): Unique identifier for the file being processed
     """
 
-    def __init__(self, azure_api_key, azure_endpoint, gcp_project, bucket_name, 
-                 text_data_folder_path, gcs_subfolder="file-embeddings", file_id=None, chroma_db=None):
+    def __init__(
+        self,
+        azure_api_key,
+        azure_endpoint,
+        gcp_project,
+        bucket_name,
+        text_data_folder_path,
+        gcs_subfolder="file-embeddings",
+        file_id=None,
+        chroma_db=None,
+    ):
         self.azure_api_key = azure_api_key
         self.azure_endpoint = azure_endpoint
         self.text_data_folder_path = text_data_folder_path
@@ -138,18 +147,17 @@ class VectorDbWrapper:
         else:
             db = chromadb.PersistentClient(
                 path=storage_folder,
-                settings=Settings(allow_reset=True, is_persistent=True)
+                settings=Settings(allow_reset=True, is_persistent=True),
             )
 
         chroma_collection = db.get_or_create_collection(collection_name)
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
 
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
-        
+
         # Always create the service_context
         service_context = ServiceContext.from_defaults(
-            llm=self.llm_model,
-            embed_model=self.embedding_model
+            llm=self.llm_model, embed_model=self.embedding_model
         )
 
         node_parser = SimpleNodeParser.from_defaults(
