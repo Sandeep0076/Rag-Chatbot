@@ -2,8 +2,12 @@ global:
   env: "test"
   port: 8080
   probePath: /info
+
   vault:
+    mount_path: "da/itowe/ci"
     secrets_prefix: "common"
+    envSecrets:
+      - chatbot/chatbot-api
 universal-helm-chart:
   container:
     image:
