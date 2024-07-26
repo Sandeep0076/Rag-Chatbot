@@ -1,9 +1,13 @@
 import logging
 import os
 import shutil
+from typing import List, Optional, Tuple
+
 import google.auth
 import google.oauth2.credentials
 from google.cloud import storage
+
+from rtl_rag_chatbot_api.common.encryption_utils import decrypt_file
 
 
 class GCSHandler:
@@ -66,18 +70,27 @@ class GCSHandler:
         folder_path: str,
         folder_name: str,
         destination_path: str,
-    ):
+    ) -> Tuple[bool, Optional[List[str]]]:
         """
-        Check if a specific folder exists in the given path and download its contents if it does.
+        Check for the existence of a folder in a Google Cloud Storage bucket,
+        download its contents, and decrypt any encrypted files.
 
-        Parameters:
-        bucket_name (str): Name of the GCS bucket
-        folder_path (str): Path to the parent folder in the bucket
-        folder_name (str): Name of the specific folder to check for
-        destination_path (str): Local path to save downloaded files
+        This method checks for the existence of a specified folder within a GCS bucket.
+        If the folder exists, it downloads all files within that folder to a local
+        destination. Any files with a '.encrypted' extension are automatically decrypted
+        after download, and the encrypted versions are deleted locally.
+
+        Args:
+            bucket_name (str): The name of the GCS bucket.
+            folder_path (str): The path within the bucket where the folder is located.
+            folder_name (str): The name of the folder to check and download.
+            destination_path (str): The local path where files should be downloaded.
 
         Returns:
-        bool: True if the folder was found and files were downloaded, False otherwise
+            Tuple[bool, Optional[List[str]]]: A tuple containing:
+                - A boolean indicating whether any files were downloaded (True) or not (False).
+                - A list of paths to the downloaded (and potentially decrypted) files,
+                or None if no files were downloaded.
         """
         bucket = self._storage_client.bucket(bucket_name)
         prefix = f"{folder_path}/{folder_name}/"
@@ -85,8 +98,9 @@ class GCSHandler:
 
         if not blobs:
             logging.info(f"Folder {folder_name} not found in {folder_path}")
-            return False
+            return False, None
 
+        downloaded_files = []
         for blob in blobs:
             if blob.name.endswith("/"):  # Skip directory markers
                 continue
@@ -96,7 +110,21 @@ class GCSHandler:
             blob.download_to_filename(local_file_path)
             logging.info(f"Downloaded {blob.name} to {local_file_path}")
 
-        return True
+            if file_name.endswith(".encrypted"):
+                try:
+                    decrypted_file_path = decrypt_file(local_file_path)
+                    downloaded_files.append(decrypted_file_path)
+                    os.remove(local_file_path)  # Remove the encrypted file
+                    logging.info(
+                        f"Decrypted {local_file_path} to {decrypted_file_path}"
+                    )
+                except Exception as e:
+                    logging.error(f"Failed to decrypt {local_file_path}: {str(e)}")
+                    # If decryption fails, don't add the file to downloaded_files
+            else:
+                downloaded_files.append(local_file_path)
+
+        return len(downloaded_files) > 0, downloaded_files
 
     def download_files_from_folder_by_id(self, file_id):
         """
@@ -139,7 +167,7 @@ class GCSHandler:
         Clean up files inside chroma_db and local_data folders,
         as well as __pycache__ directories.
         """
-        folders_to_clean = ['chroma_db', 'local_data']
+        folders_to_clean = ["chroma_db", "local_data"]
         for folder in folders_to_clean:
             folder_path = os.path.join(os.getcwd(), folder)
             if os.path.exists(folder_path):
@@ -152,4 +180,37 @@ class GCSHandler:
                 logging.info(f"Cleaned up contents of {folder}")
             else:
                 logging.info(f"{folder} does not exist, skipping cleanup")
-    
+
+    def upload_file_to_gcs(
+        self, bucket_name: str, source_file_path: str, destination_blob_name: str
+    ):
+        """Upload a file to the bucket."""
+        bucket = self._storage_client.bucket(bucket_name)
+        blob = bucket.blob(destination_blob_name)
+
+        blob.upload_from_filename(source_file_path)
+
+        print(f"File {source_file_path} uploaded to {destination_blob_name}.")
+
+    def download_and_decrypt_file(self, file_id: str, destination_path: str):
+        """
+        Download an encrypted file from GCS and decrypt it.
+        """
+        bucket = self._storage_client.bucket(self.configs.gcp_resource.bucket_name)
+        blob_name = f"files-raw/{file_id}/{file_id}.encrypted"
+        blob = bucket.blob(blob_name)
+
+        if not blob.exists():
+            raise FileNotFoundError(f"No encrypted file found for file_id: {file_id}")
+
+        encrypted_file_path = os.path.join(destination_path, f"{file_id}.encrypted")
+        os.makedirs(os.path.dirname(encrypted_file_path), exist_ok=True)
+
+        blob.download_to_filename(encrypted_file_path)
+
+        decrypted_file_path = decrypt_file(encrypted_file_path)
+
+        # Clean up the encrypted file
+        os.remove(encrypted_file_path)
+
+        return decrypted_file_path
