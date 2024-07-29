@@ -1,6 +1,6 @@
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
 
@@ -19,7 +19,7 @@ class AzureLLMConfig(BaseModel):
     azure_llm_api_version: str
     azure_llm_deployment: str
     azure_llm_model_name: str
-    models: Dict[str, ModelConfig]
+    models: Dict[str, ModelConfig] = Field(default_factory=dict)
 
 
 class AzureEmbeddingConfig(BaseModel):
