@@ -185,6 +185,7 @@ async def get_available_models():
         "models": [
             "gpt_3_5_turbo",
             "gpt_4",
+            "gpt-4-omni",
             # Add other available models here
         ]
     }
