@@ -185,46 +185,25 @@ async def preprocess(request: PreprocessRequest):
 
 @app.post("/file/chat")
 async def chat(query: Query):
-    """
-    Endpoint to chat with the RAG model. Downloads the embeddings from Bucket and
-    answers all the questions related to PDF.
-    """
     try:
         file_id = query.file_id
-        chroma_db_path = f"./chroma_db/{file_id}"
 
-        if not os.path.exists(chroma_db_path):
-            print(f"Chroma DB path not found: {chroma_db_path}")
-            try:
-                gcs_handler.download_files_from_folder_by_id(file_id)
-            except FileNotFoundError as e:
-                raise HTTPException(status_code=404, detail=str(e))
+        if file_id not in initialized_chatbots:
+            await initialize_chatbot(file_id, query.model_choice)
 
-        try:
-            chatbot = Chatbot(configs, file_id, model_choice=query.model_choice)
-            print("Chatbot setup successful")
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        except Exception as e:
-            print(f"Error setting up chatbot: {str(e)}")
-            raise HTTPException(
-                status_code=500, detail=f"Error setting up chatbot: {str(e)}"
-            )
+        chatbot = initialized_chatbots[file_id]
 
-        try:
-            response = chatbot.get_answer(query.text)
-            if (
-                "generate chart" in query.text.lower()
-                or "generate graph" in query.text.lower()
-            ):
-                chart_data = chatbot.generate_chart(query.text)
-                return {"response": response, "chart_data": chart_data}
-            return {"response": response}
-        except Exception as e:
-            print(f"Error getting LLM answer: {str(e)}")
-            raise HTTPException(
-                status_code=500, detail=f"Error getting LLM answer: {str(e)}"
-            )
+        response = chatbot.get_answer(query.text)
+
+        # Check if the response includes a request to generate a chart or graph
+        if (
+            "generate chart" in query.text.lower()
+            or "generate graph" in query.text.lower()
+        ):
+            chart_data = chatbot.generate_chart(query.text)
+            return {"response": response, "chart_data": chart_data}
+
+        return {"response": response}
     except Exception as e:
         print(f"Unexpected error in chat endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
@@ -329,7 +308,8 @@ async def upload_file(
                     gcs_handler=gcs_handler,
                 )
                 logging.info(f"Preprocessing completed for file: {file_id}")
-
+            # Initialize the chatbot after processing
+            await initialize_chatbot(file_id, "gpt_3_5_turbo")  # Use a default model
         except Exception as e:
             logging.error(f"Error during file processing: {str(e)}")
             raise
@@ -349,6 +329,32 @@ async def upload_file(
         logging.error(f"Error in file upload and preprocessing: {str(e)}")
         return JSONResponse(
             content={"message": f"An error occurred: {str(e)}"}, status_code=500
+        )
+
+
+# Global dictionary to store initialized chatbots
+initialized_chatbots = {}
+
+
+async def initialize_chatbot(file_id: str, model_choice: str):
+    chroma_db_path = f"./chroma_db/{file_id}"
+    if not os.path.exists(chroma_db_path):
+        print(f"Chroma DB path not found: {chroma_db_path}")
+        try:
+            gcs_handler.download_files_from_folder_by_id(file_id)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    try:
+        chatbot = Chatbot(configs, file_id, model_choice=model_choice)
+        print("Chatbot setup successful")
+        initialized_chatbots[file_id] = chatbot
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"Error setting up chatbot: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error setting up chatbot: {str(e)}"
         )
 
 
