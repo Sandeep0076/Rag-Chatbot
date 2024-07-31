@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shutil
 import uuid
 
 import chromadb
@@ -253,7 +254,7 @@ async def cleanup_files():
         )
 
 
-@app.post("/file/upload")
+@app.post("/file/upload", response_model=FileUploadResponse)
 async def upload_file(
     file: UploadFile = File(...), contain_multimedia: bool = Form(...)
 ):
@@ -272,35 +273,80 @@ async def upload_file(
         encrypted_file_path = encrypt_file(temp_file_path)
 
         # Upload the encrypted file to GCS
-        gcs_handler = GCSHandler(configs)
-        bucket_name = configs.gcp_resource.bucket_name
-        destination_blob_name = f"files-raw/{file_id}/{encrypted_filename}"
-
-        # Store the contain_multimedia info too
+        raw_files_folder = "files-raw"
+        destination_blob_name = f"{raw_files_folder}/{file_id}/{encrypted_filename}"
         gcs_handler.upload_to_gcs(
-            bucket_name,
+            configs.gcp_resource.bucket_name,
             {
                 "file": (encrypted_file_path, destination_blob_name),
                 "metadata": (
                     {"contain_multimedia": contain_multimedia},
-                    f"files-raw/{file_id}/metadata.json",
+                    f"{raw_files_folder}/{file_id}/metadata.json",
                 ),
             },
-            None,  # No single destination_blob_name as we're uploading multiple items
         )
+
+        logging.info(f"File uploaded to GCS: {destination_blob_name}")
 
         # Clean up temporary files
         os.remove(temp_file_path)
         os.remove(encrypted_file_path)
 
+        # Prepare for preprocessing
+        chroma_db_path = f"./chroma_db/{file_id}"
+        os.makedirs(chroma_db_path, exist_ok=True)
+        os.chmod(chroma_db_path, 0o755)
+
+        db = chromadb.PersistentClient(
+            path=chroma_db_path, settings=Settings(allow_reset=True, is_persistent=True)
+        )
+
+        destination_file_path = f"local_data/{file_id}/"
+        os.makedirs(destination_file_path, exist_ok=True)
+
+        try:
+            # Download and decrypt the file
+            decrypted_file_path = gcs_handler.download_and_decrypt_file(
+                file_id, destination_file_path
+            )
+            logging.info(f"File decrypted: {decrypted_file_path}")
+
+            # Preprocess the file
+            if contain_multimedia:
+                multimodal_processor = MultimodalProcessor(configs)
+                multimodal_processor.process_and_embed(
+                    file_id, destination_file_path, db, contain_multimedia
+                )
+                logging.info(f"Multimodal processing completed for file: {file_id}")
+            else:
+                run_preprocessor(
+                    configs=configs,
+                    text_data_folder_path=destination_file_path,
+                    file_id=file_id,
+                    chroma_db_path=chroma_db_path,
+                    chroma_db=db,
+                    contain_multimedia=contain_multimedia,
+                    gcs_handler=gcs_handler,
+                )
+                logging.info(f"Preprocessing completed for file: {file_id}")
+
+        except Exception as e:
+            logging.error(f"Error during file processing: {str(e)}")
+            raise
+
+        finally:
+            # Clean up local files
+            shutil.rmtree(destination_file_path, ignore_errors=True)
+
         return FileUploadResponse(
-            message="File encrypted and uploaded successfully",
+            message="File uploaded, encrypted, and preprocessed successfully",
             file_id=file_id,
             original_filename=original_filename,
             contain_multimedia=contain_multimedia,
         )
 
     except Exception as e:
+        logging.error(f"Error in file upload and preprocessing: {str(e)}")
         return JSONResponse(
             content={"message": f"An error occurred: {str(e)}"}, status_code=500
         )

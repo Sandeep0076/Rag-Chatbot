@@ -198,16 +198,22 @@ class GCSHandler:
         Download an encrypted file from GCS and decrypt it.
         """
         bucket = self._storage_client.bucket(self.configs.gcp_resource.bucket_name)
-        blob_name = f"files-raw/{file_id}/{file_id}.encrypted"
-        blob = bucket.blob(blob_name)
+        prefix = f"files-raw/{file_id}/"
+        blobs = list(bucket.list_blobs(prefix=prefix))
 
-        if not blob.exists():
+        encrypted_blob = next(
+            (blob for blob in blobs if blob.name.endswith(".encrypted")), None
+        )
+
+        if not encrypted_blob:
             raise FileNotFoundError(f"No encrypted file found for file_id: {file_id}")
 
-        encrypted_file_path = os.path.join(destination_path, f"{file_id}.encrypted")
+        encrypted_file_path = os.path.join(
+            destination_path, os.path.basename(encrypted_blob.name)
+        )
         os.makedirs(os.path.dirname(encrypted_file_path), exist_ok=True)
 
-        blob.download_to_filename(encrypted_file_path)
+        encrypted_blob.download_to_filename(encrypted_file_path)
 
         decrypted_file_path = decrypt_file(encrypted_file_path)
 
