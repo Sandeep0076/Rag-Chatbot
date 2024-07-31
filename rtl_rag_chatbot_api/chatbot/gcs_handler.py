@@ -1,7 +1,8 @@
+import json
 import logging
 import os
 import shutil
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import google.auth
 import google.oauth2.credentials
@@ -214,3 +215,44 @@ class GCSHandler:
         os.remove(encrypted_file_path)
 
         return decrypted_file_path
+
+    def upload_to_gcs(
+        self,
+        bucket_name: str,
+        source: Union[str, dict, Dict[str, Tuple[Union[str, dict], str]]],
+        destination_blob_name: Optional[str] = None,
+    ):
+        """
+        Upload a file, JSON data, or multiple items to the bucket.
+
+        Args:
+            bucket_name (str): The name of the GCS bucket.
+            source (Union[str, dict, Dict[str, Tuple[Union[str, dict], str]]]):
+                - A file path (str)
+                - A dictionary to be uploaded as JSON
+                - A dictionary of items to upload, where each value is a tuple of (source, destination_blob_name)
+            destination_blob_name (Optional[str]): The destination blob name in GCS. Not used for multiple uploads.
+        """
+        bucket = self._storage_client.bucket(bucket_name)
+
+        if isinstance(source, dict) and destination_blob_name is None:
+            # Multiple upload case
+            for _, (item_source, item_destination) in source.items():
+                blob = bucket.blob(item_destination)
+                if isinstance(item_source, dict):
+                    blob.upload_from_string(
+                        data=json.dumps(item_source), content_type="application/json"
+                    )
+                elif isinstance(item_source, str):
+                    blob.upload_from_filename(item_source)
+                print(f"Uploaded to {item_destination}")
+        else:
+            # Single upload case
+            blob = bucket.blob(destination_blob_name)
+            if isinstance(source, dict):
+                blob.upload_from_string(
+                    data=json.dumps(source), content_type="application/json"
+                )
+            elif isinstance(source, str):
+                blob.upload_from_filename(source)
+            print(f"Uploaded to {destination_blob_name}")

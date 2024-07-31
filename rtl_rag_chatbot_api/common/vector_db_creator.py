@@ -4,7 +4,6 @@ from typing import List
 
 import chromadb
 from chromadb.config import Settings
-from google.cloud import storage
 from llama_index.core import ServiceContext, SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.storage.storage_context import StorageContext
@@ -38,12 +37,14 @@ class VectorDbWrapper:
         self,
         azure_api_key,
         azure_endpoint,
+        gcs_handler,
         gcp_project,
         bucket_name,
         text_data_folder_path,
         gcs_subfolder="file-embeddings",
         file_id=None,
         chroma_db=None,
+        contain_multimedia=False,
     ):
         self.azure_api_key = azure_api_key
         self.azure_endpoint = azure_endpoint
@@ -56,6 +57,8 @@ class VectorDbWrapper:
         self.file_id = file_id
         self.chroma_db = chroma_db
         self.documents = self._create_list_of_documents()
+        self.contain_multimedia = contain_multimedia
+        self.gcs_handler = gcs_handler
 
     def _create_list_of_documents(self) -> List:
         """Create a list of Llama_index Document classes
@@ -250,28 +253,31 @@ class VectorDbWrapper:
                 os.rmdir(item_path)
 
     def upload_db_files_to_gcs(self) -> None:
-        storage_client = storage.Client(self.gcp_project)
-        bucket = storage_client.bucket(self.bucket_name)
         chroma_folder = Path(f"./chroma_db/{self.file_id}")
 
-        self.upload_all_files_in_folder(
-            bucket=bucket,
-            folder_name=chroma_folder,
-            current_ts=self.file_id,
-            gcp_subfolder=self.gcs_subfolder,
+        # Upload metadata
+        metadata = {"contain_multimedia": self.contain_multimedia}
+        self.gcs_handler.upload_to_gcs(
+            self.bucket_name,
+            {
+                "metadata": (
+                    metadata,
+                    f"{self.gcs_subfolder}/{self.file_id}/metadata.json",
+                )
+            },
         )
 
-        hash_folder = [item for item in chroma_folder.iterdir() if item.is_dir()][0]
+        # Upload Chroma DB files
+        files_to_upload = {}
+        for file in chroma_folder.rglob("*"):
+            if file.is_file():
+                relative_path = file.relative_to(chroma_folder)
+                gcs_object_name = f"{self.gcs_subfolder}/{self.file_id}/{relative_path}"
+                files_to_upload[str(relative_path)] = (str(file), gcs_object_name)
 
-        self.upload_all_files_in_folder(
-            bucket=bucket,
-            folder_name=hash_folder,
-            current_ts=self.file_id,
-            gcp_subfolder=self.gcs_subfolder,
-            hash_folder=hash_folder,
-        )
+        self.gcs_handler.upload_to_gcs(self.bucket_name, files_to_upload)
 
         print(
-            "Successfully uploaded all Chroma DB files to bucket "
+            f"Successfully uploaded all Chroma DB files and metadata to bucket "
             f"{self.bucket_name}/{self.gcs_subfolder}/{self.file_id}"
         )
