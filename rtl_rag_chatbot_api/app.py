@@ -77,6 +77,7 @@ async def info():
     }
 
 
+# Deprecated
 @app.post("/file/preprocess")
 async def preprocess(request: PreprocessRequest):
     file_id = request.file_id
