@@ -299,6 +299,7 @@ async def upload_file(
                 )
                 logging.info(f"Multimodal processing completed for file: {file_id}")
             else:
+                # Use the old code for text-only processing
                 run_preprocessor(
                     configs=configs,
                     text_data_folder_path=destination_file_path,
@@ -308,7 +309,8 @@ async def upload_file(
                     contain_multimedia=contain_multimedia,
                     gcs_handler=gcs_handler,
                 )
-                logging.info(f"Preprocessing completed for file: {file_id}")
+                logging.info(f"Text processing completed for file: {file_id}")
+
             # Initialize the chatbot after processing
             await initialize_chatbot(file_id, "gpt_3_5_turbo")  # Use a default model
         except Exception as e:
@@ -317,6 +319,8 @@ async def upload_file(
 
         finally:
             # Clean up local files
+            if os.path.exists(decrypted_file_path):
+                os.remove(decrypted_file_path)
             shutil.rmtree(destination_file_path, ignore_errors=True)
 
         return FileUploadResponse(

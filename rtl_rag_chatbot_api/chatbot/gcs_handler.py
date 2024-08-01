@@ -193,35 +193,6 @@ class GCSHandler:
 
         print(f"File {source_file_path} uploaded to {destination_blob_name}.")
 
-    def download_and_decrypt_file(self, file_id: str, destination_path: str):
-        """
-        Download an encrypted file from GCS and decrypt it.
-        """
-        bucket = self._storage_client.bucket(self.configs.gcp_resource.bucket_name)
-        prefix = f"files-raw/{file_id}/"
-        blobs = list(bucket.list_blobs(prefix=prefix))
-
-        encrypted_blob = next(
-            (blob for blob in blobs if blob.name.endswith(".encrypted")), None
-        )
-
-        if not encrypted_blob:
-            raise FileNotFoundError(f"No encrypted file found for file_id: {file_id}")
-
-        encrypted_file_path = os.path.join(
-            destination_path, os.path.basename(encrypted_blob.name)
-        )
-        os.makedirs(os.path.dirname(encrypted_file_path), exist_ok=True)
-
-        encrypted_blob.download_to_filename(encrypted_file_path)
-
-        decrypted_file_path = decrypt_file(encrypted_file_path)
-
-        # Clean up the encrypted file
-        os.remove(encrypted_file_path)
-
-        return decrypted_file_path
-
     def upload_to_gcs(
         self,
         bucket_name: str,
@@ -262,3 +233,29 @@ class GCSHandler:
             elif isinstance(source, str):
                 blob.upload_from_filename(source)
             print(f"Uploaded to {destination_blob_name}")
+
+    def download_and_decrypt_file(self, file_id: str, destination_path: str):
+        bucket = self._storage_client.bucket(self.configs.gcp_resource.bucket_name)
+        prefix = f"files-raw/{file_id}/"
+        blobs = list(bucket.list_blobs(prefix=prefix))
+
+        encrypted_blob = next(
+            (blob for blob in blobs if blob.name.endswith(".encrypted")), None
+        )
+
+        if not encrypted_blob:
+            raise FileNotFoundError(f"No encrypted file found for file_id: {file_id}")
+
+        encrypted_file_path = os.path.join(
+            destination_path, os.path.basename(encrypted_blob.name)
+        )
+        os.makedirs(os.path.dirname(encrypted_file_path), exist_ok=True)
+
+        encrypted_blob.download_to_filename(encrypted_file_path)
+
+        decrypted_file_path = decrypt_file(encrypted_file_path)
+
+        # Clean up the encrypted file
+        os.remove(encrypted_file_path)
+
+        return decrypted_file_path
