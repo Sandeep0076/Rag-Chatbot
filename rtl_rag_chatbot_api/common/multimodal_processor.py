@@ -7,12 +7,12 @@ import numpy as np
 import torch
 from llama_index.core import (
     Document,
-    Node,
     ServiceContext,
     SimpleDirectoryReader,
     VectorStoreIndex,
 )
 from llama_index.core.node_parser import SimpleNodeParser
+from llama_index.core.schema import Node  # Import Node from schema
 from llama_index.core.storage.storage_context import StorageContext
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 from llama_index.llms.azure_openai import AzureOpenAI
