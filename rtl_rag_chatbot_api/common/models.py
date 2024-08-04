@@ -18,3 +18,9 @@ class FileUploadResponse(BaseModel):
     file_id: str
     original_filename: str
     contain_multimedia: bool
+
+
+class NeighborsQuery(BaseModel):
+    text: str
+    file_id: str
+    n_neighbors: int = 3

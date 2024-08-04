@@ -19,10 +19,10 @@ from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 from rtl_rag_chatbot_api.common.encryption_utils import encrypt_file
 from rtl_rag_chatbot_api.common.models import (
     FileUploadResponse,
+    NeighborsQuery,
     PreprocessRequest,
     Query,
 )
-from rtl_rag_chatbot_api.common.multimodal_processor import MultimodalProcessor
 
 """
 Main FastAPI application for the RAG PDF API.
@@ -154,10 +154,8 @@ async def preprocess(request: PreprocessRequest):
             metadata = json.load(f)
 
         if contain_multimedia:
-            multimodal_processor = MultimodalProcessor(configs)
-            multimodal_processor.process_and_embed(
-                file_id, destination_file_path, db, contain_multimedia
-            )
+            pass
+            # will implement this in seperate container and call api here
         else:
             run_preprocessor(
                 configs=configs,
@@ -293,11 +291,7 @@ async def upload_file(
 
             # Preprocess the file
             if contain_multimedia:
-                multimodal_processor = MultimodalProcessor(configs)
-                multimodal_processor.process_and_embed(
-                    file_id, destination_file_path, db, contain_multimedia
-                )
-                logging.info(f"Multimodal processing completed for file: {file_id}")
+                pass
             else:
                 # Use the old code for text-only processing
                 run_preprocessor(
@@ -361,6 +355,29 @@ async def initialize_chatbot(file_id: str, model_choice: str):
         raise HTTPException(
             status_code=500, detail=f"Error setting up chatbot: {str(e)}"
         )
+
+
+@app.post("/file/neighbors")
+async def get_neighbors(query: NeighborsQuery):
+    try:
+        file_id = query.file_id
+
+        if file_id not in initialized_chatbots:
+            await initialize_chatbot(file_id)
+
+        chatbot = initialized_chatbots[file_id]
+
+        neighbors = chatbot.get_n_nearest_neighbours(
+            query.text, n_neighbours=query.n_neighbors
+        )
+
+        # Extract the relevant information from the neighbors
+        neighbor_texts = [neighbor.node.text for neighbor in neighbors]
+
+        return {"neighbors": neighbor_texts}
+    except Exception as e:
+        print(f"Unexpected error in neighbors endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
 def start():
