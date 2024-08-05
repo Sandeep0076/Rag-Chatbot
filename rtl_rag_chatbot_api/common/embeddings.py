@@ -12,6 +12,8 @@ def run_preprocessor(
     file_id: str,
     chroma_db_path: str,
     chroma_db: chromadb.PersistentClient,
+    contain_multimedia: bool,
+    gcs_handler,
 ):
     """
     Runs the data preprocessor which reads PDF data, converts it into a vector database,
@@ -40,6 +42,8 @@ def run_preprocessor(
         gcs_subfolder="file-embeddings",
         file_id=file_id,
         chroma_db=chroma_db,  # Pass the initialized Chroma DB
+        contain_multimedia=contain_multimedia,
+        gcs_handler=gcs_handler,
     )
 
     logging.info("Now creating and storing index")

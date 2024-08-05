@@ -1,7 +1,11 @@
+import base64
+import io
 import os
 
 import chromadb
+import matplotlib.pyplot as plt
 import openai
+import seaborn as sns
 from chromadb.config import Settings
 from llama_index.core import ServiceContext, VectorStoreIndex
 from llama_index.core.storage.storage_context import StorageContext
@@ -261,3 +265,39 @@ class Chatbot:
             return completion.choices[0].message.content
         else:
             return "FALSE"
+
+    def generate_chart(self, query):
+        # Extract data from the query or retrieve from the index
+        data = self._extract_data_for_chart(query)
+
+        # Create a simple bar chart
+        plt.figure(figsize=(10, 6))
+        sns.barplot(x=data["x"], y=data["y"])
+        plt.title(data["title"])
+        plt.xlabel(data["x_label"])
+        plt.ylabel(data["y_label"])
+
+        # Save the chart to a bytes buffer
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format="png")
+        buffer.seek(0)
+
+        # Encode the image to base64
+        chart_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+        return {
+            "chart_type": "bar",
+            "chart_data": chart_base64,
+            "chart_title": data["title"],
+        }
+
+    def _extract_data_for_chart(self, query):
+        # This is a placeholder. In a real implementation, you would use
+        # the query to extract relevant data from your index or database.
+        return {
+            "x": ["A", "B", "C", "D"],
+            "y": [10, 20, 15, 25],
+            "title": "Sample Chart",
+            "x_label": "Categories",
+            "y_label": "Values",
+        }

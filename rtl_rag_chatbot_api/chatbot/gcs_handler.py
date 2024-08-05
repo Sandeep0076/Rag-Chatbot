@@ -1,7 +1,8 @@
+import json
 import logging
 import os
 import shutil
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import google.auth
 import google.oauth2.credentials
@@ -192,21 +193,65 @@ class GCSHandler:
 
         print(f"File {source_file_path} uploaded to {destination_blob_name}.")
 
-    def download_and_decrypt_file(self, file_id: str, destination_path: str):
+    def upload_to_gcs(
+        self,
+        bucket_name: str,
+        source: Union[str, dict, Dict[str, Tuple[Union[str, dict], str]]],
+        destination_blob_name: Optional[str] = None,
+    ):
         """
-        Download an encrypted file from GCS and decrypt it.
-        """
-        bucket = self._storage_client.bucket(self.configs.gcp_resource.bucket_name)
-        blob_name = f"files-raw/{file_id}/{file_id}.encrypted"
-        blob = bucket.blob(blob_name)
+        Upload a file, JSON data, or multiple items to the bucket.
 
-        if not blob.exists():
+        Args:
+            bucket_name (str): The name of the GCS bucket.
+            source (Union[str, dict, Dict[str, Tuple[Union[str, dict], str]]]):
+                - A file path (str)
+                - A dictionary to be uploaded as JSON
+                - A dictionary of items to upload, where each value is a tuple of (source, destination_blob_name)
+            destination_blob_name (Optional[str]): The destination blob name in GCS. Not used for multiple uploads.
+        """
+        bucket = self._storage_client.bucket(bucket_name)
+
+        if isinstance(source, dict) and destination_blob_name is None:
+            # Multiple upload case
+            for _, (item_source, item_destination) in source.items():
+                blob = bucket.blob(item_destination)
+                if isinstance(item_source, dict):
+                    blob.upload_from_string(
+                        data=json.dumps(item_source), content_type="application/json"
+                    )
+                elif isinstance(item_source, str):
+                    blob.upload_from_filename(item_source)
+                print(f"Uploaded to {item_destination}")
+        else:
+            # Single upload case
+            blob = bucket.blob(destination_blob_name)
+            if isinstance(source, dict):
+                blob.upload_from_string(
+                    data=json.dumps(source), content_type="application/json"
+                )
+            elif isinstance(source, str):
+                blob.upload_from_filename(source)
+            print(f"Uploaded to {destination_blob_name}")
+
+    def download_and_decrypt_file(self, file_id: str, destination_path: str):
+        bucket = self._storage_client.bucket(self.configs.gcp_resource.bucket_name)
+        prefix = f"files-raw/{file_id}/"
+        blobs = list(bucket.list_blobs(prefix=prefix))
+
+        encrypted_blob = next(
+            (blob for blob in blobs if blob.name.endswith(".encrypted")), None
+        )
+
+        if not encrypted_blob:
             raise FileNotFoundError(f"No encrypted file found for file_id: {file_id}")
 
-        encrypted_file_path = os.path.join(destination_path, f"{file_id}.encrypted")
+        encrypted_file_path = os.path.join(
+            destination_path, os.path.basename(encrypted_blob.name)
+        )
         os.makedirs(os.path.dirname(encrypted_file_path), exist_ok=True)
 
-        blob.download_to_filename(encrypted_file_path)
+        encrypted_blob.download_to_filename(encrypted_file_path)
 
         decrypted_file_path = decrypt_file(encrypted_file_path)
 
