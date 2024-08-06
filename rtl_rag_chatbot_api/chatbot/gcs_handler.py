@@ -49,6 +49,7 @@ class GCSHandler:
         self.bucket = self._storage_client.get_bucket(
             self.configs.gcp_resource.bucket_name
         )
+        self.bucket_name = self.configs.gcp_resource.bucket_name
 
     def download_files_from_gcs(
         self, bucket_name: str, source_blob_name: str, destination_file_path: str
@@ -259,3 +260,26 @@ class GCSHandler:
         os.remove(encrypted_file_path)
 
         return decrypted_file_path
+
+    def find_existing_file(self, filename):
+        try:
+            logging.info(f"Searching for existing file: {filename}")
+            # List all blobs in the 'files-raw' folder
+            blobs = self._storage_client.list_blobs(
+                self.bucket_name, prefix="files-raw/"
+            )
+
+            # Iterate through all blobs
+            for blob in blobs:
+                # Check if the blob name ends with the filename we're looking for
+                if blob.name.endswith(f"/{filename}.encrypted"):
+                    # Extract the file_id from the blob name
+                    file_id = blob.name.split("/")[-2]
+                    logging.info(f"Found existing file: {filename} with ID: {file_id}")
+                    return file_id
+
+            logging.info(f"File {filename} not found in existing folders")
+            return None
+        except Exception as e:
+            logging.error(f"Error in find_existing_file: {str(e)}")
+            return None
