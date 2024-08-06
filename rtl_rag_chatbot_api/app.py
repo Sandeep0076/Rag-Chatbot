@@ -27,6 +27,7 @@ from rtl_rag_chatbot_api.common.models import (
 """
 Main FastAPI application for the RAG PDF API.
 """
+logging.basicConfig(level=logging.INFO)
 
 configs = Config()
 gcs_handler = GCSHandler(configs)
@@ -237,8 +238,45 @@ async def upload_file(
     file: UploadFile = File(...), contain_multimedia: bool = Form(...)
 ):
     try:
-        file_id = str(uuid.uuid4())
         original_filename = file.filename
+        logging.info(f"Received file for upload: {original_filename}")
+
+        # Check if the file already exists in the "files-raw" bucket
+        logging.info(f"Checking if file {original_filename} already exists")
+        existing_file_id = gcs_handler.find_existing_file(original_filename)
+        logging.info(f"Result of find_existing_file: {existing_file_id}")
+
+        if existing_file_id:
+            logging.info(
+                f"File {original_filename} already exists with ID: {existing_file_id}"
+            )
+            # File already exists, download embeddings
+            chroma_db_path = f"./chroma_db/{existing_file_id}"
+            os.makedirs(chroma_db_path, exist_ok=True)
+
+            try:
+                gcs_handler.download_files_from_folder_by_id(existing_file_id)
+                logging.info(
+                    f"Embeddings downloaded for existing file: {existing_file_id}"
+                )
+
+                return FileUploadResponse(
+                    message="File already exists. Embeddings downloaded.",
+                    file_id=existing_file_id,
+                    original_filename=original_filename,
+                    contain_multimedia=contain_multimedia,
+                )
+            except Exception as e:
+                logging.error(f"Error downloading embeddings: {str(e)}")
+                raise HTTPException(
+                    status_code=500, detail="Error downloading embeddings"
+                )
+
+        logging.info(
+            f"File {original_filename} is new. Proceeding with upload and processing."
+        )
+        # If file doesn't exist, proceed with normal upload and processing
+        file_id = str(uuid.uuid4())
         encrypted_filename = f"{original_filename}.encrypted"
 
         # Create a temporary file to store the uploaded content

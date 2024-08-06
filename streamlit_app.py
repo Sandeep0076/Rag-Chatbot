@@ -39,12 +39,12 @@ def cleanup_files():
 
 def handle_file_upload():
     uploaded_file = st.file_uploader("Choose a file", type=["pdf", "txt", "jpg", "png"])
-    contain_multimedia = st.checkbox("Contains multimedia")
+    # contain_multimedia = st.checkbox("Contains multimedia")
 
     if uploaded_file is not None and not st.session_state.file_uploaded:
         if st.button("Upload and Process File"):
             files = {"file": uploaded_file}
-            data = {"contain_multimedia": str(contain_multimedia)}
+            data = {"contain_multimedia": str("false")}
 
             with st.spinner("Uploading and preprocessing file..."):
                 upload_response = requests.post(
@@ -53,23 +53,15 @@ def handle_file_upload():
                 if upload_response.status_code == 200:
                     upload_result = upload_response.json()
                     file_id = upload_result["file_id"]
-                    st.success(f"File uploaded successfully. File ID: {file_id}")
-
-                    preprocess_response = requests.post(
-                        f"{API_URL}/file/preprocess",
-                        json={
-                            "file_id": file_id,
-                            "contain_multimedia": contain_multimedia,
-                        },
+                    st.success(
+                        f"File uploaded and preprocessed successfully. File ID: {file_id}"
                     )
-                    if preprocess_response.status_code == 200:
-                        st.success("File preprocessed successfully")
-                        st.session_state.file_id = file_id
-                        st.session_state.file_uploaded = True
-                    else:
-                        st.error(f"Preprocessing failed: {preprocess_response.text}")
+                    st.session_state.file_id = file_id
+                    st.session_state.file_uploaded = True
                 else:
-                    st.error(f"File upload failed: {upload_response.text}")
+                    st.error(
+                        f"File upload and preprocessing failed: {upload_response.text}"
+                    )
 
 
 def display_chat_interface():
