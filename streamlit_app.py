@@ -82,28 +82,59 @@ def display_chat_interface():
                 st.write(user_input)
 
             with st.spinner("Processing your request..."):
-                payload = {
+                # Chat request
+                chat_payload = {
                     "text": user_input,
                     "file_id": st.session_state.file_id,
                     "model_choice": st.session_state.model_choice,
                 }
-                response = requests.post(f"{API_URL}/file/chat", json=payload)
-                if response.status_code == 200:
-                    result = response.json()
-                    ai_message = {"role": "assistant", "content": result["response"]}
-                    if "chart_data" in result:
-                        ai_message["chart_data"] = result["chart_data"]
+                chat_response = requests.post(f"{API_URL}/file/chat", json=chat_payload)
+
+                # Nearest neighbors request
+                neighbors_payload = {
+                    "text": user_input,
+                    "file_id": st.session_state.file_id,
+                    "n_neighbors": 3,  # Adjust this number as needed
+                }
+                neighbors_response = requests.post(
+                    f"{API_URL}/file/neighbors", json=neighbors_payload
+                )
+
+                if (
+                    chat_response.status_code == 200
+                    and neighbors_response.status_code == 200
+                ):
+                    chat_result = chat_response.json()
+                    neighbors_result = neighbors_response.json()
+
+                    # Display chat response
+                    ai_message = {
+                        "role": "assistant",
+                        "content": chat_result["response"],
+                    }
+                    if "chart_data" in chat_result:
+                        ai_message["chart_data"] = chat_result["chart_data"]
                     st.session_state.messages.append(ai_message)
 
                     with st.chat_message("assistant"):
-                        st.write(result["response"])
-                        if "chart_data" in result:
-                            chart_data = result["chart_data"]["chart_data"]
+                        st.write(chat_result["response"])
+                        if "chart_data" in chat_result:
+                            chart_data = chat_result["chart_data"]["chart_data"]
                             image_data = base64.b64decode(chart_data)
                             image = Image.open(BytesIO(image_data))
-                            st.image(image, caption=result["chart_data"]["chart_title"])
+                            st.image(
+                                image, caption=chat_result["chart_data"]["chart_title"]
+                            )
+
+                    # Display nearest neighbors in the sidebar
+                    with st.sidebar:
+                        st.subheader("Nearest Neighbors:")
+                        for i, neighbor in enumerate(neighbors_result["neighbors"], 1):
+                            st.write(f"{i}. {neighbor}")
                 else:
-                    st.error(f"Chat request failed: {response.text}")
+                    st.error(
+                        f"Request failed: {chat_response.text or neighbors_response.text}"
+                    )
     else:
         st.warning("Please upload and process a file first")
 
