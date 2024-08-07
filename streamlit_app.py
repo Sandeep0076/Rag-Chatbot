@@ -23,6 +23,8 @@ def initialize_session_state():
             st.session_state.available_models = ["gpt-3.5-turbo"]
     if "model_choice" not in st.session_state:
         st.session_state.model_choice = st.session_state.available_models[0]
+    if "file_type" not in st.session_state:
+        st.session_state.file_type = "pdf"
 
 
 def cleanup_files():
@@ -38,18 +40,27 @@ def cleanup_files():
 
 
 def handle_file_upload():
-    uploaded_file = st.file_uploader("Choose a file", type=["pdf", "txt", "jpg", "png"])
-    # contain_multimedia = st.checkbox("Contains multimedia")
+    st.session_state.file_type = st.radio(
+        "Select file type:", ["PDF", "Image"], horizontal=True
+    )
+
+    if st.session_state.file_type == "PDF":
+        uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
+        is_image = False
+    else:
+        uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "png"])
+        is_image = True
 
     if uploaded_file is not None and not st.session_state.file_uploaded:
         if st.button("Upload and Process File"):
             files = {"file": uploaded_file}
-            data = {"contain_multimedia": str("false")}
+            data = {"is_image": str(is_image)}
 
             with st.spinner("Uploading and preprocessing file..."):
                 upload_response = requests.post(
                     f"{API_URL}/file/upload", files=files, data=data
                 )
+
                 if upload_response.status_code == 200:
                     upload_result = upload_response.json()
                     file_id = upload_result["file_id"]

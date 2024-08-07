@@ -11,12 +11,13 @@ from chromadb.config import Settings
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
-from rtl_rag_chatbot_api.chatbot.image_reader import analyze_image
+from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 from rtl_rag_chatbot_api.common.encryption_utils import encrypt_file
 from rtl_rag_chatbot_api.common.models import (
@@ -25,6 +26,14 @@ from rtl_rag_chatbot_api.common.models import (
     PreprocessRequest,
     Query,
 )
+
+
+class ImageAnalysisUpload(BaseModel):
+    file_id: str
+    original_filename: str
+    is_image: bool
+    analysis: str
+
 
 """
 Main FastAPI application for the RAG PDF API.
@@ -91,21 +100,21 @@ async def preprocess(request: PreprocessRequest):
     destination_file_path = "local_data/"
 
     try:
-        contain_multimedia = False
+        is_image = False
         if os.path.exists(chroma_db_path):
             logging.info(f"Embeddings are ready {file_id}")
-            # Load the metadata to check if it includes contain_multimedia
+            # Load the metadata to check if it includes is_image
             metadata_path = os.path.join(chroma_db_path, "metadata.json")
             if os.path.exists(metadata_path):
                 with open(metadata_path, "r") as f:
                     metadata = json.load(f)
-                contain_multimedia = metadata.get("contain_multimedia", False)
+                is_image = metadata.get("is_image", False)
             else:
-                contain_multimedia = False
+                is_image = False
             return {
                 "status": "Embeddings are ready",
                 "folder": file_id,
-                "contain_multimedia": contain_multimedia,
+                "is_image": is_image,
             }
 
         embeddings_prefix = f"{embeddings_folder}/{file_id}/"
@@ -115,18 +124,18 @@ async def preprocess(request: PreprocessRequest):
             logging.info(f"Downloading embeddings for {file_id} from GCS")
             gcs_handler.download_files_from_folder_by_id(file_id)
             logging.info(f"Embeddings downloaded for {file_id}")
-            # Load the metadata to get contain_multimedia info
+            # Load the metadata to get is_image info
             metadata_path = os.path.join(chroma_db_path, "metadata.json")
             if os.path.exists(metadata_path):
                 with open(metadata_path, "r") as f:
                     metadata = json.load(f)
-                contain_multimedia = metadata.get("contain_multimedia", False)
+                is_image = metadata.get("is_image", False)
             else:
-                contain_multimedia = False
+                is_image = False
             return {
                 "status": "Embeddings downloaded from GCS",
                 "folder": file_id,
-                "contain_multimedia": contain_multimedia,
+                "is_image": is_image,
             }
 
         logging.info(f"No embeddings found for {file_id}. Processing raw files.")
@@ -156,7 +165,7 @@ async def preprocess(request: PreprocessRequest):
         with open(local_metadata_path, "r") as f:
             metadata = json.load(f)
 
-        if contain_multimedia:
+        if is_image:
             pass
             # will implement this in seperate container and call api here
         else:
@@ -166,7 +175,7 @@ async def preprocess(request: PreprocessRequest):
                 file_id=file_id,
                 chroma_db_path=chroma_db_path,
                 chroma_db=db,
-                contain_multimedia=contain_multimedia,
+                is_image=is_image,
                 gcs_handler=gcs_handler,
             )
 
@@ -177,7 +186,7 @@ async def preprocess(request: PreprocessRequest):
         return {
             "status": "Files processed and embeddings created successfully",
             "folder": file_id,
-            "contain_multimedia": contain_multimedia,
+            "is_image": is_image,
         }
 
     except Exception as e:
@@ -238,10 +247,10 @@ async def cleanup_files():
 
 
 @app.post("/file/upload", response_model=FileUploadResponse)
-async def upload_file(
-    file: UploadFile = File(...), contain_multimedia: bool = Form(...)
-):
+async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
     try:
+        # Following logic, check if the file is already uploaded.
+        # If finds the file, it download the embeddings.
         original_filename = file.filename
         logging.info(f"Received file for upload: {original_filename}")
 
@@ -272,7 +281,7 @@ async def upload_file(
                     message="File already exists. Embeddings downloaded and chatbot initialized.",
                     file_id=existing_file_id,
                     original_filename=original_filename,
-                    contain_multimedia=contain_multimedia,
+                    is_image=is_image,
                 )
             except Exception as e:
                 logging.error(
@@ -286,9 +295,10 @@ async def upload_file(
             f"File {original_filename} is new. Proceeding with upload and processing."
         )
         file_id = str(uuid.uuid4())
+        file_extension = os.path.splitext(original_filename)[1]
         encrypted_filename = f"{original_filename}.encrypted"
+        temp_file_path = f"temp_{file_id}_{file_extension}"
 
-        temp_file_path = f"temp_{file_id}_{original_filename}"
         with open(temp_file_path, "wb") as buffer:
             content = await file.read()
             buffer.write(content)
@@ -302,7 +312,7 @@ async def upload_file(
             {
                 "file": (encrypted_file_path, destination_blob_name),
                 "metadata": (
-                    {"contain_multimedia": contain_multimedia},
+                    {"is_image": is_image},
                     f"{raw_files_folder}/{file_id}/metadata.json",
                 ),
             },
@@ -324,42 +334,57 @@ async def upload_file(
         destination_file_path = f"local_data/{file_id}/"
         os.makedirs(destination_file_path, exist_ok=True)
 
+        analysis_json_path = None
+        decrypted_file_path = None
         try:
             decrypted_file_path = gcs_handler.download_and_decrypt_file(
                 file_id, destination_file_path
             )
             logging.info(f"File decrypted: {decrypted_file_path}")
 
-            if contain_multimedia:
-                pass  # Implement multimedia processing here
-            else:
-                run_preprocessor(
-                    configs=configs,
-                    text_data_folder_path=destination_file_path,
-                    file_id=file_id,
-                    chroma_db_path=chroma_db_path,
-                    chroma_db=db,
-                    contain_multimedia=contain_multimedia,
-                    gcs_handler=gcs_handler,
-                )
-                logging.info(f"Text processing completed for file: {file_id}")
+            # Check if the file is an image or PDF
+            if is_image:
+                logging.info("Processing image file: ..")
+                image_analysis_result = analyze_images(decrypted_file_path)
+                if os.path.exists(decrypted_file_path):
+                    os.remove(decrypted_file_path)
 
-            # Initialize the chatbot after processing
-            await initialize_chatbot(file_id, "gpt_3_5_turbo")  # Use a default model
+                # Save the analysis result to a JSON file
+                analysis_json_path = os.path.join(
+                    destination_file_path, f"{file_id}_analysis.json"
+                )
+                with open(analysis_json_path, "w") as f:
+                    json.dump(image_analysis_result, f)
+
+            # Run preprocessor with the analysis JSON file
+            run_preprocessor(
+                configs=configs,
+                text_data_folder_path=destination_file_path,
+                file_id=file_id,
+                chroma_db_path=chroma_db_path,
+                chroma_db=db,
+                is_image=is_image,
+                gcs_handler=gcs_handler,
+            )
+            logging.info(f"Processing completed for file: {file_id}")
+
+            await initialize_chatbot(file_id, "gpt_3_5_turbo")
             logging.info(f"Chatbot initialized for new file: {file_id}")
         except Exception as e:
             logging.error(f"Error during file processing: {str(e)}")
             raise
         finally:
-            if os.path.exists(decrypted_file_path):
+            if decrypted_file_path and os.path.exists(decrypted_file_path):
                 os.remove(decrypted_file_path)
+            if analysis_json_path and os.path.exists(analysis_json_path):
+                os.remove(analysis_json_path)
             shutil.rmtree(destination_file_path, ignore_errors=True)
 
         return FileUploadResponse(
             message="File uploaded, encrypted, preprocessed, and chatbot initialized successfully",
             file_id=file_id,
             original_filename=original_filename,
-            contain_multimedia=contain_multimedia,
+            is_image=is_image,
         )
 
     except Exception as e:
@@ -434,7 +459,7 @@ async def analyze_image_endpoint(file: UploadFile = File(...)):
             buffer.write(content)
 
         # Analyze the image
-        result = analyze_image(temp_file_path)
+        result = analyze_images(temp_file_path)
 
         # Generate a unique filename for the result
         result_filename = f"image_analysis_{uuid.uuid4()}.json"

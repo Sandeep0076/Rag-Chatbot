@@ -169,7 +169,7 @@ class GCSHandler:
         Clean up files inside chroma_db and local_data folders,
         as well as __pycache__ directories.
         """
-        folders_to_clean = ["chroma_db", "local_data"]
+        folders_to_clean = ["chroma_db", "local_data", "processed_data"]
         for folder in folders_to_clean:
             folder_path = os.path.join(os.getcwd(), folder)
             if os.path.exists(folder_path):

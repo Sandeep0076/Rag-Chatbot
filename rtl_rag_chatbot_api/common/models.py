@@ -10,14 +10,14 @@ class Query(BaseModel):
 
 class PreprocessRequest(BaseModel):
     file_id: str
-    contain_multimedia: bool
+    is_image: bool
 
 
 class FileUploadResponse(BaseModel):
     message: str
     file_id: str
     original_filename: str
-    contain_multimedia: bool
+    is_image: bool
 
 
 class NeighborsQuery(BaseModel):

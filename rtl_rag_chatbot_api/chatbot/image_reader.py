@@ -1,7 +1,7 @@
 import base64
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import requests
 
@@ -53,39 +53,44 @@ Use clear section titles and ensure all table data is in a valid JSON format.
     }
 
 
-def analyze_image(image_path: str) -> str:
-    API_KEY = os.environ.get("AZURE_LLM__MODELS__GPT_4_VISION__API_KEY")
-    ENDPOINT = os.environ.get("AZURE_LLM__MODELS__GPT_4_VISION__ENDPOINT")
-
-    if not API_KEY or not ENDPOINT:
-        raise ValueError("API_KEY or ENDPOINT environment variables are not set.")
-
+def analyze_single_image(image_path: str, api_key: str, endpoint: str) -> str:
     headers = {
         "Content-Type": "application/json",
-        "api-key": API_KEY,
+        "api-key": api_key,
     }
 
     encoded_image = encode_image(image_path)
     payload = create_payload(encoded_image)
 
     try:
-        response = requests.post(ENDPOINT, headers=headers, json=payload)
+        response = requests.post(endpoint, headers=headers, json=payload)
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
     except requests.RequestException as e:
-        return f"Failed to make the request. Error: {e}"
+        return f"Failed to make the request for {image_path}. Error: {e}"
     except KeyError:
-        return f"Unexpected response format. Full response: {response.json()}"
+        return f"Unexpected response format for {image_path}. Full response: {response.json()}"
+
+
+def analyze_images(image_path: str) -> List[Dict[str, Any]]:
+    API_KEY = os.environ.get("AZURE_LLM__MODELS__GPT_4_VISION__API_KEY")
+    ENDPOINT = os.environ.get("AZURE_LLM__MODELS__GPT_4_VISION__ENDPOINT")
+
+    if not API_KEY or not ENDPOINT:
+        raise ValueError("API_KEY or ENDPOINT environment variables are not set.")
+
+    result = analyze_single_image(image_path, API_KEY, ENDPOINT)
+    return [{"filename": os.path.basename(image_path), "analysis": result}]
 
 
 if __name__ == "__main__":
-    IMAGE_PATH = "processed_data/image_analysis.jpg"
-    RESULT_PATH = "processed_data/image_analysis_result.json"
+    IMAGE_FOLDER = "processed_data/images"
+    RESULT_PATH = "processed_data/image_analysis_results.json"
 
-    result = analyze_image(IMAGE_PATH)
+    results = analyze_images(IMAGE_FOLDER)
 
-    # Save the result to a JSON file
+    # Save the results to a JSON file
     with open(RESULT_PATH, "w", encoding="utf-8") as f:
-        json.dump({"analysis": result}, f, ensure_ascii=False, indent=4)
+        json.dump(results, f, ensure_ascii=False, indent=4)
 
-    print(f"Image analysis result saved to {RESULT_PATH}")
+    print(f"Image analysis results saved to {RESULT_PATH}")
