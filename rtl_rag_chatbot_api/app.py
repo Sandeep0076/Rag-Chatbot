@@ -189,12 +189,14 @@ async def chat(query: Query):
         file_id = query.file_id
 
         if file_id not in initialized_chatbots:
-            await initialize_chatbot(file_id, query.model_choice)
+            raise HTTPException(
+                status_code=404, detail="Chatbot not initialized for this file"
+            )
 
         chatbot = initialized_chatbots[file_id]
 
         response = chatbot.get_answer(query.text)
-
+        """
         # Check if the response includes a request to generate a chart or graph
         if (
             "generate chart" in query.text.lower()
@@ -202,7 +204,7 @@ async def chat(query: Query):
         ):
             chart_data = chatbot.generate_chart(query.text)
             return {"response": response, "chart_data": chart_data}
-
+        """
         return {"response": response}
     except Exception as e:
         print(f"Unexpected error in chat endpoint: {str(e)}")
@@ -241,16 +243,12 @@ async def upload_file(
         original_filename = file.filename
         logging.info(f"Received file for upload: {original_filename}")
 
-        # Check if the file already exists in the "files-raw" bucket
-        logging.info(f"Checking if file {original_filename} already exists")
         existing_file_id = gcs_handler.find_existing_file(original_filename)
-        logging.info(f"Result of find_existing_file: {existing_file_id}")
 
         if existing_file_id:
             logging.info(
                 f"File {original_filename} already exists with ID: {existing_file_id}"
             )
-            # File already exists, download embeddings
             chroma_db_path = f"./chroma_db/{existing_file_id}"
             os.makedirs(chroma_db_path, exist_ok=True)
 
@@ -260,35 +258,41 @@ async def upload_file(
                     f"Embeddings downloaded for existing file: {existing_file_id}"
                 )
 
+                # Initialize the chatbot for the existing file
+                await initialize_chatbot(
+                    existing_file_id, "gpt_3_5_turbo"
+                )  # Use a default model
+                logging.info(
+                    f"Chatbot initialized for existing file: {existing_file_id}"
+                )
+
                 return FileUploadResponse(
-                    message="File already exists. Embeddings downloaded.",
+                    message="File already exists. Embeddings downloaded and chatbot initialized.",
                     file_id=existing_file_id,
                     original_filename=original_filename,
                     contain_multimedia=contain_multimedia,
                 )
             except Exception as e:
-                logging.error(f"Error downloading embeddings: {str(e)}")
+                logging.error(
+                    f"Error downloading embeddings or initializing chatbot: {str(e)}"
+                )
                 raise HTTPException(
-                    status_code=500, detail="Error downloading embeddings"
+                    status_code=500, detail="Error processing existing file"
                 )
 
         logging.info(
             f"File {original_filename} is new. Proceeding with upload and processing."
         )
-        # If file doesn't exist, proceed with normal upload and processing
         file_id = str(uuid.uuid4())
         encrypted_filename = f"{original_filename}.encrypted"
 
-        # Create a temporary file to store the uploaded content
         temp_file_path = f"temp_{file_id}_{original_filename}"
         with open(temp_file_path, "wb") as buffer:
             content = await file.read()
             buffer.write(content)
 
-        # Encrypt the file
         encrypted_file_path = encrypt_file(temp_file_path)
 
-        # Upload the encrypted file to GCS
         raw_files_folder = "files-raw"
         destination_blob_name = f"{raw_files_folder}/{file_id}/{encrypted_filename}"
         gcs_handler.upload_to_gcs(
@@ -304,11 +308,9 @@ async def upload_file(
 
         logging.info(f"File uploaded to GCS: {destination_blob_name}")
 
-        # Clean up temporary files
         os.remove(temp_file_path)
         os.remove(encrypted_file_path)
 
-        # Prepare for preprocessing
         chroma_db_path = f"./chroma_db/{file_id}"
         os.makedirs(chroma_db_path, exist_ok=True)
         os.chmod(chroma_db_path, 0o755)
@@ -321,17 +323,14 @@ async def upload_file(
         os.makedirs(destination_file_path, exist_ok=True)
 
         try:
-            # Download and decrypt the file
             decrypted_file_path = gcs_handler.download_and_decrypt_file(
                 file_id, destination_file_path
             )
             logging.info(f"File decrypted: {decrypted_file_path}")
 
-            # Preprocess the file
             if contain_multimedia:
-                pass
+                pass  # Implement multimedia processing here
             else:
-                # Use the old code for text-only processing
                 run_preprocessor(
                     configs=configs,
                     text_data_folder_path=destination_file_path,
@@ -345,18 +344,17 @@ async def upload_file(
 
             # Initialize the chatbot after processing
             await initialize_chatbot(file_id, "gpt_3_5_turbo")  # Use a default model
+            logging.info(f"Chatbot initialized for new file: {file_id}")
         except Exception as e:
             logging.error(f"Error during file processing: {str(e)}")
             raise
-
         finally:
-            # Clean up local files
             if os.path.exists(decrypted_file_path):
                 os.remove(decrypted_file_path)
             shutil.rmtree(destination_file_path, ignore_errors=True)
 
         return FileUploadResponse(
-            message="File uploaded, encrypted, and preprocessed successfully",
+            message="File uploaded, encrypted, preprocessed, and chatbot initialized successfully",
             file_id=file_id,
             original_filename=original_filename,
             contain_multimedia=contain_multimedia,
@@ -401,7 +399,9 @@ async def get_neighbors(query: NeighborsQuery):
         file_id = query.file_id
 
         if file_id not in initialized_chatbots:
-            await initialize_chatbot(file_id)
+            raise HTTPException(
+                status_code=404, detail="Chatbot not initialized for this file"
+            )
 
         chatbot = initialized_chatbots[file_id]
 
@@ -422,5 +422,6 @@ def start():
     """
     Function to start the FastAPI application.
     Launched with `poetry run start` at root level
+    Streamlit : streamlit run streamlit_app.py
     """
     uvicorn.run("rtl_rag_chatbot_api.app:app", host="0.0.0.0", port=8080, reload=False)
