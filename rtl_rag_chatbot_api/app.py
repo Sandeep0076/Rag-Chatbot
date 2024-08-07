@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import uuid
+from pathlib import Path
 
 import chromadb
 import uvicorn
@@ -15,6 +16,7 @@ from starlette_exporter import PrometheusMiddleware, handle_metrics
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
+from rtl_rag_chatbot_api.chatbot.image_reader import analyze_image
 from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 from rtl_rag_chatbot_api.common.encryption_utils import encrypt_file
 from rtl_rag_chatbot_api.common.models import (
@@ -416,6 +418,53 @@ async def get_neighbors(query: NeighborsQuery):
     except Exception as e:
         print(f"Unexpected error in neighbors endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+@app.post("/image/analyze")
+async def analyze_image_endpoint(file: UploadFile = File(...)):
+    try:
+        # Get the file extension from the original filename
+        file_extension = Path(file.filename).suffix
+
+        # Create a temporary file with the original extension
+        temp_file_path = f"temp_{uuid.uuid4()}{file_extension}"
+
+        with open(temp_file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+
+        # Analyze the image
+        result = analyze_image(temp_file_path)
+
+        # Generate a unique filename for the result
+        result_filename = f"image_analysis_{uuid.uuid4()}.json"
+        result_file_path = os.path.join("processed_data", result_filename)
+
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(result_file_path), exist_ok=True)
+
+        # Save the result to a JSON file
+        with open(result_file_path, "w", encoding="utf-8") as f:
+            json.dump({"analysis": result}, f, ensure_ascii=False, indent=4)
+
+        # Clean up the temporary file
+        os.remove(temp_file_path)
+
+        return JSONResponse(
+            content={
+                "message": "Image analyzed successfully",
+                "result_file": result_filename,
+                "analysis": result,
+            }
+        )
+
+    except Exception as e:
+        logging.error(f"Error in image analysis: {str(e)}")
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        raise HTTPException(
+            status_code=500, detail=f"An error occurred during image analysis: {str(e)}"
+        )
 
 
 def start():
