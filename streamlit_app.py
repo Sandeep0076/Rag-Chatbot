@@ -126,10 +126,18 @@ def display_chat_interface():
                     with st.sidebar:
                         if st.session_state.file_type == "Image":
                             st.subheader("Uploaded Image:")
-                            st.image(
-                                st.session_state.uploaded_image,
-                                caption="Uploaded Image",
+
+                            # Create a clickable image
+                            img = Image.open(st.session_state.uploaded_image)
+                            img_bytes = BytesIO()
+                            img.save(img_bytes, format="PNG")
+                            img_str = base64.b64encode(img_bytes.getvalue()).decode()
+
+                            href = (
+                                f'<a href="data:image/png;base64,{img_str}" target="_blank">'
+                                f'<img src="data:image/png;base64,{img_str}" width="100%"></a>'
                             )
+                            st.markdown(href, unsafe_allow_html=True)
                         else:
                             neighbors_payload = {
                                 "text": user_input,
