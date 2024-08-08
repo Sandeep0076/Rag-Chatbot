@@ -51,7 +51,7 @@ def handle_file_upload():
         uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "png"])
         is_image = True
 
-    if uploaded_file is not None and not st.session_state.file_uploaded:
+    if uploaded_file is not None:
         if st.button("Upload and Process File"):
             files = {"file": uploaded_file}
             data = {"is_image": str(is_image)}
@@ -64,11 +64,13 @@ def handle_file_upload():
                 if upload_response.status_code == 200:
                     upload_result = upload_response.json()
                     file_id = upload_result["file_id"]
-                    st.success(
-                        f"File uploaded and preprocessed successfully. File ID: {file_id}"
-                    )
+                    st.success("File uploaded and preprocessed successfully.")
                     st.session_state.file_id = file_id
                     st.session_state.file_uploaded = True
+                    if is_image:
+                        st.session_state.uploaded_image = uploaded_file
+                    # Reset messages when a new file is uploaded
+                    st.session_state.messages = []
                 else:
                     st.error(
                         f"File upload and preprocessing failed: {upload_response.text}"
@@ -93,7 +95,6 @@ def display_chat_interface():
                 st.write(user_input)
 
             with st.spinner("Processing your request..."):
-                # Chat request
                 chat_payload = {
                     "text": user_input,
                     "file_id": st.session_state.file_id,
@@ -101,24 +102,9 @@ def display_chat_interface():
                 }
                 chat_response = requests.post(f"{API_URL}/file/chat", json=chat_payload)
 
-                # Nearest neighbors request
-                neighbors_payload = {
-                    "text": user_input,
-                    "file_id": st.session_state.file_id,
-                    "n_neighbors": 3,  # Adjust this number as needed
-                }
-                neighbors_response = requests.post(
-                    f"{API_URL}/file/neighbors", json=neighbors_payload
-                )
-
-                if (
-                    chat_response.status_code == 200
-                    and neighbors_response.status_code == 200
-                ):
+                if chat_response.status_code == 200:
                     chat_result = chat_response.json()
-                    neighbors_result = neighbors_response.json()
 
-                    # Display chat response
                     ai_message = {
                         "role": "assistant",
                         "content": chat_result["response"],
@@ -137,15 +123,31 @@ def display_chat_interface():
                                 image, caption=chat_result["chart_data"]["chart_title"]
                             )
 
-                    # Display nearest neighbors in the sidebar
                     with st.sidebar:
-                        st.subheader("Nearest Neighbors:")
-                        for i, neighbor in enumerate(neighbors_result["neighbors"], 1):
-                            st.write(f"{i}. {neighbor}")
+                        if st.session_state.file_type == "Image":
+                            st.subheader("Uploaded Image:")
+                            st.image(
+                                st.session_state.uploaded_image,
+                                caption="Uploaded Image",
+                            )
+                        else:
+                            neighbors_payload = {
+                                "text": user_input,
+                                "file_id": st.session_state.file_id,
+                                "n_neighbors": 3,
+                            }
+                            neighbors_response = requests.post(
+                                f"{API_URL}/file/neighbors", json=neighbors_payload
+                            )
+                            if neighbors_response.status_code == 200:
+                                neighbors_result = neighbors_response.json()
+                                st.subheader("Nearest Neighbors:")
+                                for i, neighbor in enumerate(
+                                    neighbors_result["neighbors"], 1
+                                ):
+                                    st.write(f"{i}. {neighbor}")
                 else:
-                    st.error(
-                        f"Request failed: {chat_response.text or neighbors_response.text}"
-                    )
+                    st.error(f"Request failed: {chat_response.text}")
     else:
         st.warning("Please upload and process a file first")
 
