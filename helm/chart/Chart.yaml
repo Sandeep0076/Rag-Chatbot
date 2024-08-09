@@ -1,7 +1,7 @@
 apiVersion: v2
 type: application
 name: rtl-rag-chatbot-api
-version: "2.0.0"
+version: "2.1.0"
 dependencies:
   - name: universal-helm-chart
     repository: oci://europe-west1-docker.pkg.dev/mgr-platform-prod-khsu/charts
