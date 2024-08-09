@@ -26,18 +26,53 @@ def create_payload(encoded_image: str) -> Dict[str, Any]:
                     {
                         "type": "text",
                         "text": """
-Analyze the image and provide a structured response with the following sections:
+Analyze the image and provide a comprehensive and structured response based on the content type
+(text, graph,charts,tables etc):
+General Overview:
 
-1. Overview: Briefly describe the main content of the image.
-2. Text Content: Accurately transcribe all visible text, maintaining its original format.
-3. Visual Elements:
-   - For graphs or charts: Describe the type, structure, key data points, trends, and relationships.
-   - For tables: Recreate the table structure, identify the main subject, and note any trends.
-   Include a complete JSON representation of the table.
-4. Data Insights: Highlight key findings, significant insights, correlations, and any anomalies.
-5. Context and Implications: Provide context for the data and discuss potential conclusions and limitations.
+Describe the main content: Briefly summarize what the image represents, whether it's primarily text, a
+graph,chart table etc
+and the key subject matter.
+Text Content:
 
-Use clear section titles and ensure all table data is in a valid JSON format.
+Transcription: Accurately transcribe all visible text while preserving  structure.
+Contextual Interpretation: Provide a brief interpretation or summary of the textual content.
+Highlight key points, themes, or arguments presented.
+Graph or Chart:
+extract complete information of table in JSON.
+If possible convert the graph, chart values to a table and write all information in json form.
+
+Structure Description:
+Identify the type of graph or chart.
+Describe the axes, including labels, units, and scale.
+Detail any legends, titles, and annotations.
+Data Extraction:
+Identify value of each entry on x-axis or value of each entry on y-axis.Write down all the numerical
+values or percentage for each entry.
+List all labeled data points, entities, or categories shown on the graph.
+For each labeled point or entity on x-axis provide its corresponding y-axis values as accurately as possible.
+Describe trends, patterns, or correlations present in the data.
+Extract and explain significant comparisons (e.g., differences between any two entity values).
+Quantify key data points, such as specific values or comparisons (e.g., "India's GDP is higher than Mexico's by X%").
+Analysis:
+Discuss the implications of the data, highlight key insights, and note any anomalies or outliers.
+Provide potential interpretations, discussing what the data suggests or indicates in a broader context.
+Table Content:
+
+Table Structure Recreation:
+Recreate the table structure, identifying rows, columns, headers, and any hierarchical data.
+Describe the main subject or purpose of the table.
+Data Representation:
+
+Identify and summarize key trends, patterns, or significant data points.
+Interpretation and Analysis:
+Provide a brief analysis of the table's content, noting significant findings, insights, or any anomalies.
+Discuss potential conclusions or implications drawn from the data, and any limitations observed.
+Key Insights and Summary:
+Highlight Findings: Summarize the most important findings, insights, and correlations identified across text, graph,
+ or table content.
+Contextual Discussion: Provide context for the data, discuss potential conclusions, and address any limitations
+or uncertainties in the interpretation.
                     """,
                     },
                     {

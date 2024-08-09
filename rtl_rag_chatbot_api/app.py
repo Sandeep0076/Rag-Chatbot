@@ -346,6 +346,7 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
             if is_image:
                 logging.info("Processing image file: ..")
                 image_analysis_result = analyze_images(decrypted_file_path)
+                print(image_analysis_result)
                 if os.path.exists(decrypted_file_path):
                     os.remove(decrypted_file_path)
 

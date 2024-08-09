@@ -18,7 +18,10 @@ def initialize_session_state():
     if "available_models" not in st.session_state:
         response = requests.get(f"{API_URL}/available-models")
         if response.status_code == 200:
-            st.session_state.available_models = response.json()["models"]
+            all_models = response.json()["models"]
+            st.session_state.available_models = [
+                model for model in all_models if model != "gpt_4_vision"
+            ]
         else:
             st.session_state.available_models = ["gpt-3.5-turbo"]
     if "model_choice" not in st.session_state:
@@ -55,6 +58,8 @@ def handle_file_upload():
         if st.button("Upload and Process File"):
             files = {"file": uploaded_file}
             data = {"is_image": str(is_image)}
+            if is_image:
+                st.warning("Processing images may take longer. Please be patient.")
 
             with st.spinner("Uploading and preprocessing file..."):
                 upload_response = requests.post(
@@ -95,6 +100,7 @@ def display_chat_interface():
                 st.write(user_input)
 
             with st.spinner("Processing your request..."):
+                # Chat request
                 chat_payload = {
                     "text": user_input,
                     "file_id": st.session_state.file_id,
@@ -105,6 +111,7 @@ def display_chat_interface():
                 if chat_response.status_code == 200:
                     chat_result = chat_response.json()
 
+                    # Display chat response
                     ai_message = {
                         "role": "assistant",
                         "content": chat_result["response"],
@@ -123,8 +130,12 @@ def display_chat_interface():
                                 image, caption=chat_result["chart_data"]["chart_title"]
                             )
 
-                    with st.sidebar:
-                        if st.session_state.file_type == "Image":
+                    # Display image in sidebar if it's an image file
+                    if (
+                        st.session_state.file_type == "Image"
+                        and st.session_state.uploaded_image is not None
+                    ):
+                        with st.sidebar:
                             st.subheader("Uploaded Image:")
 
                             # Create a clickable image
@@ -135,20 +146,24 @@ def display_chat_interface():
 
                             href = (
                                 f'<a href="data:image/png;base64,{img_str}" target="_blank">'
-                                f'<img src="data:image/png;base64,{img_str}" width="100%"></a>'
+                                f'<img src="data:image/png;base64,{img_str}" width="100%">'
+                                "</a>"
                             )
                             st.markdown(href, unsafe_allow_html=True)
-                        else:
-                            neighbors_payload = {
-                                "text": user_input,
-                                "file_id": st.session_state.file_id,
-                                "n_neighbors": 3,
-                            }
-                            neighbors_response = requests.post(
-                                f"{API_URL}/file/neighbors", json=neighbors_payload
-                            )
-                            if neighbors_response.status_code == 200:
-                                neighbors_result = neighbors_response.json()
+
+                    else:
+                        # Nearest neighbors request (only for non-image files)
+                        neighbors_payload = {
+                            "text": user_input,
+                            "file_id": st.session_state.file_id,
+                            "n_neighbors": 3,
+                        }
+                        neighbors_response = requests.post(
+                            f"{API_URL}/file/neighbors", json=neighbors_payload
+                        )
+                        if neighbors_response.status_code == 200:
+                            neighbors_result = neighbors_response.json()
+                            with st.sidebar:
                                 st.subheader("Nearest Neighbors:")
                                 for i, neighbor in enumerate(
                                     neighbors_result["neighbors"], 1
