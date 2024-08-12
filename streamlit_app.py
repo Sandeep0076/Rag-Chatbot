@@ -18,11 +18,16 @@ def initialize_session_state():
     if "available_models" not in st.session_state:
         response = requests.get(f"{API_URL}/available-models")
         if response.status_code == 200:
-            st.session_state.available_models = response.json()["models"]
+            all_models = response.json()["models"]
+            st.session_state.available_models = [
+                model for model in all_models if model != "gpt_4_vision"
+            ]
         else:
             st.session_state.available_models = ["gpt-3.5-turbo"]
     if "model_choice" not in st.session_state:
         st.session_state.model_choice = st.session_state.available_models[0]
+    if "file_type" not in st.session_state:
+        st.session_state.file_type = "pdf"
 
 
 def cleanup_files():
@@ -38,26 +43,39 @@ def cleanup_files():
 
 
 def handle_file_upload():
-    uploaded_file = st.file_uploader("Choose a file", type=["pdf", "txt", "jpg", "png"])
-    # contain_multimedia = st.checkbox("Contains multimedia")
+    st.session_state.file_type = st.radio(
+        "Select file type:", ["PDF", "Image"], horizontal=True
+    )
 
-    if uploaded_file is not None and not st.session_state.file_uploaded:
+    if st.session_state.file_type == "PDF":
+        uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
+        is_image = False
+    else:
+        uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "png"])
+        is_image = True
+
+    if uploaded_file is not None:
         if st.button("Upload and Process File"):
             files = {"file": uploaded_file}
-            data = {"contain_multimedia": str("false")}
+            data = {"is_image": str(is_image)}
+            if is_image:
+                st.warning("Processing images may take longer. Please be patient.")
 
             with st.spinner("Uploading and preprocessing file..."):
                 upload_response = requests.post(
                     f"{API_URL}/file/upload", files=files, data=data
                 )
+
                 if upload_response.status_code == 200:
                     upload_result = upload_response.json()
                     file_id = upload_result["file_id"]
-                    st.success(
-                        f"File uploaded and preprocessed successfully. File ID: {file_id}"
-                    )
+                    st.success("File uploaded and preprocessed successfully.")
                     st.session_state.file_id = file_id
                     st.session_state.file_uploaded = True
+                    if is_image:
+                        st.session_state.uploaded_image = uploaded_file
+                    # Reset messages when a new file is uploaded
+                    st.session_state.messages = []
                 else:
                     st.error(
                         f"File upload and preprocessing failed: {upload_response.text}"
@@ -82,28 +100,77 @@ def display_chat_interface():
                 st.write(user_input)
 
             with st.spinner("Processing your request..."):
-                payload = {
+                # Chat request
+                chat_payload = {
                     "text": user_input,
                     "file_id": st.session_state.file_id,
                     "model_choice": st.session_state.model_choice,
                 }
-                response = requests.post(f"{API_URL}/file/chat", json=payload)
-                if response.status_code == 200:
-                    result = response.json()
-                    ai_message = {"role": "assistant", "content": result["response"]}
-                    if "chart_data" in result:
-                        ai_message["chart_data"] = result["chart_data"]
+                chat_response = requests.post(f"{API_URL}/file/chat", json=chat_payload)
+
+                if chat_response.status_code == 200:
+                    chat_result = chat_response.json()
+
+                    # Display chat response
+                    ai_message = {
+                        "role": "assistant",
+                        "content": chat_result["response"],
+                    }
+                    if "chart_data" in chat_result:
+                        ai_message["chart_data"] = chat_result["chart_data"]
                     st.session_state.messages.append(ai_message)
 
                     with st.chat_message("assistant"):
-                        st.write(result["response"])
-                        if "chart_data" in result:
-                            chart_data = result["chart_data"]["chart_data"]
+                        st.write(chat_result["response"])
+                        if "chart_data" in chat_result:
+                            chart_data = chat_result["chart_data"]["chart_data"]
                             image_data = base64.b64decode(chart_data)
                             image = Image.open(BytesIO(image_data))
-                            st.image(image, caption=result["chart_data"]["chart_title"])
+                            st.image(
+                                image, caption=chat_result["chart_data"]["chart_title"]
+                            )
+
+                    # Display image in sidebar if it's an image file
+                    if (
+                        st.session_state.file_type == "Image"
+                        and st.session_state.uploaded_image is not None
+                    ):
+                        with st.sidebar:
+                            st.subheader("Uploaded Image:")
+
+                            # Create a clickable image
+                            img = Image.open(st.session_state.uploaded_image)
+                            img_bytes = BytesIO()
+                            img.save(img_bytes, format="PNG")
+                            img_str = base64.b64encode(img_bytes.getvalue()).decode()
+
+                            href = (
+                                f'<a href="data:image/png;base64,{img_str}" target="_blank">'
+                                f'<img src="data:image/png;base64,{img_str}" width="100%">'
+                                "</a>"
+                            )
+                            st.markdown(href, unsafe_allow_html=True)
+
+                    else:
+                        # Nearest neighbors request (only for non-image files)
+                        neighbors_payload = {
+                            "text": user_input,
+                            "file_id": st.session_state.file_id,
+                            "n_neighbors": 3,
+                        }
+                        neighbors_response = requests.post(
+                            f"{API_URL}/file/neighbors", json=neighbors_payload
+                        )
+                        if neighbors_response.status_code == 200:
+                            neighbors_result = neighbors_response.json()
+                            with st.sidebar:
+                                st.subheader("Nearest Neighbors:")
+                                for i, neighbor in enumerate(
+                                    neighbors_result["neighbors"], 1
+                                ):
+                                    st.write(f"{i}. {neighbor}")
                 else:
-                    st.error(f"Chat request failed: {response.text}")
+                    st.error(f"Request failed: {chat_response.text}")
     else:
         st.warning("Please upload and process a file first")
 

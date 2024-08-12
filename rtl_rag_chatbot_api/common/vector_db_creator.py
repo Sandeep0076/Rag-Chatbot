@@ -44,7 +44,7 @@ class VectorDbWrapper:
         gcs_subfolder="file-embeddings",
         file_id=None,
         chroma_db=None,
-        contain_multimedia=False,
+        is_image=False,
     ):
         self.azure_api_key = azure_api_key
         self.azure_endpoint = azure_endpoint
@@ -57,7 +57,7 @@ class VectorDbWrapper:
         self.file_id = file_id
         self.chroma_db = chroma_db
         self.documents = self._create_list_of_documents()
-        self.contain_multimedia = contain_multimedia
+        self.is_image = is_image
         self.gcs_handler = gcs_handler
 
     def _create_list_of_documents(self) -> List:
@@ -256,7 +256,7 @@ class VectorDbWrapper:
         chroma_folder = Path(f"./chroma_db/{self.file_id}")
 
         # Upload metadata
-        metadata = {"contain_multimedia": self.contain_multimedia}
+        metadata = {"is_image": self.is_image}
         self.gcs_handler.upload_to_gcs(
             self.bucket_name,
             {
