@@ -4,8 +4,10 @@ import subprocess
 from datetime import datetime
 
 import requests
-from prettytable import PrettyTable
 from requests.auth import HTTPBasicAuth
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LAST_COMMIT_FILE = os.path.join(SCRIPT_DIR, "last_updated_commit.txt")
 
 
 def get_tags():
@@ -25,79 +27,106 @@ def get_tags():
     return tag_dict
 
 
-def extract_git_commits():
-    # Get all tags
-    tags = get_tags()
+def get_latest_commit_hash():
+    return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
 
-    # Get all commits
+
+def get_new_commits(last_commit_hash):
     git_log = (
-        subprocess.check_output(["git", "log", "--all", "--format=%H|%an|%ae|%ct|%s"])
+        subprocess.check_output(
+            ["git", "log", f"{last_commit_hash}..HEAD", "--format=%H|%an|%ae|%ct|%s"]
+        )
         .decode()
         .strip()
         .split("\n")
     )
+    return [log for log in git_log if log]
 
-    table = PrettyTable()
-    table.field_names = ["Tag/Version", "Author", "Date", "Message"]
-    table.align = "l"
-    table.max_width = 50
 
-    for log_entry in git_log:
+def extract_git_commits(new_commits, tags):
+    table_rows = []
+    for log_entry in new_commits:
         commit_hash, author_name, author_email, commit_time, subject = log_entry.split(
             "|"
         )
-
-        # Get tag if exists
         tag = tags.get(commit_hash, "")
-
-        # Convert Unix timestamp to readable date
         commit_date = datetime.fromtimestamp(int(commit_time)).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
-
-        # Get full commit message
         full_message = (
             subprocess.check_output(["git", "log", "-1", "--format=%B", commit_hash])
             .decode()
             .strip()
         )
-
-        # Truncate message if it's too long
         if len(full_message) > 100:
             full_message = full_message[:97] + "..."
-
-        table.add_row(
-            [tag, f"{author_name} <{author_email}>", commit_date, full_message]
+        table_rows.append(
+            f"| {tag} | {author_name} <{author_email}> | {commit_date} | {full_message} |"
         )
+    return "\n".join(table_rows)
 
-    return table
+
+def get_last_updated_commit():
+    if not os.path.exists(LAST_COMMIT_FILE):
+        return ""
+    with open(LAST_COMMIT_FILE, "r") as f:
+        return f.read().strip()
+
+
+def save_last_updated_commit(commit_hash):
+    with open(LAST_COMMIT_FILE, "w") as f:
+        f.write(commit_hash)
 
 
 def update_confluence_page(page_id, auth_user, auth_pass, base_url):
-    # Extract git commits
-    table = extract_git_commits()
+    last_updated_commit = get_last_updated_commit()
+    latest_commit = get_latest_commit_hash()
 
-    # Prepare the content
-    content = f"h1. Git Commit History\n\n{table}"
+    print(f"Last updated commit: {last_updated_commit}")
+    print(f"Latest commit: {latest_commit}")
 
-    # Get the current page info
+    if last_updated_commit == latest_commit:
+        print("No new commits. Skipping update.")
+        return
+
+    new_commits = get_new_commits(last_updated_commit or "HEAD~1")
+    print(f"New commits found: {len(new_commits)}")
+    for commit in new_commits:
+        print(commit)
+
+    if not new_commits:
+        print("No new commits. Skipping update.")
+        return
+
+    tags = get_tags()
+    table_content = extract_git_commits(new_commits, tags)
+
+    new_content = f"""h2. New Commits
+
+||Tag/Version||Author||Date||Message||
+{table_content}
+
+----
+"""
+
     response = requests.get(
-        f"{base_url}/rest/api/content/{page_id}?expand=version",
+        f"{base_url}/rest/api/content/{page_id}?expand=version,body.storage",
         auth=HTTPBasicAuth(auth_user, auth_pass),
     )
     page_info = response.json()
     current_version = page_info["version"]["number"]
     page_title = page_info["title"]
+    existing_content = page_info["body"]["storage"]["value"]
 
-    # Prepare the update payload
+    updated_content = new_content + existing_content
+
     update_data = {
         "version": {"number": current_version + 1},
         "type": "page",
         "title": page_title,
-        "body": {"storage": {"value": content, "representation": "wiki"}},
+        "body": {"storage": {"value": updated_content, "representation": "wiki"}},
     }
 
-    # Send the update request
     response = requests.put(
         f"{base_url}/rest/api/content/{page_id}",
         auth=HTTPBasicAuth(auth_user, auth_pass),
@@ -107,6 +136,7 @@ def update_confluence_page(page_id, auth_user, auth_pass, base_url):
 
     if response.status_code == 200:
         print("Confluence page updated successfully")
+        save_last_updated_commit(latest_commit)
     else:
         print(f"Failed to update Confluence page: {response.text}")
 
