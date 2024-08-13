@@ -5,66 +5,60 @@ from datetime import datetime
 
 
 def extract_git_commits(output_dir):
-    # Get the current date
     current_date = datetime.now().strftime("%Y-%m-%d")
     output_file = os.path.join(output_dir, f"git_commits_{current_date}.csv")
-
-    # Get the latest commit hash from the previous run
     last_processed_commit = get_last_processed_commit(output_dir)
 
-    # Get all tags
-    tags = (
-        subprocess.check_output(["git", "tag", "-l", "--sort=-v:refname"])
-        .decode("utf-8")
-        .strip()
-        .split("\n")
-    )
-
-    # Get all branches
     branches = (
-        subprocess.check_output(["git", "branch", "-r", "--format=%(refname:short)"])
+        subprocess.check_output(["git", "branch", "--format=%(refname:short)"])
         .decode("utf-8")
         .strip()
         .split("\n")
     )
     branches = [branch.strip() for branch in branches if branch.strip()]
 
-    # Prepare the CSV file
+    all_commits = []
+
+    for branch in branches:
+        all_commits.extend(process_branch(branch, last_processed_commit))
+
+    # Sort commits based on date
+    all_commits.sort(
+        key=lambda x: datetime.strptime(x[3], "%a %b %d %H:%M:%S %Y %z"), reverse=True
+    )
+
     with open(output_file, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(["Tag/Branch", "Commit Hash", "Author", "Date", "Message"])
+        writer.writerow(["Branch", "Commit Hash", "Author", "Date", "Message"])
+        writer.writerows(all_commits)
 
-        # Process tags
-        for tag in tags:
-            process_ref(tag, writer, last_processed_commit)
-
-        # Process branches
-        for branch in branches:
-            process_ref(branch, writer, last_processed_commit)
-
-    print(f"Commit information has been saved to {output_file}")
-
-    # Update the last processed commit
+    print(f"Sorted commit information has been saved to {output_file}")
     update_last_processed_commit(output_dir)
 
 
-def process_ref(ref, writer, last_processed_commit):
-    # Get commit information for the ref
+def process_branch(branch, last_processed_commit):
     commit_log = (
-        subprocess.check_output(["git", "log", ref, "--format=%H|%an|%ad|%s"])
+        subprocess.check_output(["git", "log", branch, "--format=%H|%an|%ad|%s"])
         .decode("utf-8")
         .strip()
         .split("\n")
     )
+    branch_commits = []
 
     for commit in commit_log:
         commit_info = commit.split("|")
-
-        # Check if this commit has already been processed
         if commit_info[0] == last_processed_commit:
-            return
+            break
 
-        writer.writerow([ref] + commit_info)
+        tags = (
+            subprocess.check_output(["git", "tag", "--points-at", commit_info[0]])
+            .decode("utf-8")
+            .strip()
+        )
+        branch_or_tag = f"{branch} ({tags})" if tags else branch
+        branch_commits.append([branch_or_tag] + commit_info)
+
+    return branch_commits
 
 
 def get_last_processed_commit(output_dir):
