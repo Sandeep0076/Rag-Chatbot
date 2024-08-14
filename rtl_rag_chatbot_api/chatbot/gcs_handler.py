@@ -143,22 +143,18 @@ class GCSHandler:
         blobs = list(self.bucket.list_blobs(prefix=prefix))
 
         if not blobs:
-            error_message = f"No embeddings found for file ID: {file_id}"
-            logging.error(error_message)
-            raise FileNotFoundError(error_message)
+            logging.warning(f"No embeddings found for file ID: {file_id}")
+            return  # Return without raising an exception
 
         for blob in blobs:
             if blob.name.endswith("/"):  # Skip directory markers
                 continue
 
-            # Construct the local file path
             relative_path = blob.name[len(prefix) :]
             local_file_path = os.path.join("chroma_db", file_id, relative_path)
 
-            # Ensure the directory exists
             os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
 
-            # Download the file
             blob.download_to_filename(local_file_path)
             logging.info(f"Downloaded {blob.name} to {local_file_path}")
 
@@ -264,16 +260,12 @@ class GCSHandler:
     def find_existing_file(self, filename):
         try:
             logging.info(f"Searching for existing file: {filename}")
-            # List all blobs in the 'files-raw' folder
             blobs = self._storage_client.list_blobs(
                 self.bucket_name, prefix="files-raw/"
             )
 
-            # Iterate through all blobs
             for blob in blobs:
-                # Check if the blob name ends with the filename we're looking for
                 if blob.name.endswith(f"/{filename}.encrypted"):
-                    # Extract the file_id from the blob name
                     file_id = blob.name.split("/")[-2]
                     logging.info(f"Found existing file: {filename} with ID: {file_id}")
                     return file_id
