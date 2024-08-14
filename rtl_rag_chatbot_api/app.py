@@ -217,9 +217,14 @@ async def chat(query: Query):
             return {"response": response, "chart_data": chart_data}
         """
         return {"response": response}
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        print(f"Unexpected error in chat endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+        # Log the error and return a 500 status code for unexpected errors
+        logging.error(f"Unexpected error in chat endpoint: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"An unexpected error occurred: {str(e)}"
+        )
 
 
 @app.get("/available-models")
@@ -249,8 +254,6 @@ async def cleanup_files():
 @app.post("/file/upload", response_model=FileUploadResponse)
 async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
     try:
-        # Following logic, check if the file is already uploaded.
-        # If finds the file, it download the embeddings.
         original_filename = file.filename
         logging.info(f"Received file for upload: {original_filename}")
 
@@ -270,9 +273,7 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
                 )
 
                 # Initialize the chatbot for the existing file
-                await initialize_chatbot(
-                    existing_file_id, "gpt_3_5_turbo"
-                )  # Use a default model
+                await initialize_chatbot(existing_file_id, "gpt_3_5_turbo")
                 logging.info(
                     f"Chatbot initialized for existing file: {existing_file_id}"
                 )
@@ -288,13 +289,15 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
                     f"Error downloading embeddings or initializing chatbot: {str(e)}"
                 )
                 raise HTTPException(
-                    status_code=500, detail="Error processing existing file"
+                    status_code=500, detail=f"Error processing existing file: {str(e)}"
                 )
+
+        # If the file doesn't exist, proceed with the new file upload process
+        file_id = str(uuid.uuid4())
 
         logging.info(
             f"File {original_filename} is new. Proceeding with upload and processing."
         )
-        file_id = str(uuid.uuid4())
         file_extension = os.path.splitext(original_filename)[1]
         encrypted_filename = f"{original_filename}.encrypted"
         temp_file_path = f"temp_{file_id}_{file_extension}"
@@ -390,8 +393,8 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
 
     except Exception as e:
         logging.error(f"Error in file upload and preprocessing: {str(e)}")
-        return JSONResponse(
-            content={"message": f"An error occurred: {str(e)}"}, status_code=500
+        raise HTTPException(
+            status_code=500, detail=f"An error occurred during file upload: {str(e)}"
         )
 
 
@@ -441,9 +444,14 @@ async def get_neighbors(query: NeighborsQuery):
         neighbor_texts = [neighbor.node.text for neighbor in neighbors]
 
         return {"neighbors": neighbor_texts}
+    except HTTPException as he:
+        # Re-raise HTTP exceptions as they are
+        raise he
     except Exception as e:
-        print(f"Unexpected error in neighbors endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+        logging.error(f"Unexpected error in neighbors endpoint: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"An unexpected error occurred: {str(e)}"
+        )
 
 
 @app.post("/image/analyze")

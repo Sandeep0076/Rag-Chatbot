@@ -126,6 +126,11 @@ The server will start on `http://0.0.0.0:8080`.
    - GET `/metrics`
    - Exposes Prometheus metrics
 
+## Misc Programs
+
+- `streamlit run streamlit_app.py`: For running streamlit.
+- `python version_doc/version_logger.py`: For running Version logger.
+- `pytest tests/api_unit_tests.py`: For running unit tests.
 ## Architecture
 
 The application is structured as follows:
