@@ -201,6 +201,7 @@ class Chatbot:
         str: Query engine-generated response.
         """
         response = self.query_engine.query(query)
+        print(f"Getting answer using model: {self.model_choice}")
         return response.response
 
     def get_n_nearest_neighbours(
