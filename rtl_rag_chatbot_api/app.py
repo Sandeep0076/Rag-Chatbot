@@ -20,12 +20,7 @@ from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 from rtl_rag_chatbot_api.common.encryption_utils import encrypt_file
-from rtl_rag_chatbot_api.common.models import (
-    FileUploadResponse,
-    NeighborsQuery,
-    PreprocessRequest,
-    Query,
-)
+from rtl_rag_chatbot_api.common.models import FileUploadResponse, NeighborsQuery, Query
 
 
 class ImageAnalysisUpload(BaseModel):
@@ -33,6 +28,11 @@ class ImageAnalysisUpload(BaseModel):
     original_filename: str
     is_image: bool
     analysis: str
+
+
+class ModelInitRequest(BaseModel):
+    file_id: str
+    model_choice: str
 
 
 """
@@ -89,115 +89,14 @@ async def info():
     }
 
 
-# Deprecated
-@app.post("/file/preprocess")
-async def preprocess(request: PreprocessRequest):
-    file_id = request.file_id
-    chroma_db_path = f"./chroma_db/{file_id}"
-    bucket_name = configs.gcp_resource.bucket_name
-    embeddings_folder = "file-embeddings"
-    raw_files_folder = "files-raw"
-    destination_file_path = "local_data/"
-
-    try:
-        is_image = False
-        if os.path.exists(chroma_db_path):
-            logging.info(f"Embeddings are ready {file_id}")
-            # Load the metadata to check if it includes is_image
-            metadata_path = os.path.join(chroma_db_path, "metadata.json")
-            if os.path.exists(metadata_path):
-                with open(metadata_path, "r") as f:
-                    metadata = json.load(f)
-                is_image = metadata.get("is_image", False)
-            else:
-                is_image = False
-            return {
-                "status": "Embeddings are ready",
-                "folder": file_id,
-                "is_image": is_image,
-            }
-
-        embeddings_prefix = f"{embeddings_folder}/{file_id}/"
-        embeddings_blobs = list(gcs_handler.bucket.list_blobs(prefix=embeddings_prefix))
-
-        if embeddings_blobs:
-            logging.info(f"Downloading embeddings for {file_id} from GCS")
-            gcs_handler.download_files_from_folder_by_id(file_id)
-            logging.info(f"Embeddings downloaded for {file_id}")
-            # Load the metadata to get is_image info
-            metadata_path = os.path.join(chroma_db_path, "metadata.json")
-            if os.path.exists(metadata_path):
-                with open(metadata_path, "r") as f:
-                    metadata = json.load(f)
-                is_image = metadata.get("is_image", False)
-            else:
-                is_image = False
-            return {
-                "status": "Embeddings downloaded from GCS",
-                "folder": file_id,
-                "is_image": is_image,
-            }
-
-        logging.info(f"No embeddings found for {file_id}. Processing raw files.")
-
-        raw_files_found, raw_file_paths = gcs_handler.check_and_download_folder(
-            bucket_name, raw_files_folder, file_id, destination_file_path
-        )
-
-        if not raw_files_found:
-            raise HTTPException(
-                status_code=404, detail=f"No raw files found for {file_id}"
-            )
-
-        os.makedirs(chroma_db_path, exist_ok=True)
-        os.chmod(chroma_db_path, 0o755)
-
-        db = chromadb.PersistentClient(
-            path=chroma_db_path, settings=Settings(allow_reset=True, is_persistent=True)
-        )
-
-        metadata_path = f"{raw_files_folder}/{file_id}/metadata.json"
-        local_metadata_path = os.path.join(destination_file_path, "metadata.json")
-        gcs_handler.download_files_from_gcs(
-            bucket_name, metadata_path, local_metadata_path
-        )
-
-        with open(local_metadata_path, "r") as f:
-            metadata = json.load(f)
-
-        if is_image:
-            pass
-            # will implement this in seperate container and call api here
-        else:
-            run_preprocessor(
-                configs=configs,
-                text_data_folder_path=destination_file_path,
-                file_id=file_id,
-                chroma_db_path=chroma_db_path,
-                chroma_db=db,
-                is_image=is_image,
-                gcs_handler=gcs_handler,
-            )
-
-        for file_path in raw_file_paths:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-
-        return {
-            "status": "Files processed and embeddings created successfully",
-            "folder": file_id,
-            "is_image": is_image,
-        }
-
-    except Exception as e:
-        logging.error(f"Error during preprocessing: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
-
-
 @app.post("/file/chat")
 async def chat(query: Query):
     try:
         file_id = query.file_id
+        model_choice = query.model_choice
+        print(
+            f"Using model: {model_choice} for chat with file_id: {file_id}"
+        )  # Add this line
 
         if file_id not in initialized_chatbots:
             raise HTTPException(
@@ -205,6 +104,7 @@ async def chat(query: Query):
             )
 
         chatbot = initialized_chatbots[file_id]
+        print(f"Actual model being used: {chatbot.model_choice}")
 
         response = chatbot.get_answer(query.text)
         """
@@ -272,22 +172,14 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
                     f"Embeddings downloaded for existing file: {existing_file_id}"
                 )
 
-                # Initialize the chatbot for the existing file
-                await initialize_chatbot(existing_file_id, "gpt_3_5_turbo")
-                logging.info(
-                    f"Chatbot initialized for existing file: {existing_file_id}"
-                )
-
                 return FileUploadResponse(
-                    message="File already exists. Embeddings downloaded and chatbot initialized.",
+                    message="File already exists. Embeddings downloaded.",
                     file_id=existing_file_id,
                     original_filename=original_filename,
                     is_image=is_image,
                 )
             except Exception as e:
-                logging.error(
-                    f"Error downloading embeddings or initializing chatbot: {str(e)}"
-                )
+                logging.error(f"Error downloading embeddings: {str(e)}")
                 raise HTTPException(
                     status_code=500, detail=f"Error processing existing file: {str(e)}"
                 )
@@ -345,22 +237,19 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
             )
             logging.info(f"File decrypted: {decrypted_file_path}")
 
-            # Check if the file is an image or PDF
             if is_image:
-                logging.info("Processing image file: ..")
+                logging.info("Processing image file...")
                 image_analysis_result = analyze_images(decrypted_file_path)
                 print(image_analysis_result)
                 if os.path.exists(decrypted_file_path):
                     os.remove(decrypted_file_path)
 
-                # Save the analysis result to a JSON file
                 analysis_json_path = os.path.join(
                     destination_file_path, f"{file_id}_analysis.json"
                 )
                 with open(analysis_json_path, "w") as f:
                     json.dump(image_analysis_result, f)
 
-            # Run preprocessor with the analysis JSON file
             run_preprocessor(
                 configs=configs,
                 text_data_folder_path=destination_file_path,
@@ -372,8 +261,6 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
             )
             logging.info(f"Processing completed for file: {file_id}")
 
-            await initialize_chatbot(file_id, "gpt_3_5_turbo")
-            logging.info(f"Chatbot initialized for new file: {file_id}")
         except Exception as e:
             logging.error(f"Error during file processing: {str(e)}")
             raise
@@ -385,7 +272,7 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
             shutil.rmtree(destination_file_path, ignore_errors=True)
 
         return FileUploadResponse(
-            message="File uploaded, encrypted, preprocessed, and chatbot initialized successfully",
+            message="File uploaded, encrypted, and preprocessed successfully",
             file_id=file_id,
             original_filename=original_filename,
             is_image=is_image,
@@ -402,10 +289,37 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
 initialized_chatbots = {}
 
 
+@app.post("/model/initialize")
+async def initialize_model(request: ModelInitRequest):
+    try:
+        file_id = request.file_id
+        model_choice = request.model_choice
+
+        # Check if the necessary data exists
+        chroma_db_path = f"./chroma_db/{file_id}"
+        if not os.path.exists(chroma_db_path):
+            logging.error(f"Chroma DB path not found: {chroma_db_path}")
+            raise HTTPException(
+                status_code=404, detail=f"Chroma DB not found for file_id: {file_id}"
+            )
+
+        # Initialize the chatbot
+        chatbot = Chatbot(configs, file_id, model_choice=model_choice)
+        initialized_chatbots[file_id] = chatbot
+
+        logging.info(f"Model {model_choice} initialized for file {file_id}")
+        return {"message": f"Model {model_choice} initialized for file {file_id}"}
+    except Exception as e:
+        logging.error(f"Error initializing model: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error initializing model: {str(e)}"
+        )
+
+
 async def initialize_chatbot(file_id: str, model_choice: str):
     chroma_db_path = f"./chroma_db/{file_id}"
     if not os.path.exists(chroma_db_path):
-        print(f"Chroma DB path not found: {chroma_db_path}")
+        logging.error(f"Chroma DB path not found: {chroma_db_path}")
         try:
             gcs_handler.download_files_from_folder_by_id(file_id)
         except FileNotFoundError as e:
@@ -413,12 +327,12 @@ async def initialize_chatbot(file_id: str, model_choice: str):
 
     try:
         chatbot = Chatbot(configs, file_id, model_choice=model_choice)
-        print("Chatbot setup successful")
+        logging.info(f"Chatbot setup successful for file_id: {file_id}")
         initialized_chatbots[file_id] = chatbot
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        print(f"Error setting up chatbot: {str(e)}")
+        logging.error(f"Error setting up chatbot: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"Error setting up chatbot: {str(e)}"
         )
