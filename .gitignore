@@ -9,3 +9,4 @@ local_data/
 rag-pdf-api.code-workspace
 processed_data/
 git_commits.txt
+.aider*
