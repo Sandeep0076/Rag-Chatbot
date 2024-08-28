@@ -5,8 +5,10 @@ from pathlib import Path
 from typing import List
 
 import chromadb
+import pytesseract
 import vertexai
 from chromadb.config import Settings
+from pdf2image import convert_from_path
 
 # import PyPDF2
 from pdfminer.high_level import extract_text
@@ -80,6 +82,36 @@ class GeminiHandler:
                     return file.read().decode("utf-8", errors="ignore")
 
     def extract_text_from_pdf(self, file_path: str) -> str:
+        try:
+            logging.info(f"Attempting to extract text from PDF: {file_path}")
+
+            # Try pdfminer first
+            text = extract_text(file_path)
+            word_count = len(text.split())
+
+            # If pdfminer fails to extract text, use OCR
+            if word_count == 0:
+                logging.info("pdfminer failed to extract text. Attempting OCR...")
+
+                # Convert PDF to images
+                images = convert_from_path(file_path)
+
+                # Perform OCR on each image
+                text = ""
+                for i, image in enumerate(images):
+                    logging.info(f"Processing page {i+1}")
+                    text += pytesseract.image_to_string(image)
+
+                word_count = len(text.split())
+
+            logging.info("Text extraction completed successfully")
+            logging.info(f"Total words in the pdf are : {word_count}")
+            return text
+        except Exception as e:
+            logging.error(f"Error in extract_text_from_pdf: {str(e)}")
+            raise
+
+    def extract_text_from_pdf2(self, file_path: str) -> str:
         try:
             logging.info(f"Attempting to extract text from PDF: {file_path}")
             text = extract_text(file_path)
