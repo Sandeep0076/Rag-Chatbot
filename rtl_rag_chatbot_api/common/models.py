@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -30,3 +32,5 @@ class ModelInitRequest(BaseModel):
     model_choice: str = Field(
         ..., description="The chosen language model (including Gemini)"
     )
+    file_id: Optional[str] = None
+    # model_config = {"protected_namespaces": ()}

@@ -65,6 +65,7 @@ class GeminiConfig(BaseModel):
     model_pro: str
     project: str
     location: str
+    model_config = {"protected_namespaces": ()}
 
 
 class Config(BaseSettings):

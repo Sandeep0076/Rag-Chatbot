@@ -41,10 +41,6 @@ class ImageAnalysisUpload(BaseModel):
     analysis: str
 
 
-# class ModelInitRequest(BaseModel):
-#     model_choice: str
-
-
 """
 Main FastAPI application for the RAG PDF API.
 """
@@ -114,7 +110,7 @@ async def info():
 async def chat(query: Query):
     try:
         file_id = query.file_id
-        # model_choice = query.model_choice.lower()
+        model_choice = query.model_choice.lower()
 
         if file_id not in initialized_models:
             raise HTTPException(
@@ -129,13 +125,10 @@ async def chat(query: Query):
                     status_code=404, detail="Gemini handler not initialized"
                 )
             response = model_info["model"].get_answer(query.text, file_id)
-            # if gemini_handler is None:
-            #     raise HTTPException(status_code=404, detail="Gemini handler not initialized")
-            # response = gemini_handler.get_answer(query.text, file_id)
+            logging.info(f"{model_choice} is being used")
+
         else:
             response = model_info["model"].get_answer(query.text)
-            # chatbot = model_info["model"]
-            # response = chatbot.get_answer(query.text)
 
         return {"response": response}
     except HTTPException as he:
@@ -296,7 +289,9 @@ async def upload_file(
                 }
             else:
                 # Initialize Azure OpenAI model
-                azure_model = Chatbot(configs, model_choice=model_choice)
+                azure_model = Chatbot(
+                    configs, file_id=file_id, model_choice=model_choice
+                )
                 initialized_models[file_id] = {"type": "azure", "model": azure_model}
 
             # Use the initialized model based on the choice
@@ -361,7 +356,9 @@ async def initialize_model(request: ModelInitRequest):
             gemini_handler.initialize(model=gemini_model)
         else:
             # Initialize Azure OpenAI model
-            initialized_azure_model = Chatbot(configs, model_choice=model_choice)
+            initialized_azure_model = Chatbot(
+                configs, file_id=request.file_id, model_choice=model_choice
+            )
 
         return {"message": f"Model {model_choice} initialized successfully"}
     except Exception as e:
