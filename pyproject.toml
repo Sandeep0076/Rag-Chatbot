@@ -41,6 +41,7 @@ cryptography = "^43.0.0"
 python-multipart = "^0.0.9"
 google-cloud-aiplatform = "^1.63.0"
 pypdf2 = "^3.0.1"
+pdfminer-six = "^20240706"
 [tool.poetry.dev-dependencies]
 pytest = "^7.1.0"
 pytest-cov = "^3.0.0"
@@ -56,6 +57,14 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::DeprecationWarning:google._upb._message",
+    "ignore::UserWarning:pydantic._internal._fields",
+    "ignore::pydantic.PydanticDeprecatedSince20",
+    "ignore:Type google._upb._message.MessageMapContainer uses PyType_Spec:DeprecationWarning",
+    "ignore:Type google._upb._message.ScalarMapContainer uses PyType_Spec:DeprecationWarning",
+
+]
 
 [tool.poetry.scripts]
 start = "rtl_rag_chatbot_api.app:start"

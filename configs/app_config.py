@@ -60,12 +60,20 @@ class GCPResourceConfig(BaseModel):
     embeddings_folder: str
 
 
+class GeminiConfig(BaseModel):
+    model_flash: str
+    model_pro: str
+    project: str
+    location: str
+
+
 class Config(BaseSettings):
     azure_embedding: AzureEmbeddingConfig
     azure_llm: AzureLLMConfig
     chatbot: ChatbotConfig
     llm_hyperparams: LLMHyperParams
     gcp_resource: GCPResourceConfig
+    gemini: GeminiConfig
 
     class Config:
         env_nested_delimiter = "__"

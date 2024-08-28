@@ -20,11 +20,11 @@ def initialize_session_state():
         if response.status_code == 200:
             st.session_state.available_models = response.json()["models"]
         else:
-            st.session_state.available_models = ["gpt-3.5-turbo"]
+            st.session_state.available_models = ["gpt-3.5-turbo", "gemini-pro"]
     if "model_choice" not in st.session_state:
         st.session_state.model_choice = st.session_state.available_models[0]
-    if "model_initialized" not in st.session_state:
-        st.session_state.model_initialized = False
+    if "file_type" not in st.session_state:
+        st.session_state.file_type = "pdf"
 
 
 def cleanup_files():
@@ -55,7 +55,10 @@ def handle_file_upload():
     if uploaded_file is not None:
         if st.button("Upload and Process File"):
             files = {"file": uploaded_file}
-            data = {"is_image": str(is_image)}
+            data = {
+                "is_image": str(is_image),
+                "model_choice": st.session_state.model_choice,
+            }
             if is_image:
                 st.warning("Processing images may take longer. Please be patient.")
 
@@ -72,41 +75,28 @@ def handle_file_upload():
                     st.session_state.file_uploaded = True
                     if is_image:
                         st.session_state.uploaded_image = uploaded_file
+
                     # Reset messages when a new file is uploaded
                     st.session_state.messages = []
-                    st.session_state.model_initialized = False
-
-                    # Initialize the model after successful upload
-                    try:
-                        initialize_model()
-                    except Exception as e:
-                        st.error(f"Failed to initialize model: {str(e)}")
-                        st.session_state.model_initialized = False
                 else:
                     st.error(
                         f"File upload and preprocessing failed: {upload_response.text}"
                     )
 
 
-def initialize_model():
-    if st.session_state.file_uploaded and st.session_state.file_id:
-        with st.spinner("Initializing model..."):
-            response = requests.post(
-                f"{API_URL}/model/initialize",
-                json={
-                    "file_id": st.session_state.file_id,
-                    "model_choice": st.session_state.model_choice,
-                },
-            )
-            if response.status_code == 200:
-                st.success("Model initialized successfully")
-                st.session_state.model_initialized = True
-            else:
-                raise Exception(f"Model initialization failed: {response.text}")
+def initialize_model(model_choice):
+    response = requests.post(
+        f"{API_URL}/model/initialize", json={"model_choice": model_choice}
+    )
+    if response.status_code == 200:
+        st.session_state.model_choice = model_choice
+        st.success(f"Model {model_choice} initialized successfully")
+    else:
+        st.error(f"Model initialization failed: {response.text}")
 
 
 def display_chat_interface():
-    if st.session_state.file_uploaded and st.session_state.model_initialized:
+    if st.session_state.file_uploaded:
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.write(message["content"])
@@ -123,6 +113,7 @@ def display_chat_interface():
                 st.write(user_input)
 
             with st.spinner("Processing your request..."):
+                # Chat request
                 chat_payload = {
                     "text": user_input,
                     "file_id": st.session_state.file_id,
@@ -132,6 +123,8 @@ def display_chat_interface():
 
                 if chat_response.status_code == 200:
                     chat_result = chat_response.json()
+
+                    # Display chat response
                     ai_message = {
                         "role": "assistant",
                         "content": chat_result["response"],
@@ -150,6 +143,7 @@ def display_chat_interface():
                                 image, caption=chat_result["chart_data"]["chart_title"]
                             )
 
+                    # Display image in sidebar if it's an image file
                     if (
                         st.session_state.file_type == "Image"
                         and st.session_state.uploaded_image is not None
@@ -157,38 +151,51 @@ def display_chat_interface():
                         with st.sidebar:
                             st.subheader("Uploaded Image:")
                             img = Image.open(st.session_state.uploaded_image)
-                            img_bytes = BytesIO()
-                            img.save(img_bytes, format="PNG")
-                            img_str = base64.b64encode(img_bytes.getvalue()).decode()
-                            href = (
-                                f'<a href="data:image/png;base64,{img_str}" target="_blank">'
-                                f'<img src="data:image/png;base64,{img_str}" width="100%">'
-                                "</a>"
-                            )
-                            st.markdown(href, unsafe_allow_html=True)
+                            st.image(img, use_column_width=True)
+
+                    # Nearest neighbors request
+                    neighbors_payload = {
+                        "text": user_input,
+                        "file_id": st.session_state.file_id,
+                        "n_neighbors": 3,
+                    }
+                    neighbors_response = requests.post(
+                        f"{API_URL}/file/neighbors", json=neighbors_payload
+                    )
+                    if neighbors_response.status_code == 200:
+                        neighbors_result = neighbors_response.json()
+                        with st.sidebar:
+                            st.subheader("Nearest Neighbors:")
+                            for i, neighbor in enumerate(
+                                neighbors_result["neighbors"], 1
+                            ):
+                                st.write(f"{i}. {neighbor}")
                 else:
                     st.error(f"Request failed: {chat_response.text}")
-    elif not st.session_state.file_uploaded:
+    else:
         st.warning("Please upload and process a file first")
-    elif not st.session_state.model_initialized:
-        st.warning("Model is not initialized. Please wait or try reinitializing.")
 
 
 def main():
     st.title("RAG Chatbot")
     initialize_session_state()
 
-    # Model selection dropdown at the top
-    selected_model = st.selectbox(
-        "Select Model", options=st.session_state.available_models, key="model_select"
+    # Initialize default model
+    if "model_initialized" not in st.session_state:
+        initialize_model(st.session_state.model_choice)
+        st.session_state.model_initialized = True
+
+    # Model selection dropdown
+    new_model_choice = st.selectbox(
+        "Select Model",
+        options=st.session_state.available_models,
+        index=st.session_state.available_models.index(st.session_state.model_choice),
+        key="model_select",
     )
 
-    # Check if model selection has changed
-    if selected_model != st.session_state.model_choice:
-        st.session_state.model_choice = selected_model
-        st.session_state.model_initialized = False  # Reset initialization flag
-        initialize_model()  # Reinitialize with new model
-
+    # Check if a new model is selected
+    if new_model_choice != st.session_state.model_choice:
+        initialize_model(new_model_choice)
     cleanup_files()
     handle_file_upload()
     display_chat_interface()

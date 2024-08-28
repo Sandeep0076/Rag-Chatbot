@@ -17,10 +17,21 @@ from starlette_exporter import PrometheusMiddleware, handle_metrics
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
+from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 from rtl_rag_chatbot_api.common.encryption_utils import encrypt_file
-from rtl_rag_chatbot_api.common.models import FileUploadResponse, NeighborsQuery, Query
+from rtl_rag_chatbot_api.common.models import (
+    FileUploadResponse,
+    ModelInitRequest,
+    NeighborsQuery,
+    Query,
+)
+
+# Suppress logging warnings
+os.environ["GRPC_VERBOSITY"] = "ERROR"
+os.environ["GLOG_minloglevel"] = "2"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 class ImageAnalysisUpload(BaseModel):
@@ -30,9 +41,8 @@ class ImageAnalysisUpload(BaseModel):
     analysis: str
 
 
-class ModelInitRequest(BaseModel):
-    file_id: str
-    model_choice: str
+# class ModelInitRequest(BaseModel):
+#     model_choice: str
 
 
 """
@@ -43,6 +53,17 @@ logging.basicConfig(level=logging.INFO)
 configs = Config()
 gcs_handler = GCSHandler(configs)
 app = FastAPI()
+global gemini_handler
+gemini_handler = None
+# Global dictionary to store initialized chatbots
+# depreacted
+initialized_chatbots = {}
+
+initialized_models = {}
+
+# Global variables to store initialized models
+initialized_azure_model = None
+initialized_gemini_model = None
 
 # expose prometheus metrics at /metrics rest endpoint
 app.add_middleware(
@@ -93,34 +114,33 @@ async def info():
 async def chat(query: Query):
     try:
         file_id = query.file_id
-        model_choice = query.model_choice
-        print(
-            f"Using model: {model_choice} for chat with file_id: {file_id}"
-        )  # Add this line
+        # model_choice = query.model_choice.lower()
 
-        if file_id not in initialized_chatbots:
+        if file_id not in initialized_models:
             raise HTTPException(
-                status_code=404, detail="Chatbot not initialized for this file"
+                status_code=404, detail="Model not initialized for this file"
             )
 
-        chatbot = initialized_chatbots[file_id]
-        print(f"Actual model being used: {chatbot.model_choice}")
+        model_info = initialized_models[file_id]
 
-        response = chatbot.get_answer(query.text)
-        """
-        # Check if the response includes a request to generate a chart or graph
-        if (
-            "generate chart" in query.text.lower()
-            or "generate graph" in query.text.lower()
-        ):
-            chart_data = chatbot.generate_chart(query.text)
-            return {"response": response, "chart_data": chart_data}
-        """
+        if model_info["type"] == "gemini":
+            if gemini_handler is None:
+                raise HTTPException(
+                    status_code=404, detail="Gemini handler not initialized"
+                )
+            response = model_info["model"].get_answer(query.text, file_id)
+            # if gemini_handler is None:
+            #     raise HTTPException(status_code=404, detail="Gemini handler not initialized")
+            # response = gemini_handler.get_answer(query.text, file_id)
+        else:
+            response = model_info["model"].get_answer(query.text)
+            # chatbot = model_info["model"]
+            # response = chatbot.get_answer(query.text)
+
         return {"response": response}
     except HTTPException as he:
         raise he
     except Exception as e:
-        # Log the error and return a 500 status code for unexpected errors
         logging.error(f"Unexpected error in chat endpoint: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"An unexpected error occurred: {str(e)}"
@@ -129,10 +149,10 @@ async def chat(query: Query):
 
 @app.get("/available-models")
 async def get_available_models():
-    """
-    Endpoint to get the list of available models.
-    """
-    return {"models": list(configs.azure_llm.models.keys())}
+    azure_models = list(configs.azure_llm.models.keys())
+    gemini_models = ["gemini-flash", "gemini-pro"]
+    all_models = azure_models + gemini_models
+    return {"models": all_models}
 
 
 @app.post("/file/cleanup")
@@ -152,13 +172,19 @@ async def cleanup_files():
 
 
 @app.post("/file/upload", response_model=FileUploadResponse)
-async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    is_image: bool = Form(...),
+    model_choice: str = Form(...),
+):
+    global gemini_handler, initialized_models
     try:
         original_filename = file.filename
-        logging.info(f"Received file for upload: {original_filename}")
+        logging.info(
+            f"Received file for upload: {original_filename}, model: {model_choice}"
+        )
 
         existing_file_id = gcs_handler.find_existing_file(original_filename)
-
         if existing_file_id:
             logging.info(
                 f"File {original_filename} already exists with ID: {existing_file_id}"
@@ -187,11 +213,10 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
         # If the file doesn't exist, proceed with the new file upload process
         file_id = str(uuid.uuid4())
 
-        logging.info(
-            f"File {original_filename} is new. Proceeding with upload and processing."
-        )
+        logging.info(f"File {original_filename} is new. Processing....")
         file_extension = os.path.splitext(original_filename)[1]
         encrypted_filename = f"{original_filename}.encrypted"
+
         temp_file_path = f"temp_{file_id}_{file_extension}"
 
         with open(temp_file_path, "wb") as buffer:
@@ -207,13 +232,13 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
             {
                 "file": (encrypted_file_path, destination_blob_name),
                 "metadata": (
-                    {"is_image": is_image},
+                    {"is_image": is_image, "model_choice": model_choice},
                     f"{raw_files_folder}/{file_id}/metadata.json",
                 ),
             },
         )
 
-        logging.info(f"File uploaded to GCS: {destination_blob_name}")
+        logging.info(f"File encrypted and uploaded to GCS: {destination_blob_name}")
 
         os.remove(temp_file_path)
         os.remove(encrypted_file_path)
@@ -221,10 +246,6 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
         chroma_db_path = f"./chroma_db/{file_id}"
         os.makedirs(chroma_db_path, exist_ok=True)
         os.chmod(chroma_db_path, 0o755)
-
-        db = chromadb.PersistentClient(
-            path=chroma_db_path, settings=Settings(allow_reset=True, is_persistent=True)
-        )
 
         destination_file_path = f"local_data/{file_id}/"
         os.makedirs(destination_file_path, exist_ok=True)
@@ -237,10 +258,19 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
             )
             logging.info(f"File decrypted: {decrypted_file_path}")
 
+            # Verify that the file is readable
+            with open(decrypted_file_path, "rb") as test_file:
+                test_content = test_file.read(1024)  # Read first 1KB to test
+            if not test_content:
+                raise IOError(
+                    f"Decrypted file at {decrypted_file_path} appears to be empty or unreadable"
+                )
+
+            # logging.info(f"Successfully verified decrypted file: {decrypted_file_path}")
+
             if is_image:
                 logging.info("Processing image file...")
                 image_analysis_result = analyze_images(decrypted_file_path)
-                print(image_analysis_result)
                 if os.path.exists(decrypted_file_path):
                     os.remove(decrypted_file_path)
 
@@ -250,16 +280,44 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
                 with open(analysis_json_path, "w") as f:
                     json.dump(image_analysis_result, f)
 
-            run_preprocessor(
-                configs=configs,
-                text_data_folder_path=destination_file_path,
-                file_id=file_id,
-                chroma_db_path=chroma_db_path,
-                chroma_db=db,
-                is_image=is_image,
-                gcs_handler=gcs_handler,
-            )
-            logging.info(f"Processing completed for file: {file_id}")
+            # Initialize the selected model before processing
+            if model_choice.lower() in ["gemini-flash", "gemini-pro"]:
+                if gemini_handler is None:
+                    gemini_handler = GeminiHandler(configs, gcs_handler)
+                gemini_model = (
+                    configs.gemini.model_flash
+                    if model_choice.lower() == "gemini-flash"
+                    else configs.gemini.model_pro
+                )
+                gemini_handler.initialize(model=gemini_model)
+                initialized_models[file_id] = {
+                    "type": "gemini",
+                    "model": gemini_handler,
+                }
+            else:
+                # Initialize Azure OpenAI model
+                azure_model = Chatbot(configs, model_choice=model_choice)
+                initialized_models[file_id] = {"type": "azure", "model": azure_model}
+
+            # Use the initialized model based on the choice
+            if model_choice.lower() in ["gemini-flash", "gemini-pro"]:
+                gemini_handler.process_file(file_id, decrypted_file_path)
+                gemini_handler.upload_embeddings_to_gcs(file_id)
+                logging.info(f"Gemini embeddings uploaded to GCP for file: {file_id}")
+            else:
+                run_preprocessor(
+                    configs=configs,
+                    text_data_folder_path=destination_file_path,
+                    file_id=file_id,
+                    chroma_db_path=chroma_db_path,
+                    chroma_db=chromadb.PersistentClient(
+                        path=chroma_db_path,
+                        settings=Settings(allow_reset=True, is_persistent=True),
+                    ),
+                    is_image=is_image,
+                    gcs_handler=gcs_handler,
+                )
+                logging.info(f"Azure embeddings uploaded to GCP for file: {file_id}")
 
         except Exception as e:
             logging.error(f"Error during file processing: {str(e)}")
@@ -279,38 +337,34 @@ async def upload_file(file: UploadFile = File(...), is_image: bool = Form(...)):
         )
 
     except Exception as e:
-        logging.error(f"Error in file upload and preprocessing: {str(e)}")
+        logging.error(
+            f"Error in file upload and preprocessing: {str(e)}", exc_info=True
+        )
         raise HTTPException(
             status_code=500, detail=f"An error occurred during file upload: {str(e)}"
         )
 
 
-# Global dictionary to store initialized chatbots
-initialized_chatbots = {}
-
-
 @app.post("/model/initialize")
 async def initialize_model(request: ModelInitRequest):
+    global initialized_azure_model, gemini_handler
     try:
-        file_id = request.file_id
-        model_choice = request.model_choice
+        model_choice = request.model_choice.lower()
 
-        # Check if the necessary data exists
-        chroma_db_path = f"./chroma_db/{file_id}"
-        if not os.path.exists(chroma_db_path):
-            logging.error(f"Chroma DB path not found: {chroma_db_path}")
-            raise HTTPException(
-                status_code=404, detail=f"Chroma DB not found for file_id: {file_id}"
+        if model_choice in ["gemini-flash", "gemini-pro"]:
+            gemini_model = (
+                configs.gemini.model_flash
+                if model_choice == "gemini-flash"
+                else configs.gemini.model_pro
             )
+            gemini_handler = GeminiHandler(configs, gcs_handler)
+            gemini_handler.initialize(model=gemini_model)
+        else:
+            # Initialize Azure OpenAI model
+            initialized_azure_model = Chatbot(configs, model_choice=model_choice)
 
-        # Initialize the chatbot
-        chatbot = Chatbot(configs, file_id, model_choice=model_choice)
-        initialized_chatbots[file_id] = chatbot
-
-        logging.info(f"Model {model_choice} initialized for file {file_id}")
-        return {"message": f"Model {model_choice} initialized for file {file_id}"}
+        return {"message": f"Model {model_choice} initialized successfully"}
     except Exception as e:
-        logging.error(f"Error initializing model: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"Error initializing model: {str(e)}"
         )
@@ -343,23 +397,30 @@ async def get_neighbors(query: NeighborsQuery):
     try:
         file_id = query.file_id
 
-        if file_id not in initialized_chatbots:
+        if file_id not in initialized_models:
             raise HTTPException(
-                status_code=404, detail="Chatbot not initialized for this file"
+                status_code=404, detail="Model not initialized for this file"
             )
 
-        chatbot = initialized_chatbots[file_id]
+        model_info = initialized_models[file_id]
 
-        neighbors = chatbot.get_n_nearest_neighbours(
-            query.text, n_neighbours=query.n_neighbors
-        )
+        if model_info["type"] == "gemini":
+            if gemini_handler is None:
+                raise HTTPException(
+                    status_code=404, detail="Gemini handler not initialized"
+                )
+            neighbors = gemini_handler.get_n_nearest_neighbours(
+                query.text, file_id, query.n_neighbors
+            )
+        else:
+            chatbot = model_info["model"]
+            neighbors_with_metadata = chatbot.get_n_nearest_neighbours(
+                query.text, n_neighbours=query.n_neighbors
+            )
+            neighbors = [neighbor.node.text for neighbor in neighbors_with_metadata]
 
-        # Extract the relevant information from the neighbors
-        neighbor_texts = [neighbor.node.text for neighbor in neighbors]
-
-        return {"neighbors": neighbor_texts}
+        return {"neighbors": neighbors}
     except HTTPException as he:
-        # Re-raise HTTP exceptions as they are
         raise he
     except Exception as e:
         logging.error(f"Unexpected error in neighbors endpoint: {str(e)}")
