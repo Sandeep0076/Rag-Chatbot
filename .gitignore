@@ -1,4 +1,5 @@
 # Folders
+structure.txt
 .idea/
 .vscode/
 .pytest_cache/*
@@ -10,3 +11,4 @@ rag-pdf-api.code-workspace
 processed_data/
 git_commits.txt
 .aider*
+version_doc/

@@ -1,15 +1,18 @@
 # RAG PDF API
 
 ## Description
-RAG PDF API is a FastAPI-based application that implements a Retrieval-Augmented Generation (RAG) system for processing and querying PDF documents. The system uses Azure OpenAI services for embeddings and language models, Google Cloud Storage for file management, and Chroma as the vector database.
+RAG PDF API is a FastAPI-based application that implements a Retrieval-Augmented Generation (RAG) system for processing and querying PDF documents and images. The system uses Azure OpenAI services, Google Cloud Vertex AI (Gemini), and GPT-4 Vision for various AI functionalities, Google Cloud Storage for file management, and Chroma as the vector database.
 
 ## Features
-- PDF preprocessing and embedding generation
-- Vector database creation and management
+- PDF and image preprocessing and embedding generation
+- Vector database creation and management using Chroma
 - Chat-based querying of processed documents
 - Integration with Azure OpenAI for embeddings and language models
+- Integration with Google Cloud Vertex AI (Gemini) for advanced language processing
+- GPT-4-Omni integration for image analysis
 - Google Cloud Storage for file management
 - FastAPI backend with Prometheus metrics
+- (Optional) Streamlit-based user interface for easy interaction
 
 ## Installation
 
@@ -18,6 +21,7 @@ RAG PDF API is a FastAPI-based application that implements a Retrieval-Augmented
 - Poetry for dependency management
 - Google Cloud SDK
 - Azure account with OpenAI services
+- Google Cloud account with Vertex AI enabled
 
 ### Setup
 1. Install Python 3.10 or higher if not already installed.
@@ -65,27 +69,16 @@ RAG PDF API is a FastAPI-based application that implements a Retrieval-Augmented
 ## Configuration
 
 ### Environment Variables
-The application requires several environment variables to be set. These are detailed in the `env-variables.md` file. Here's a summary of the required variables:
+The application requires several environment variables to be set. These are detailed in the `env-variables.md` file. Key variables include:
 
-- Azure OpenAI Configuration:
-  - `AZURE_OPENAI_API_KEY`
-  - `AZURE_OPENAI_ENDPOINT`
-  - `AZURE_OPENAI_API_VERSION`
-
-- Google Cloud Storage Configuration:
-  - `GOOGLE_APPLICATION_CREDENTIALS` (path to your GCP credentials file)
-
-- Application-specific variables (prefix with `RAG_PDF_API__`):
-  - `RAG_PDF_API__AZURE_EMBEDDING__AZURE_EMBEDDING_API_KEY`
-  - `RAG_PDF_API__AZURE_EMBEDDING__AZURE_EMBEDDING_ENDPOINT`
-  - `RAG_PDF_API__AZURE_EMBEDDING__AZURE_EMBEDDING_API_VERSION`
-  - `RAG_PDF_API__AZURE_EMBEDDING__AZURE_EMBEDDING_DEPLOYMENT`
-  - `RAG_PDF_API__AZURE_EMBEDDING__AZURE_EMBEDDING_MODEL_NAME`
-  - (Add other variables as specified in env-variables.md)
+- Azure OpenAI Configuration
+- Google Cloud Storage Configuration
+- Google Cloud Vertex AI Configuration
+- Application-specific variables (prefix with `RAG_PDF_API__`)
 
 To set these variables, you can either export them in your shell or create a `.env` file in the project root.
 
-The main configuration file is `configs/app_config.py`. You can override these configurations using the environment variables listed above.
+The main configuration file is `configs/app_config.py`. You can override these configurations using the environment variables.
 
 ## Usage
 
@@ -98,48 +91,43 @@ poetry run start
 
 The server will start on `http://0.0.0.0:8080`.
 
+To run the Streamlit interface:
+
+```
+streamlit run streamlit_app.py
+```
+
+To run the Version logger interface:
+
+```
+python version_doc/version_logger.py
+```
+
 ### API Endpoints
 
-1. **Health Check**
-   - GET `/health`
-   - Returns the health status of the application
+1. **Health Check**: GET `/health`
+2. **Application Info**: GET `/info`
+3. **Preprocess PDF/Image**: POST `/file/upload`
+4. **Chat with PDF/Image**: POST `/file/chat`
+5. **Get Nearest Neighbors**: POST `/file/neighbors`
+6. **Available Models**: GET `/available-models`
+7. **Cleanup Files**: POST `/file/cleanup`
+8. **Initialize Model**: POST `/model/initialize`
+9. **Analyze Image**: POST `/image/analyze`
+10. **Metrics**: GET `/metrics`
 
-2. **Application Info**
-   - GET `/info`
-   - Returns basic information about the application
-
-3. **Preprocess PDF**
-   - POST `/pdf/preprocess`
-   - Preprocesses a PDF file and creates embeddings
-   - Request body: `{"file_id": "string"}`
-
-4. **Chat with PDF**
-   - POST `/pdf/chat`
-   - Allows querying the processed PDF using natural language
-   - Request body: `{"text": "string", "file_id": "string", "model_choice": "string"}`
-
-5. **Available Models**
-   - GET `/available-models`
-   - Returns a list of available language models
-
-6. **Metrics**
-   - GET `/metrics`
-   - Exposes Prometheus metrics
-
-## Misc Programs
-
-- `streamlit run streamlit_app.py`: For running streamlit.
-- `python version_doc/version_logger.py`: For running Version logger.
-- `pytest tests/api_unit_tests.py`: For running unit tests.
 ## Architecture
 
 The application is structured as follows:
 
 - `app.py`: Main FastAPI application
+- `streamlit_app.py`: Streamlit user interface
 - `chatbot/chatbot_creator.py`: Implements the Chatbot class for RAG functionality
 - `chatbot/gcs_handler.py`: Handles interactions with Google Cloud Storage
+- `chatbot/gemini_handler.py`: Manages Gemini model interactions
+- `chatbot/image_reader.py`: Handles image analysis using GPT-4 Omni
 - `common/embeddings.py`: Manages the creation of embeddings
-- `common/vector_db_creator.py`: Handles the creation and management of the vector database
+- `common/vector_db_creator.py`: Handles the creation and management of the Chroma vector database
 
 ## Development
 

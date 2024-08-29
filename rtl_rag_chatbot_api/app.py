@@ -11,7 +11,8 @@ from chromadb.config import Settings
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+
+# from pydantic import BaseModel
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
@@ -32,13 +33,6 @@ from rtl_rag_chatbot_api.common.models import (
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-
-class ImageAnalysisUpload(BaseModel):
-    file_id: str
-    original_filename: str
-    is_image: bool
-    analysis: str
 
 
 """
@@ -124,12 +118,10 @@ async def chat(query: Query):
                 raise HTTPException(
                     status_code=404, detail="Gemini handler not initialized"
                 )
-            response = model_info["model"].get_answer(query.text, file_id)
-            logging.info(f"{model_choice} is being used")
-
+            response = gemini_handler.get_answer(query.text, file_id)
         else:
             response = model_info["model"].get_answer(query.text)
-
+        logging.info(f"{model_choice} is used for chatting.")
         return {"response": response}
     except HTTPException as he:
         raise he
@@ -137,7 +129,7 @@ async def chat(query: Query):
         logging.error(f"Unexpected error in chat endpoint: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"An unexpected error occurred: {str(e)}"
-        )
+        ) @ app.get("/available-models")
 
 
 @app.get("/available-models")

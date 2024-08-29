@@ -34,3 +34,10 @@ class ModelInitRequest(BaseModel):
     )
     file_id: Optional[str] = None
     # model_config = {"protected_namespaces": ()}
+
+
+class ImageAnalysisUpload(BaseModel):
+    file_id: str
+    original_filename: str
+    is_image: bool
+    analysis: str
