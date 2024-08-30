@@ -47,11 +47,13 @@ class Chatbot:
         self.file_id = file_id
         self.model_choice = model_choice
         self.model_config = self._get_model_config()
-        self._index = self._create_index()
         self._vanilla_llm = self._create_llm_instance_only()
-        self.retriever = self._create_retriever()
-        self.query_engine = self._create_query_engine()
         self.chat_engine = self._create_chat_gpt_instance()
+
+        if file_id:
+            self._index = self._create_index()
+            self.retriever = self._create_retriever()
+            self.query_engine = self._create_query_engine()
 
     # Retrieves the configuration for the chosen model.
     def _get_model_config(self):
