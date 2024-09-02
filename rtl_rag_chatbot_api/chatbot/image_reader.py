@@ -1,5 +1,6 @@
 import base64
-import json
+
+# import json
 import os
 from typing import Any, Dict, List
 
@@ -108,8 +109,8 @@ def analyze_single_image(image_path: str, api_key: str, endpoint: str) -> str:
 
 
 def analyze_images(image_path: str) -> List[Dict[str, Any]]:
-    API_KEY = os.environ.get("AZURE_LLM__MODELS__GPT_4_VISION__API_KEY")
-    ENDPOINT = os.environ.get("AZURE_LLM__MODELS__GPT_4_VISION__ENDPOINT")
+    API_KEY = os.environ.get("AZURE_LLM__MODELS__GPT_4O_MINI__API_KEY")
+    ENDPOINT = construct_endpoint_url()
 
     if not API_KEY or not ENDPOINT:
         raise ValueError("API_KEY or ENDPOINT environment variables are not set.")
@@ -118,14 +119,26 @@ def analyze_images(image_path: str) -> List[Dict[str, Any]]:
     return [{"filename": os.path.basename(image_path), "analysis": result}]
 
 
-if __name__ == "__main__":
-    IMAGE_FOLDER = "processed_data/images"
-    RESULT_PATH = "processed_data/image_analysis_results.json"
+def construct_endpoint_url():
+    # Retrieve environment variables
+    base_url = os.getenv("AZURE_LLM__MODELS__GPT_4O_MINI__ENDPOINT", "").rstrip("/")
+    deployment = os.getenv("AZURE_LLM__MODELS__GPT_4O_MINI__DEPLOYMENT", "")
+    api_version = os.getenv("AZURE_LLM__MODELS__GPT_4O_MINI__API_VERSION", "")
 
-    results = analyze_images(IMAGE_FOLDER)
+    # Construct the endpoint URL
+    endpoint = f"{base_url}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
 
-    # Save the results to a JSON file
-    with open(RESULT_PATH, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=4)
+    return endpoint
 
-    print(f"Image analysis results saved to {RESULT_PATH}")
+
+# if __name__ == "__main__":
+#     IMAGE_FOLDER = "processed_data/images/BYjxOmR.png"
+#     RESULT_PATH = "processed_data/image_analysis_results.json"
+
+#     results = analyze_images(IMAGE_FOLDER)
+
+#     Save the results to a JSON file
+#     with open(RESULT_PATH, "w", encoding="utf-8") as f:
+#         json.dump(results, f, ensure_ascii=False, indent=4)
+
+#     print(f"Image analysis results saved to {RESULT_PATH}")
