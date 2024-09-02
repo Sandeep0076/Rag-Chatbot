@@ -1,5 +1,6 @@
 import base64
-import json
+
+# import json
 import os
 from typing import Any, Dict, List
 
@@ -130,14 +131,14 @@ def construct_endpoint_url():
     return endpoint
 
 
-if __name__ == "__main__":
-    IMAGE_FOLDER = "processed_data/images/BYjxOmR.png"
-    RESULT_PATH = "processed_data/image_analysis_results.json"
+# if __name__ == "__main__":
+#     IMAGE_FOLDER = "processed_data/images/BYjxOmR.png"
+#     RESULT_PATH = "processed_data/image_analysis_results.json"
 
-    results = analyze_images(IMAGE_FOLDER)
+#     results = analyze_images(IMAGE_FOLDER)
 
-    # Save the results to a JSON file
-    with open(RESULT_PATH, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=4)
+#     Save the results to a JSON file
+#     with open(RESULT_PATH, "w", encoding="utf-8") as f:
+#         json.dump(results, f, ensure_ascii=False, indent=4)
 
-    print(f"Image analysis results saved to {RESULT_PATH}")
+#     print(f"Image analysis results saved to {RESULT_PATH}")
