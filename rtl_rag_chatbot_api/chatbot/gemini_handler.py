@@ -15,8 +15,9 @@ from pdfminer.high_level import extract_text
 from vertexai.generative_models import GenerativeModel
 from vertexai.preview.language_models import TextEmbeddingModel
 
-from configs.app_config import Config
-from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
+# from configs.app_config import Config
+
+# from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 
 # from langchain.text_splitter import RecursiveCharacterTextSplitter
 
@@ -25,7 +26,7 @@ logging.basicConfig(level=logging.INFO)
 
 
 class GeminiHandler:
-    def __init__(self, configs: Config, gcs_handler: GCSHandler):
+    def __init__(self, configs, gcs_handler):
         self.configs = configs
         self.gcs_handler = gcs_handler
         vertexai.init(project=configs.gemini.project, location=configs.gemini.location)
@@ -34,10 +35,36 @@ class GeminiHandler:
         )
         self.generative_model = None
         self.chroma_client = None
-        self.max_tokens = 2000  # Adjust this value as needed
+        self.max_tokens = 2000
+        self.file_id = None  # Add this line
 
-    def initialize(self, model: str):
+    def initialize(self, model: str, file_id: str):  # Add file_id parameter
         self.generative_model = GenerativeModel(model)
+        self.file_id = file_id  # Store the file_id
+
+    def get_answer(self, query: str) -> str:  # Remove file_id parameter
+        try:
+            relevant_chunks = self.query_chroma(query, self.file_id, n_results=3)
+            if not relevant_chunks:
+                return (
+                    "I couldn't find any relevant information to answer your question."
+                )
+
+            context = "\n".join(relevant_chunks)
+            prompt = f"""Based on the following context, please answer the question.
+            If the answer is not in the context, say 'I don't have enough information
+              to answer that question from the uploaded document. Please rephrase or ask another question.'
+
+            Context: {context}
+
+            Question: {query}
+
+            Answer:"""
+            response = self.generative_model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            logging.error(f"Error in get_answer: {str(e)}")
+            return "I'm sorry, but I encountered an error while trying to answer your question. Please try again."
 
     def get_n_nearest_neighbours(
         self, query: str, file_id: str, n_neighbors: int = 3
@@ -171,32 +198,6 @@ class GeminiHandler:
             metadatas=[{"source": file_id} for _ in chunks],
             ids=[f"{file_id}_{i}" for i in range(len(chunks))],
         )
-
-    def get_answer(self, query: str, file_id: str) -> str:
-        try:
-            relevant_chunks = self.query_chroma(
-                query, file_id, n_results=3
-            )  # Always request at least 1 result
-            if not relevant_chunks:
-                return (
-                    "I couldn't find any relevant information to answer your question."
-                )
-
-            context = "\n".join(relevant_chunks)
-            prompt = f"""Based on the following context, please answer the question.
-            If the answer is not in the context, say 'I don't have enough information
-              to answer that question from the uploaded document. Please rephrase or ask another question.'
-
-            Context: {context}
-
-            Question: {query}
-
-            Answer:"""
-            response = self.generative_model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            logging.error(f"Error in get_answer: {str(e)}")
-            return "I'm sorry, but I encountered an error while trying to answer your question. Please try again."
 
     def query_chroma(self, query: str, file_id: str, n_results: int = 3) -> List[str]:
         chroma_db_path = f"./chroma_db/{file_id}"
