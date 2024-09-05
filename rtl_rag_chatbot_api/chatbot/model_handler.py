@@ -7,16 +7,23 @@ class ModelHandler:
         self.configs = configs
         self.gcs_handler = gcs_handler
 
-    def initialize_model(self, model_choice: str, file_id: str):
-        if model_choice.lower() in ["gemini-flash", "gemini-pro"]:
+    def initialize_model(self, model_choice: str, file_id: str, embedding_type: str):
+        if embedding_type == "gemini":
             gemini_model = (
                 self.configs.gemini.model_flash
                 if model_choice.lower() == "gemini-flash"
                 else self.configs.gemini.model_pro
             )
             model = GeminiHandler(self.configs, self.gcs_handler)
-            model.initialize(model=gemini_model, file_id=file_id)
+            model.initialize(
+                model=gemini_model, file_id=file_id, embedding_type=embedding_type
+            )
         else:
-            model = Chatbot(self.configs, file_id=file_id, model_choice=model_choice)
+            model = Chatbot(
+                self.configs,
+                file_id=file_id,
+                model_choice=model_choice,
+                embedding_type=embedding_type,
+            )
 
         return model

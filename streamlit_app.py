@@ -65,25 +65,13 @@ def handle_file_upload():
                 if upload_response.status_code == 200:
                     upload_result = upload_response.json()
                     file_id = upload_result["file_id"]
+                    st.success(upload_result["message"])
 
-                    # Step 2: Initialize model
-                    init_response = requests.post(
-                        f"{API_URL}/model/initialize",
-                        json={
-                            "model_choice": st.session_state.model_choice,
-                            "file_id": file_id,
-                        },
-                    )
-                    if init_response.status_code != 200:
-                        st.error(f"Model initialization failed: {init_response.text}")
-                        return
-
-                    # Step 3: Create embeddings
+                    # Step 2: Create embeddings
                     embed_response = requests.post(
                         f"{API_URL}/embeddings/create",
                         json={
                             "file_id": file_id,
-                            "model_choice": st.session_state.model_choice,
                             "is_image": is_image,
                         },
                     )

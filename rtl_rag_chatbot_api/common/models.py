@@ -45,7 +45,4 @@ class ImageAnalysisUpload(BaseModel):
 
 class EmbeddingCreationRequest(BaseModel):
     file_id: str
-    model_choice: str = Field(
-        ..., description="The chosen language model for creating embeddings"
-    )
     is_image: bool = Field(..., description="Whether the file is an image or not")

@@ -34,18 +34,13 @@ class Chatbot:
     chat_engine (AzureOpenAI): ChatGPT instance for generating chat responses.
     """
 
-    def __init__(self, configs, file_id, model_choice="gpt-3.5-turbo"):
-        """
-        Initializes the Chatbot class.
-
-        Args:
-        configs (Config): Configuration object containing necessary settings.
-        file_id (str): Unique identifier for the file being processed.
-        model_choice (str): The chosen language model (default: "gpt-3.5-turbo").
-        """
+    def __init__(
+        self, configs, file_id, model_choice="gpt-3.5-turbo", embedding_type="azure"
+    ):
         self.configs = configs
         self.file_id = file_id
         self.model_choice = model_choice
+        self.embedding_type = embedding_type
         self.model_config = self._get_model_config()
         self._vanilla_llm = self._create_llm_instance_only()
         self.chat_engine = self._create_chat_gpt_instance()
@@ -73,7 +68,7 @@ class Chatbot:
         Returns:
         VectorStoreIndex: Index object created from the vector store.
         """
-        chroma_folder_path = f"./chroma_db/{self.file_id}"
+        chroma_folder_path = f"./chroma_db/{self.file_id}/{self.embedding_type}"
         llm_llama = AzureOpenAI(
             api_key=self.model_config.api_key,
             azure_endpoint=self.model_config.endpoint,

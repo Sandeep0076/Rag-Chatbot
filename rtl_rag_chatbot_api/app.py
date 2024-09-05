@@ -23,9 +23,6 @@ from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
-
-# from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
-# from rtl_rag_chatbot_api.common.encryption_utils import encrypt_file
 from rtl_rag_chatbot_api.common.models import (
     EmbeddingCreationRequest,
     FileUploadResponse,
@@ -141,33 +138,22 @@ async def upload_file(
 @app.post("/model/initialize")
 async def initialize_model(request: ModelInitRequest):
     try:
-        model = model_handler.initialize_model(request.model_choice, request.file_id)
+        file_info = embedding_handler.get_embeddings_info(request.file_id)
+        if not file_info:
+            raise HTTPException(
+                status_code=404, detail="Embeddings not found for this file"
+            )
+
+        if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]:
+            embedding_type = "gemini"
+        else:
+            embedding_type = "azure"
+
+        model = model_handler.initialize_model(
+            request.model_choice, request.file_id, embedding_type
+        )
         initialized_models[request.file_id] = model
         return {"message": f"Model {request.model_choice} initialized successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/embeddings/create")
-async def create_embeddings(request: EmbeddingCreationRequest):
-    try:
-        embedding_handler = EmbeddingHandler(configs, gcs_handler)
-
-        if embedding_handler.embeddings_exist(request.file_id):
-            embeddings_info = embedding_handler.get_embeddings_info(request.file_id)
-            if embeddings_info:
-                return {
-                    "message": "Embeddings already exist for this file",
-                    "info": embeddings_info,
-                }
-            else:
-                return {"message": "Embeddings exist but info not found"}
-
-        result = embedding_handler.create_and_upload_embeddings(
-            request.file_id, request.model_choice, request.is_image
-        )
-
-        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -193,6 +179,31 @@ async def chat(query: Query):
         return {"response": response}
     except Exception as e:
         logging.error(f"Error in chat endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/embeddings/create")
+async def create_embeddings(request: EmbeddingCreationRequest):
+    try:
+        embedding_handler = EmbeddingHandler(configs, gcs_handler)
+
+        if embedding_handler.embeddings_exist(request.file_id):
+            embeddings_info = embedding_handler.get_embeddings_info(request.file_id)
+            if embeddings_info:
+                return {
+                    "message": "Embeddings already exist for this file",
+                    "info": embeddings_info,
+                }
+            else:
+                return {"message": "Embeddings exist but info not found"}
+
+        result = await embedding_handler.create_and_upload_embeddings(
+            request.file_id, request.is_image
+        )
+
+        return result
+    except Exception as e:
+        logging.error(f"Error in create_embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

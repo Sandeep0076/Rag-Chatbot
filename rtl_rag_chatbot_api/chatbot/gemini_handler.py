@@ -15,13 +15,6 @@ from pdfminer.high_level import extract_text
 from vertexai.generative_models import GenerativeModel
 from vertexai.preview.language_models import TextEmbeddingModel
 
-# from configs.app_config import Config
-
-# from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
-
-# from langchain.text_splitter import RecursiveCharacterTextSplitter
-
-
 logging.basicConfig(level=logging.INFO)
 
 
@@ -36,11 +29,13 @@ class GeminiHandler:
         self.generative_model = None
         self.chroma_client = None
         self.max_tokens = 2000
-        self.file_id = None  # Add this line
+        self.file_id = None
+        self.embedding_type = None
 
-    def initialize(self, model: str, file_id: str):  # Add file_id parameter
+    def initialize(self, model: str, file_id: str, embedding_type: str):
         self.generative_model = GenerativeModel(model)
-        self.file_id = file_id  # Store the file_id
+        self.file_id = file_id
+        self.embedding_type = embedding_type
 
     def get_answer(self, query: str) -> str:  # Remove file_id parameter
         try:
@@ -88,10 +83,12 @@ class GeminiHandler:
         # Extract and return the text of the nearest neighbors
         return results["documents"][0]
 
-    def process_file(self, file_id: str, decrypted_file_path: str):
+    def process_file(
+        self, file_id: str, decrypted_file_path: str, subfolder: str = "gemini"
+    ):
         text = self.extract_text_from_file(decrypted_file_path)
         chunks = self.split_text(text)
-        self.create_and_store_embeddings(chunks, file_id)
+        self.create_and_store_embeddings(chunks, file_id, subfolder)
 
     def extract_text_from_file(self, file_path: str) -> str:
         _, file_extension = os.path.splitext(file_path)
@@ -200,7 +197,7 @@ class GeminiHandler:
         )
 
     def query_chroma(self, query: str, file_id: str, n_results: int = 3) -> List[str]:
-        chroma_db_path = f"./chroma_db/{file_id}"
+        chroma_db_path = f"./chroma_db/{file_id}/{self.embedding_type}"
         client = chromadb.PersistentClient(
             path=chroma_db_path, settings=Settings(allow_reset=True, is_persistent=True)
         )
@@ -237,23 +234,25 @@ class GeminiHandler:
             )
             raise
 
-    def upload_embeddings_to_gcs(self, file_id: str):
-        chroma_db_path = f"./chroma_db/{file_id}"
-        gcs_subfolder = "file-embeddings"
+    def upload_embeddings_to_gcs(self, file_id: str, subfolder: str = "gemini"):
+        chroma_db_path = f"./chroma_db/{file_id}/{subfolder}"
+        gcs_subfolder = f"file-embeddings/{file_id}/{subfolder}"
 
         files_to_upload = {}
         for file in Path(chroma_db_path).rglob("*"):
             if file.is_file():
                 relative_path = file.relative_to(chroma_db_path)
-                gcs_object_name = f"{gcs_subfolder}/{file_id}/{relative_path}"
+                gcs_object_name = f"{gcs_subfolder}/{relative_path}"
                 files_to_upload[str(relative_path)] = (str(file), gcs_object_name)
 
         self.gcs_handler.upload_to_gcs(
             self.configs.gcp_resource.bucket_name, files_to_upload
         )
 
-    def create_and_store_embeddings(self, chunks: List[str], file_id: str):
-        chroma_db_path = f"./chroma_db/{file_id}"
+    def create_and_store_embeddings(
+        self, chunks: List[str], file_id: str, subfolder: str = "gemini"
+    ):
+        chroma_db_path = f"./chroma_db/{file_id}/{subfolder}"
         os.makedirs(chroma_db_path, exist_ok=True)
 
         client = chromadb.PersistentClient(
