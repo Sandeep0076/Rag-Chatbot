@@ -151,23 +151,23 @@ async def initialize_model(request: ModelInitRequest):
 @app.post("/embeddings/create")
 async def create_embeddings(request: EmbeddingCreationRequest):
     try:
-        # result =
-        embedding_handler.create_and_upload_embeddings(
+        embedding_handler = EmbeddingHandler(configs, gcs_handler)
+
+        if embedding_handler.embeddings_exist(request.file_id):
+            embeddings_info = embedding_handler.get_embeddings_info(request.file_id)
+            if embeddings_info:
+                return {
+                    "message": "Embeddings already exist for this file",
+                    "info": embeddings_info,
+                }
+            else:
+                return {"message": "Embeddings exist but info not found"}
+
+        result = embedding_handler.create_and_upload_embeddings(
             request.file_id, request.model_choice, request.is_image
         )
-        file_info = {"embeddings": request.model_choice, "is_image": request.is_image}
 
-        gcs_handler.upload_to_gcs(
-            configs.gcp_resource.bucket_name,
-            {
-                "file_info": (
-                    file_info,
-                    f"files-raw/{request.file_id}/file_info.json",
-                )
-            },
-        )
-
-        return {"message": "Embeddings created and uploaded successfully"}
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

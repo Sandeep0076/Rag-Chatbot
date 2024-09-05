@@ -11,27 +11,21 @@ from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 
 
 class EmbeddingHandler:
-    """
-    Initialize the EmbeddingHandler with configurations and GCS handler.
-
-    Create and upload embeddings for a specified file based on the model choice and whether it's an image file.
-
-    Args:
-        file_id (str): Unique identifier for the file.
-        model_choice (str): Choice of the model for processing.
-        is_image (bool): Indicates if the file is an image.
-
-    Returns:
-        dict: Contains information about the processed file, model choice, and whether it's an image.
-    """
-
     def __init__(self, configs, gcs_handler):
         self.configs = configs
         self.gcs_handler = gcs_handler
 
+    def embeddings_exist(self, file_id: str) -> bool:
+        chroma_db_path = f"./chroma_db/{file_id}"
+        return os.path.exists(chroma_db_path) and len(os.listdir(chroma_db_path)) > 0
+
     def create_and_upload_embeddings(
         self, file_id: str, model_choice: str, is_image: bool
     ):
+        if self.embeddings_exist(file_id):
+            logging.info(f"Embeddings already exist for file_id: {file_id}")
+            return {"message": "Embeddings already exist for this file"}
+
         chroma_db_path = f"./chroma_db/{file_id}"
         os.makedirs(chroma_db_path, exist_ok=True)
 
@@ -48,9 +42,8 @@ class EmbeddingHandler:
         )
 
         try:
-            # Verify that the file is readable
             with open(decrypted_file_path, "rb") as test_file:
-                test_content = test_file.read(1024)  # Read first 1KB to test
+                test_content = test_file.read(1024)
             if not test_content:
                 raise IOError(
                     f"Decrypted file at {decrypted_file_path} appears to be empty or unreadable"
@@ -61,13 +54,11 @@ class EmbeddingHandler:
             if is_image:
                 logging.info("Processing image file...")
                 image_analysis_result = analyze_images(decrypted_file_path)
-
                 analysis_json_path = os.path.join(
                     destination_file_path, f"{file_id}_analysis.json"
                 )
                 with open(analysis_json_path, "w") as f:
                     json.dump(image_analysis_result, f)
-
                 logging.info(f"Image analysis result saved to {analysis_json_path}")
 
             if model_choice.lower() in ["gemini-flash", "gemini-pro"]:
@@ -78,7 +69,6 @@ class EmbeddingHandler:
                 gemini_handler.upload_embeddings_to_gcs(file_id)
                 logging.info("Embeddings generated via Gemini")
             else:
-                # Use run_preprocessor for Azure models
                 run_preprocessor(
                     configs=self.configs,
                     text_data_folder_path=destination_file_path,
@@ -89,8 +79,8 @@ class EmbeddingHandler:
                     gcs_handler=self.gcs_handler,
                 )
                 logging.info("Embeddings generated via Azure")
-            file_info = {"embeddings": model_choice, "is_image": is_image}
 
+            file_info = {"embeddings": model_choice, "is_image": is_image}
             self.gcs_handler.upload_to_gcs(
                 self.configs.gcp_resource.bucket_name,
                 {
@@ -101,8 +91,9 @@ class EmbeddingHandler:
                 },
             )
 
+            return {"message": "Embeddings created and uploaded successfully"}
+
         finally:
-            # Clean up the decrypted file and analysis JSON if they exist
             if os.path.exists(decrypted_file_path):
                 os.remove(decrypted_file_path)
             if is_image:
@@ -112,4 +103,17 @@ class EmbeddingHandler:
                 if os.path.exists(analysis_json_path):
                     os.remove(analysis_json_path)
 
-        return {"file_id": file_id, "model_choice": model_choice, "is_image": is_image}
+    def get_embeddings_info(self, file_id: str):
+        try:
+            info_blob_name = f"file-embeddings/{file_id}/file_info.json"
+            blob = self.gcs_handler.bucket.blob(info_blob_name)
+            if blob.exists():
+                content = blob.download_as_text()
+                return json.loads(content)
+            else:
+                return None
+        except Exception as e:
+            logging.error(
+                f"Error retrieving embeddings info for file_id {file_id}: {str(e)}"
+            )
+            return None

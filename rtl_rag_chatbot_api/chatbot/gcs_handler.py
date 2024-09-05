@@ -275,3 +275,26 @@ class GCSHandler:
         except Exception as e:
             logging.error(f"Error in find_existing_file: {str(e)}")
             return None
+
+    def find_existing_file_by_hash(self, file_hash):
+        try:
+            logging.info(f"Searching for existing file with hash: {file_hash}")
+            blobs = self._storage_client.list_blobs(
+                self.bucket_name, prefix="files-raw/"
+            )
+
+            for blob in blobs:
+                if blob.name.endswith("/metadata.json"):
+                    metadata = json.loads(blob.download_as_string())
+                    if metadata.get("file_hash") == file_hash:
+                        file_id = blob.name.split("/")[-2]
+                        logging.info(
+                            f"Found existing file with hash: {file_hash}, ID: {file_id}"
+                        )
+                        return file_id
+
+            logging.info(f"No file found with hash: {file_hash}")
+            return None
+        except Exception as e:
+            logging.error(f"Error in find_existing_file_by_hash: {str(e)}")
+            return None

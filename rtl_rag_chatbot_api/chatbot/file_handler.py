@@ -1,3 +1,4 @@
+import hashlib
 import os
 
 from fastapi import UploadFile
@@ -6,39 +7,32 @@ from rtl_rag_chatbot_api.common.encryption_utils import encrypt_file
 
 
 class FileHandler:
-    """
-    Class representing a FileHandler.
-
-    Args:
-        configs: The configurations for the FileHandler.
-        gcs_handler: The handler for Google Cloud Storage.
-
-    Methods:
-        process_file: Processes the uploaded file, encrypts it, and uploads it to GCS.
-        download_existing_file: Downloads existing files from GCS based on the file ID.
-    """
-
     def __init__(self, configs, gcs_handler):
         self.configs = configs
         self.gcs_handler = gcs_handler
 
+    def calculate_file_hash(self, file_content):
+        return hashlib.md5(file_content).hexdigest()
+
     async def process_file(self, file: UploadFile, file_id: str, is_image: bool):
         original_filename = file.filename
-        existing_file_id = self.gcs_handler.find_existing_file(original_filename)
+        file_content = await file.read()
+        file_hash = self.calculate_file_hash(file_content)
+
+        existing_file_id = self.gcs_handler.find_existing_file_by_hash(file_hash)
 
         if existing_file_id:
             return {
                 "file_id": existing_file_id,
                 "is_image": is_image,
-                "message": "File already exists. Embeddings downloaded.",
+                "message": "File with identical content already exists. Embeddings downloaded.",
                 "status": "existing",
             }
 
         temp_file_path = f"temp_{file_id}_{os.path.splitext(original_filename)[1]}"
 
         with open(temp_file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
+            buffer.write(file_content)
 
         encrypted_file_path = encrypt_file(temp_file_path)
 
@@ -48,7 +42,7 @@ class FileHandler:
             {
                 "file": (encrypted_file_path, destination_blob_name),
                 "metadata": (
-                    {"is_image": is_image},
+                    {"is_image": is_image, "file_hash": file_hash},
                     f"files-raw/{file_id}/metadata.json",
                 ),
             },
