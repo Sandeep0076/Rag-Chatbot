@@ -65,7 +65,6 @@ def handle_file_upload():
                 if upload_response.status_code == 200:
                     upload_result = upload_response.json()
                     file_id = upload_result["file_id"]
-                    st.success(upload_result["message"])
 
                     # Step 2: Initialize model
                     init_response = requests.post(

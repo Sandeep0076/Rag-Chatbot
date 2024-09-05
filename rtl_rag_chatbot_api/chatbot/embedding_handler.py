@@ -89,6 +89,17 @@ class EmbeddingHandler:
                     gcs_handler=self.gcs_handler,
                 )
                 logging.info("Embeddings generated via Azure")
+            file_info = {"embeddings": model_choice, "is_image": is_image}
+
+            self.gcs_handler.upload_to_gcs(
+                self.configs.gcp_resource.bucket_name,
+                {
+                    "file_info": (
+                        file_info,
+                        f"file-embeddings/{file_id}/file_info.json",
+                    )
+                },
+            )
 
         finally:
             # Clean up the decrypted file and analysis JSON if they exist

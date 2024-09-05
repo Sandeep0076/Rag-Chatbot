@@ -155,6 +155,18 @@ async def create_embeddings(request: EmbeddingCreationRequest):
         embedding_handler.create_and_upload_embeddings(
             request.file_id, request.model_choice, request.is_image
         )
+        file_info = {"embeddings": request.model_choice, "is_image": request.is_image}
+
+        gcs_handler.upload_to_gcs(
+            configs.gcp_resource.bucket_name,
+            {
+                "file_info": (
+                    file_info,
+                    f"files-raw/{request.file_id}/file_info.json",
+                )
+            },
+        )
+
         return {"message": "Embeddings created and uploaded successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
