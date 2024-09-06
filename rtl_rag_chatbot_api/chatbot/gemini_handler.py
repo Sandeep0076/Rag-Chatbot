@@ -13,6 +13,11 @@ from pdf2image import convert_from_path
 # import PyPDF2
 from pdfminer.high_level import extract_text
 from vertexai.generative_models import GenerativeModel
+from vertexai.preview.generative_models import (
+    GenerationConfig,
+    HarmBlockThreshold,
+    HarmCategory,
+)
 from vertexai.preview.language_models import TextEmbeddingModel
 
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +38,23 @@ class GeminiHandler:
         self.embedding_type = None
 
     def initialize(self, model: str, file_id: str, embedding_type: str):
-        self.generative_model = GenerativeModel(model)
+        generation_config = GenerationConfig(
+            temperature=0.9,
+            top_p=1,
+            top_k=40,
+            max_output_tokens=2048,
+        )
+
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        }
+
+        self.generative_model = GenerativeModel(
+            model, generation_config=generation_config, safety_settings=safety_settings
+        )
         self.file_id = file_id
         self.embedding_type = embedding_type
 
@@ -60,28 +81,6 @@ class GeminiHandler:
         except Exception as e:
             logging.error(f"Error in get_answer: {str(e)}")
             return "I'm sorry, but I encountered an error while trying to answer your question. Please try again."
-
-    def get_n_nearest_neighbours(
-        self, query: str, file_id: str, n_neighbors: int = 3
-    ) -> List[str]:
-        chroma_db_path = f"./chroma_db/{file_id}"
-        client = chromadb.PersistentClient(
-            path=chroma_db_path, settings=Settings(allow_reset=True, is_persistent=True)
-        )
-        collection = client.get_collection(
-            name=self.configs.chatbot.vector_db_collection_name
-        )
-
-        # Get the embedding for the query
-        query_embedding = self.embedding_model.get_embeddings([query])[0].values
-
-        # Query the collection
-        results = collection.query(
-            query_embeddings=[query_embedding], n_results=n_neighbors
-        )
-
-        # Extract and return the text of the nearest neighbors
-        return results["documents"][0]
 
     def process_file(
         self, file_id: str, decrypted_file_path: str, subfolder: str = "gemini"
@@ -210,12 +209,17 @@ class GeminiHandler:
 
         # Query the collection
         results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=max(1, n_results),  # Ensure we always request at least 1 result
+            query_embeddings=[query_embedding], n_results=n_results
         )
 
         # Extract and return the text of the nearest neighbors
-        return results["documents"][0] if results["documents"] else []
+        documents = results["documents"][0] if results["documents"] else []
+        return documents[:n_results]  # Return up to n_results documents
+
+    def get_n_nearest_neighbours(
+        self, query: str, file_id: str, n_neighbors: int = 3
+    ) -> List[str]:
+        return self.query_chroma(query, file_id, n_results=n_neighbors)
 
     def get_gemini_response(self, prompt: str) -> str:
         model = GenerativeModel(self.configs.gemini.model_pro)

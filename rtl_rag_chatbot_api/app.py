@@ -275,6 +275,7 @@ async def get_neighbors(query: NeighborsQuery):
 
         return {"neighbors": neighbors}
     except Exception as e:
+        logging.error(f"Error in get_neighbors: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
