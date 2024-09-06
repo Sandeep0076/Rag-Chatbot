@@ -111,6 +111,16 @@ async def upload_file(
     file: UploadFile = File(...),
     is_image: bool = Form(...),
 ):
+    """
+    Handles the uploading of a file with optional image flag.
+
+    Args:
+        file (UploadFile): The file to be uploaded.
+        is_image (bool): Flag indicating if the file is an image.
+
+    Returns:
+        FileUploadResponse: Response containing details of the uploaded file.
+    """
     try:
         file_id = str(uuid.uuid4())
         original_filename = file.filename
@@ -137,6 +147,17 @@ async def upload_file(
 
 @app.post("/model/initialize")
 async def initialize_model(request: ModelInitRequest):
+    """
+    Endpoint to initialize a model based on the specified model choice, file ID, and embedding type.
+
+    Args:
+        request (ModelInitRequest): Request object containing model choice and file ID.
+
+    Returns:
+        dict: A message indicating the successful initialization of the specified model.
+    Raises:
+        HTTPException: If embeddings are not found for the specified file or if an error occurs during initialization.
+    """
     try:
         file_info = embedding_handler.get_embeddings_info(request.file_id)
         if not file_info:
@@ -160,6 +181,12 @@ async def initialize_model(request: ModelInitRequest):
 
 @app.post("/file/chat")
 async def chat(query: Query):
+    """
+    Endpoint to interact with the chatbot using a specific file.
+    Checks if the model is initialized for the given file, retrieves the model,
+    and calls get_answer on the model with the provided text.
+    Returns the response from the model. Handles exceptions and logs errors appropriately.
+    """
     try:
         if query.file_id not in initialized_models:
             raise HTTPException(
@@ -184,6 +211,17 @@ async def chat(query: Query):
 
 @app.post("/embeddings/create")
 async def create_embeddings(request: EmbeddingCreationRequest):
+    """
+    Endpoint to create embeddings for a file based on the provided request.
+
+    Parameters:
+        request (EmbeddingCreationRequest): Request object containing file_id and is_image flag.
+
+    Returns:
+        dict: A dictionary with a message indicating the status of the embeddings creation process.
+            If embeddings already exist, returns info if available; otherwise, returns appropriate messages.
+            Raises HTTPException with status code 500 in case of errors.
+    """
     try:
         embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
@@ -209,6 +247,9 @@ async def create_embeddings(request: EmbeddingCreationRequest):
 
 @app.get("/available-models")
 async def get_available_models():
+    """
+    Endpoint to retrieve a list of available models including Azure LLM models and Gemini models.
+    """
     azure_models = list(configs.azure_llm.models.keys())
     gemini_models = ["gemini-flash", "gemini-pro"]
     all_models = azure_models + gemini_models
@@ -232,6 +273,16 @@ async def cleanup_files():
 
 
 async def initialize_chatbot(file_id: str, model_choice: str):
+    """
+    Initialize a chatbot with the given file ID and model choice.
+
+    Parameters:
+    - file_id (str): The ID of the file to initialize the chatbot with.
+    - model_choice (str): The choice of model for the chatbot.
+
+    Raises:
+    - HTTPException: If there is an error during chatbot setup, such as missing files or invalid model choice.
+    """
     chroma_db_path = f"./chroma_db/{file_id}"
     if not os.path.exists(chroma_db_path):
         logging.error(f"Chroma DB path not found: {chroma_db_path}")
@@ -255,6 +306,12 @@ async def initialize_chatbot(file_id: str, model_choice: str):
 
 @app.post("/file/neighbors")
 async def get_neighbors(query: NeighborsQuery):
+    """
+    Endpoint to retrieve nearest neighbors for a given text query and file ID.
+    Checks if the model is initialized for the specified file, then retrieves the nearest neighbors accordingly.
+    Returns a dictionary containing the list of neighbors.
+    Handles exceptions and returns appropriate HTTP status codes with error details.
+    """
     try:
         if query.file_id not in initialized_models:
             raise HTTPException(
@@ -281,6 +338,11 @@ async def get_neighbors(query: NeighborsQuery):
 
 @app.post("/image/analyze")
 async def analyze_image_endpoint(file: UploadFile = File(...)):
+    """
+    Endpoint to analyze an uploaded image file.
+    Saves the analysis result to a JSON file and returns the result details.
+    Handles file upload, temporary file creation, analysis, result saving, and error handling.
+    """
     try:
         # Get the file extension from the original filename
         file_extension = Path(file.filename).suffix

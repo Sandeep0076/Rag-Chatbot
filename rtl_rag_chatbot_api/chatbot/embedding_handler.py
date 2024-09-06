@@ -14,11 +14,20 @@ from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 
 
 class EmbeddingHandler:
+    """
+    Handles the creation, storage, and uploading of embeddings for Azure and Gemini models.
+
+    Attributes:
+        configs: Configuration object containing necessary settings.
+        gcs_handler: Handler for Google Cloud Storage operations.
+    """
+
     def __init__(self, configs, gcs_handler):
         self.configs = configs
         self.gcs_handler = gcs_handler
 
     def embeddings_exist(self, file_id: str) -> bool:
+        # Check if embeddings exist for both Azure and Gemini
         azure_path = f"./chroma_db/{file_id}/azure"
         gemini_path = f"./chroma_db/{file_id}/gemini"
         return (os.path.exists(azure_path) and len(os.listdir(azure_path)) > 0) and (
@@ -26,10 +35,13 @@ class EmbeddingHandler:
         )
 
     async def create_and_upload_embeddings(self, file_id: str, is_image: bool):
+        # Method to create and upload embeddings for Azure and Gemini
+        # Check if embeddings already exist
         if self.embeddings_exist(file_id):
             logging.info(f"Embeddings already exist for file_id: {file_id}")
             return {"message": "Embeddings already exist for this file"}
 
+        # Create necessary directories and paths
         chroma_db_path = f"./chroma_db/{file_id}"
         os.makedirs(os.path.join(chroma_db_path, "azure"), exist_ok=True)
         os.makedirs(os.path.join(chroma_db_path, "gemini"), exist_ok=True)
@@ -37,11 +49,13 @@ class EmbeddingHandler:
         destination_file_path = f"local_data/{file_id}/"
         os.makedirs(destination_file_path, exist_ok=True)
 
+        # Download and decrypt the file
         decrypted_file_path = self.gcs_handler.download_and_decrypt_file(
             file_id, destination_file_path
         )
 
         try:
+            # Verify the decrypted file
             with open(decrypted_file_path, "rb") as test_file:
                 test_content = test_file.read(1024)
             if not test_content:
@@ -51,6 +65,7 @@ class EmbeddingHandler:
 
             logging.info(f"Successfully verified decrypted file: {decrypted_file_path}")
 
+            # Process image file if required
             if is_image:
                 logging.info("Processing image file...")
                 image_analysis_result = analyze_images(decrypted_file_path)
@@ -80,6 +95,7 @@ class EmbeddingHandler:
             # Upload embeddings to GCS
             self._upload_embeddings_to_gcs(file_id)
 
+            # Prepare and upload file info
             file_info = {
                 "embeddings": {"azure": azure_result, "gemini": gemini_result},
                 "is_image": is_image,
@@ -99,6 +115,7 @@ class EmbeddingHandler:
             }
 
         finally:
+            # Clean up decrypted file and analysis JSON if they exist
             if os.path.exists(decrypted_file_path):
                 os.remove(decrypted_file_path)
             if is_image:
@@ -108,6 +125,7 @@ class EmbeddingHandler:
                 if os.path.exists(analysis_json_path):
                     os.remove(analysis_json_path)
 
+    # Private method to create Azure embeddings
     def _create_azure_embeddings(self, file_id, file_path):
         logging.info("Generating Azure embeddings...")
         chroma_db = chromadb.PersistentClient(
@@ -126,6 +144,7 @@ class EmbeddingHandler:
         logging.info("Azure embeddings generated successfully")
         return "completed"
 
+    # Private method to create Gemini embeddings
     def _create_gemini_embeddings(self, file_id, file_path):
         logging.info("Generating Gemini embeddings...")
         gemini_handler = GeminiHandler(self.configs, self.gcs_handler)
@@ -133,6 +152,7 @@ class EmbeddingHandler:
         logging.info("Gemini embeddings generated successfully")
         return "completed"
 
+    # Private method to upload embeddings to GCS
     def _upload_embeddings_to_gcs(self, file_id):
         logging.info("Uploading embeddings to GCS...")
         for model in ["azure", "gemini"]:
@@ -152,6 +172,7 @@ class EmbeddingHandler:
         logging.info("Embeddings uploaded to GCS successfully")
 
     def get_embeddings_info(self, file_id: str):
+        # Retrieve embeddings info from GCS
         try:
             info_blob_name = f"file-embeddings/{file_id}/file_info.json"
             blob = self.gcs_handler.bucket.blob(info_blob_name)

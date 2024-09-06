@@ -13,21 +13,26 @@ from rtl_rag_chatbot_api.common.encryption_utils import decrypt_file
 
 class GCSHandler:
     """
-    A class to handle interactions with Google Cloud Storage (GCS) for downloading and managing data files.
+    Handles interactions with Google Cloud Storage (GCS) for file operations.
+
+    This class provides methods for downloading, uploading, and managing files in Google Cloud Storage.
+    It includes functionality for working with encrypted files, cleaning up local storage, and finding
+    existing files based on name or hash.
 
     Attributes:
-    configs (Config): Configuration object containing GCP resource settings.
-    credentials (google.oauth2.credentials.Credentials): Google OAuth credentials.
-    _storage_client (storage.Client): Google Cloud Storage client.
-    bucket (storage.Bucket): GCS bucket object.
+        configs (Config): Configuration object containing GCP resource settings.
+        credentials (google.oauth2.credentials.Credentials): Google OAuth credentials.
+        _storage_client (storage.Client): Google Cloud Storage client.
+        bucket (storage.Bucket): GCS bucket object.
+        bucket_name (str): Name of the GCS bucket.
     """
 
     def __init__(self, _configs):
         """
-        Initialize the GCSHandler class.
+        Initializes the GCSHandler with the given configurations.
 
-        Parameters:
-        _configs (object): Configuration object containing GCP resource settings.
+        Args:
+            _configs (Config): Configuration object containing GCP resource settings.
         """
         self.configs = _configs
         self.credentials = None
@@ -232,6 +237,7 @@ class GCSHandler:
             print(f"Uploaded to {destination_blob_name}")
 
     def download_and_decrypt_file(self, file_id: str, destination_path: str):
+        # Downloads an encrypted file from GCS and decrypts it locally.
         bucket = self._storage_client.bucket(self.configs.gcp_resource.bucket_name)
         prefix = f"files-raw/{file_id}/"
         blobs = list(bucket.list_blobs(prefix=prefix))
@@ -258,6 +264,7 @@ class GCSHandler:
         return decrypted_file_path
 
     def find_existing_file(self, filename):
+        # Searches for an existing file in GCS by filename.
         try:
             logging.info(f"Searching for existing file: {filename}")
             blobs = self._storage_client.list_blobs(
@@ -277,6 +284,7 @@ class GCSHandler:
             return None
 
     def find_existing_file_by_hash(self, file_hash):
+        # Searches for an existing file in GCS by file hash.
         try:
             logging.info(f"Searching for existing file with hash: {file_hash}")
             blobs = self._storage_client.list_blobs(

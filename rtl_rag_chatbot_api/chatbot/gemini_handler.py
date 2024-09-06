@@ -24,7 +24,31 @@ logging.basicConfig(level=logging.INFO)
 
 
 class GeminiHandler:
+    """
+    Handles interactions with Google's Gemini AI models for text processing and embedding generation.
+
+    This class provides methods for initializing Gemini models, processing files, generating embeddings,
+    and interacting with a Chroma vector database for efficient querying.
+
+    Attributes:
+        configs: Configuration object containing settings for Gemini and other services.
+        gcs_handler: Google Cloud Storage handler for file operations.
+        embedding_model: Text embedding model from Gemini.
+        generative_model: Generative AI model from Gemini.
+        chroma_client: Client for interacting with the Chroma vector database.
+        max_tokens (int): Maximum number of tokens for text chunks.
+        file_id (str): Identifier for the current file being processed.
+        embedding_type (str): Type of embedding being used.
+    """
+
     def __init__(self, configs, gcs_handler):
+        """
+        Initializes the GeminiHandler with configurations and GCS handler.
+
+        Args:
+            configs: Configuration object containing settings for Gemini and other services.
+            gcs_handler: Google Cloud Storage handler for file operations.
+        """
         self.configs = configs
         self.gcs_handler = gcs_handler
         vertexai.init(project=configs.gemini.project, location=configs.gemini.location)
@@ -38,6 +62,7 @@ class GeminiHandler:
         self.embedding_type = None
 
     def initialize(self, model: str, file_id: str, embedding_type: str):
+        # Initializes the Gemini model with specific configurations.
         generation_config = GenerationConfig(
             temperature=0.9,
             top_p=1,
@@ -58,7 +83,8 @@ class GeminiHandler:
         self.file_id = file_id
         self.embedding_type = embedding_type
 
-    def get_answer(self, query: str) -> str:  # Remove file_id parameter
+    def get_answer(self, query: str) -> str:
+        # Generates an answer to a given query using relevant context.
         try:
             relevant_chunks = self.query_chroma(query, self.file_id, n_results=3)
             if not relevant_chunks:
@@ -85,11 +111,13 @@ class GeminiHandler:
     def process_file(
         self, file_id: str, decrypted_file_path: str, subfolder: str = "gemini"
     ):
+        # Processes a file by extracting text, splitting it, and creating embeddings.
         text = self.extract_text_from_file(decrypted_file_path)
         chunks = self.split_text(text)
         self.create_and_store_embeddings(chunks, file_id, subfolder)
 
     def extract_text_from_file(self, file_path: str) -> str:
+        #  Extracts text content from various file types.
         _, file_extension = os.path.splitext(file_path)
 
         if file_extension.lower() == ".pdf":
@@ -105,6 +133,7 @@ class GeminiHandler:
                     return file.read().decode("utf-8", errors="ignore")
 
     def extract_text_from_pdf(self, file_path: str) -> str:
+        # Extracts text from PDF files using pdfminer or OCR if necessary.
         try:
             logging.info(f"Attempting to extract text from PDF: {file_path}")
 
@@ -135,6 +164,18 @@ class GeminiHandler:
             raise
 
     def extract_text_from_pdf2(self, file_path: str) -> str:
+        """
+        Extracts text from a PDF file using pdfminer or OCR if necessary.
+
+        Args:
+            file_path (str): The path to the PDF file.
+
+        Returns:
+            str: The extracted text content from the PDF.
+
+        Raises:
+            Exception: If an error occurs during the extraction process.
+        """
         try:
             logging.info(f"Attempting to extract text from PDF: {file_path}")
             text = extract_text(file_path)
@@ -147,6 +188,15 @@ class GeminiHandler:
             raise
 
     def split_text(self, text: str) -> List[str]:
+        """
+        Splits the input text into chunks based on token limits.
+
+        Args:
+            text (str): The input text to be split into chunks.
+
+        Returns:
+            List[str]: A list of text chunks based on token limits.
+        """
         chunks = []
         paragraphs = text.split("\n\n")
         current_chunk = []
@@ -196,6 +246,17 @@ class GeminiHandler:
         )
 
     def query_chroma(self, query: str, file_id: str, n_results: int = 3) -> List[str]:
+        """
+        Queries the Chroma vector database for similar documents based on the input query.
+
+        Args:
+            query (str): The query string for similarity search.
+            file_id (str): The identifier of the file associated with the query.
+            n_results (int): The number of similar documents to retrieve (default is 3).
+
+        Returns:
+            List[str]: A list of text documents similar to the query.
+        """
         chroma_db_path = f"./chroma_db/{file_id}/{self.embedding_type}"
         client = chromadb.PersistentClient(
             path=chroma_db_path, settings=Settings(allow_reset=True, is_persistent=True)
@@ -216,16 +277,19 @@ class GeminiHandler:
         documents = results["documents"][0] if results["documents"] else []
         return documents[:n_results]  # Return up to n_results documents
 
+    # Retrieves the nearest neighbors for a given query.
     def get_n_nearest_neighbours(
         self, query: str, file_id: str, n_neighbors: int = 3
     ) -> List[str]:
         return self.query_chroma(query, file_id, n_results=n_neighbors)
 
+    # Generates a response using the Gemini model.
     def get_gemini_response(self, prompt: str) -> str:
         model = GenerativeModel(self.configs.gemini.model_pro)
         response = model.generate_content(prompt)
         return response.text
 
+    #  Generates embeddings for given texts.
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         try:
             embeddings = self.embedding_model.get_embeddings(texts)
@@ -238,6 +302,7 @@ class GeminiHandler:
             )
             raise
 
+    #  Uploads generated embeddings to Google Cloud Storage.
     def upload_embeddings_to_gcs(self, file_id: str, subfolder: str = "gemini"):
         chroma_db_path = f"./chroma_db/{file_id}/{subfolder}"
         gcs_subfolder = f"file-embeddings/{file_id}/{subfolder}"
@@ -253,6 +318,7 @@ class GeminiHandler:
             self.configs.gcp_resource.bucket_name, files_to_upload
         )
 
+    #  Creates embeddings for text chunks and stores them in the Chroma database.
     def create_and_store_embeddings(
         self, chunks: List[str], file_id: str, subfolder: str = "gemini"
     ):
@@ -308,6 +374,7 @@ class GeminiHandler:
             f"Completed processing {total_chunks} chunks for file_id: {file_id}"
         )
 
+    # Splits a large chunk of text into smaller, manageable pieces.
     def split_large_chunk(self, chunk: str, max_tokens: int) -> List[str]:
         sentences = re.split(r"(?<=[.!?])\s+", chunk)
         sub_chunks = []

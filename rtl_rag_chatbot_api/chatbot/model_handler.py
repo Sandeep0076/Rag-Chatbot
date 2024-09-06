@@ -3,11 +3,34 @@ from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 
 
 class ModelHandler:
+    """
+    Initializes and returns a model based on the specified model choice, file ID, and embedding type.
+
+    Args:
+        model_choice (str): The choice of the model to initialize.
+        file_id (str): Identifier for the file being processed.
+        embedding_type (str): Type of embedding to use.
+
+    Returns:
+        GeminiHandler or Chatbot: An instance of GeminiHandler or Chatbot based on the embedding type.
+    """
+
     def __init__(self, configs, gcs_handler):
         self.configs = configs
         self.gcs_handler = gcs_handler
 
     def initialize_model(self, model_choice: str, file_id: str, embedding_type: str):
+        """
+        Initializes and returns a model based on the specified model choice, file ID, and embedding type.
+
+        Args:
+            model_choice (str): The choice of the model to initialize.
+            file_id (str): Identifier for the file being processed.
+            embedding_type (str): Type of embedding to use.
+
+        Returns:
+            GeminiHandler or Chatbot: An instance of GeminiHandler or Chatbot based on the embedding type.
+        """
         if embedding_type == "gemini":
             gemini_model = (
                 self.configs.gemini.model_flash
