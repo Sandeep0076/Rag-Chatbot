@@ -69,7 +69,8 @@ class GeminiHandler:
             top_k=40,
             max_output_tokens=2048,
         )
-
+        # Setting it to BLOCK_NONE because it is blocking and returning none in chat
+        # for simple cases like if a girl is angry with a boy.
         safety_settings = {
             HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
