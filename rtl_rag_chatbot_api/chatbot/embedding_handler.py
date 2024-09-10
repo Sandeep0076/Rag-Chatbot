@@ -29,7 +29,7 @@ class EmbeddingHandler:
     def embeddings_exist(self, file_id: str) -> bool:
         # Check if embeddings exist for both Azure and Gemini
         azure_path = f"./chroma_db/{file_id}/azure"
-        gemini_path = f"./chroma_db/{file_id}/gemini"
+        gemini_path = f"./chroma_db/{file_id}/google"
         return (os.path.exists(azure_path) and len(os.listdir(azure_path)) > 0) and (
             os.path.exists(gemini_path) and len(os.listdir(gemini_path)) > 0
         )
@@ -44,7 +44,7 @@ class EmbeddingHandler:
         # Create necessary directories and paths
         chroma_db_path = f"./chroma_db/{file_id}"
         os.makedirs(os.path.join(chroma_db_path, "azure"), exist_ok=True)
-        os.makedirs(os.path.join(chroma_db_path, "gemini"), exist_ok=True)
+        os.makedirs(os.path.join(chroma_db_path, "google"), exist_ok=True)
 
         destination_file_path = f"local_data/{file_id}/"
         os.makedirs(destination_file_path, exist_ok=True)
@@ -97,7 +97,7 @@ class EmbeddingHandler:
 
             # Prepare and upload file info
             file_info = {
-                "embeddings": {"azure": azure_result, "gemini": gemini_result},
+                "embeddings": {"azure": azure_result, "google": gemini_result},
                 "is_image": is_image,
             }
             self.gcs_handler.upload_to_gcs(
@@ -148,14 +148,14 @@ class EmbeddingHandler:
     def _create_gemini_embeddings(self, file_id, file_path):
         logging.info("Generating Gemini embeddings...")
         gemini_handler = GeminiHandler(self.configs, self.gcs_handler)
-        gemini_handler.process_file(file_id, file_path, subfolder="gemini")
+        gemini_handler.process_file(file_id, file_path, subfolder="google")
         logging.info("Gemini embeddings generated successfully")
         return "completed"
 
     # Private method to upload embeddings to GCS
     def _upload_embeddings_to_gcs(self, file_id):
         logging.info("Uploading embeddings to GCS...")
-        for model in ["azure", "gemini"]:
+        for model in ["azure", "google"]:
             chroma_db_path = f"./chroma_db/{file_id}/{model}"
             gcs_subfolder = f"file-embeddings/{file_id}/{model}"
 

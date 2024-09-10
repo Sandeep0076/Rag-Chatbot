@@ -126,8 +126,9 @@ async def upload_file(
         original_filename = file.filename
 
         result = await file_handler.process_file(file, file_id, is_image)
-
+        print(f"Result from process_file: {result}")
         if result["status"] == "existing":
+            # Remove the await keyword here
             if file_handler.download_existing_file(result["file_id"]):
                 message = "File already exists. Embeddings downloaded."
             else:
@@ -142,6 +143,7 @@ async def upload_file(
             is_image=is_image,
         )
     except Exception as e:
+        print(f"Exception in upload_file: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -166,7 +168,7 @@ async def initialize_model(request: ModelInitRequest):
             )
 
         if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]:
-            embedding_type = "gemini"
+            embedding_type = "google"
         else:
             embedding_type = "azure"
 
@@ -241,7 +243,6 @@ async def create_embeddings(request: EmbeddingCreationRequest):
 
         return result
     except Exception as e:
-        logging.error(f"Error in create_embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -312,12 +313,12 @@ async def get_neighbors(query: NeighborsQuery):
     Returns a dictionary containing the list of neighbors.
     Handles exceptions and returns appropriate HTTP status codes with error details.
     """
-    try:
-        if query.file_id not in initialized_models:
-            raise HTTPException(
-                status_code=404, detail="Model not initialized for this file"
-            )
+    if query.file_id not in initialized_models:
+        raise HTTPException(
+            status_code=404, detail="Model not initialized for this file"
+        )
 
+    try:
         model = initialized_models[query.file_id]
 
         if isinstance(model, GeminiHandler):
@@ -328,7 +329,10 @@ async def get_neighbors(query: NeighborsQuery):
             neighbors_with_metadata = model.get_n_nearest_neighbours(
                 query.text, n_neighbours=query.n_neighbors
             )
-            neighbors = [neighbor.node.text for neighbor in neighbors_with_metadata]
+            neighbors = [
+                neighbor.node.text if hasattr(neighbor, "node") else neighbor
+                for neighbor in neighbors_with_metadata
+            ]
 
         return {"neighbors": neighbors}
     except Exception as e:

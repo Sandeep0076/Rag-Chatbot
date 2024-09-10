@@ -31,7 +31,7 @@ class ModelHandler:
         Returns:
             GeminiHandler or Chatbot: An instance of GeminiHandler or Chatbot based on the embedding type.
         """
-        if embedding_type == "gemini":
+        if model_choice.lower() in ["gemini-flash", "gemini-pro"]:
             gemini_model = (
                 self.configs.gemini.model_flash
                 if model_choice.lower() == "gemini-flash"

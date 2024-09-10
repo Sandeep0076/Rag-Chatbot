@@ -102,7 +102,11 @@ To run the Version logger interface:
 ```
 python version_doc/version_logger.py
 ```
+To run unit tests:
 
+```
+pytest tests/api_unit_tests.py
+```
 ### API Endpoints
 
 1. **Health Check**: GET `/health`

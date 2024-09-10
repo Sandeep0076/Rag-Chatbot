@@ -70,7 +70,7 @@ class FileHandler:
             return {
                 "file_id": existing_file_id,
                 "is_image": is_image,
-                "message": "File with identical content already exists. Embeddings downloaded.",
+                "message": "File already exists. Embeddings downloaded.",
                 "status": "existing",
             }
 

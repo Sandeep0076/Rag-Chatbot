@@ -110,7 +110,7 @@ class GeminiHandler:
             return "I'm sorry, but I encountered an error while trying to answer your question. Please try again."
 
     def process_file(
-        self, file_id: str, decrypted_file_path: str, subfolder: str = "gemini"
+        self, file_id: str, decrypted_file_path: str, subfolder: str = "google"
     ):
         # Processes a file by extracting text, splitting it, and creating embeddings.
         text = self.extract_text_from_file(decrypted_file_path)
@@ -284,7 +284,7 @@ class GeminiHandler:
     ) -> List[str]:
         return self.query_chroma(query, file_id, n_results=n_neighbors)
 
-    # Generates a response using the Gemini model.
+    # Generates a response using the Google model.
     def get_gemini_response(self, prompt: str) -> str:
         model = GenerativeModel(self.configs.gemini.model_pro)
         response = model.generate_content(prompt)
@@ -304,7 +304,7 @@ class GeminiHandler:
             raise
 
     #  Uploads generated embeddings to Google Cloud Storage.
-    def upload_embeddings_to_gcs(self, file_id: str, subfolder: str = "gemini"):
+    def upload_embeddings_to_gcs(self, file_id: str, subfolder: str = "google"):
         chroma_db_path = f"./chroma_db/{file_id}/{subfolder}"
         gcs_subfolder = f"file-embeddings/{file_id}/{subfolder}"
 
@@ -321,7 +321,7 @@ class GeminiHandler:
 
     #  Creates embeddings for text chunks and stores them in the Chroma database.
     def create_and_store_embeddings(
-        self, chunks: List[str], file_id: str, subfolder: str = "gemini"
+        self, chunks: List[str], file_id: str, subfolder: str = "google"
     ):
         chroma_db_path = f"./chroma_db/{file_id}/{subfolder}"
         os.makedirs(chroma_db_path, exist_ok=True)

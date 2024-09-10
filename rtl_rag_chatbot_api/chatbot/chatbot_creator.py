@@ -51,12 +51,20 @@ class Chatbot:
             self.query_engine = self._create_query_engine()
 
     # Retrieves the configuration for the chosen model.
+
     def _get_model_config(self):
-        if self.model_choice not in self.configs.azure_llm.models:
-            raise ValueError(
-                f"Invalid model choice. Choose from: {list(self.configs.azure_llm.models.keys())}"
-            )
-        return self.configs.azure_llm.models[self.model_choice]
+        if self.model_choice.lower() in ["gemini-flash", "gemini-pro"]:
+            # Handle Gemini models
+            return self.configs.gemini
+        elif self.model_choice in self.configs.azure_llm.models:
+            # Handle Azure models
+            return self.configs.azure_llm.models[self.model_choice]
+        else:
+            valid_models = list(self.configs.azure_llm.models.keys()) + [
+                "gemini-flash",
+                "gemini-pro",
+            ]
+            raise ValueError(f"Invalid model choice. Choose from: {valid_models}")
 
     def _create_index(self):
         """
