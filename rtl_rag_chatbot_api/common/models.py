@@ -41,3 +41,8 @@ class ImageAnalysisUpload(BaseModel):
     original_filename: str
     is_image: bool
     analysis: str
+
+
+class EmbeddingCreationRequest(BaseModel):
+    file_id: str
+    is_image: bool = Field(..., description="Whether the file is an image or not")

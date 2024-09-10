@@ -1,28 +1,30 @@
 import json
 import logging
 import os
-import shutil
+
+# import shutil
 import uuid
 from pathlib import Path
 
-import chromadb
+# import chromadb
 import uvicorn
-from chromadb.config import Settings
+
+# from chromadb.config import Settings
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
-# from pydantic import BaseModel
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
+from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
+from rtl_rag_chatbot_api.chatbot.file_handler import FileHandler
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
-from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
-from rtl_rag_chatbot_api.common.encryption_utils import encrypt_file
+from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.common.models import (
+    EmbeddingCreationRequest,
     FileUploadResponse,
     ModelInitRequest,
     NeighborsQuery,
@@ -42,7 +44,39 @@ logging.basicConfig(level=logging.INFO)
 
 configs = Config()
 gcs_handler = GCSHandler(configs)
-app = FastAPI()
+file_handler = FileHandler(configs, gcs_handler)
+model_handler = ModelHandler(configs, gcs_handler)
+embedding_handler = EmbeddingHandler(configs, gcs_handler)
+
+title = "RAG PDF API"
+
+description = """
+RAG PDF API is a FastAPI-based application for processing and
+querying PDF documents using Retrieval-Augmented Generation (RAG).
+
+## Workflow
+
+1. Upload a PDF file using the `/file/upload` endpoint.
+2. Create embeddings for the uploaded file with the `/embeddings/create` endpoint.
+3. Initialize the model using the `/model/initialize` endpoint. By default
+GPT4_omni is selected. Its optional and mainly used when we need to change model for chatting.
+4. Chat with the PDF content using the `/file/chat` endpoint.
+
+Additional features:
+- Analyze images with the `/image/analyze` endpoint.
+- Get nearest neighbors for a query with the `/file/neighbors` endpoint.
+- View available models using the `/available-models` endpoint.
+- Clean up files with the `/file/cleanup` endpoint.
+
+For more detailed information, refer to the individual endpoint descriptions.
+"""
+
+app = FastAPI(
+    title=title,
+    description=description,
+    version="3.1.0",
+)
+
 global gemini_handler
 gemini_handler = None
 # Global dictionary to store initialized chatbots
@@ -100,40 +134,151 @@ async def info():
     }
 
 
+@app.post("/file/upload", response_model=FileUploadResponse)
+async def upload_file(
+    file: UploadFile = File(...),
+    is_image: bool = Form(...),
+):
+    """
+    Handles the uploading of a file with optional image flag.
+
+    Args:
+        file (UploadFile): The file to be uploaded.
+        is_image (bool): Flag indicating if the file is an image.
+
+    Returns:
+        FileUploadResponse: Response containing details of the uploaded file.
+    """
+    try:
+        file_id = str(uuid.uuid4())
+        original_filename = file.filename
+
+        result = await file_handler.process_file(file, file_id, is_image)
+        print(f"Result from process_file: {result}")
+        if result["status"] == "existing":
+            # Remove the await keyword here
+            if file_handler.download_existing_file(result["file_id"]):
+                message = "File already exists. Embeddings downloaded."
+            else:
+                message = "File already exists, but error downloading embeddings."
+        else:
+            message = "File uploaded, encrypted, and processed successfully"
+
+        return FileUploadResponse(
+            message=message,
+            file_id=result["file_id"],
+            original_filename=original_filename,
+            is_image=is_image,
+        )
+    except Exception as e:
+        print(f"Exception in upload_file: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/model/initialize")
+async def initialize_model(request: ModelInitRequest):
+    """
+    Endpoint to initialize a model based on the specified model choice, file ID, and embedding type.
+
+    Args:
+        request (ModelInitRequest): Request object containing model choice and file ID.
+
+    Returns:
+        dict: A message indicating the successful initialization of the specified model.
+    Raises:
+        HTTPException: If embeddings are not found for the specified file or if an error occurs during initialization.
+    """
+    try:
+        file_info = embedding_handler.get_embeddings_info(request.file_id)
+        if not file_info:
+            raise HTTPException(
+                status_code=404, detail="Embeddings not found for this file"
+            )
+
+        if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]:
+            embedding_type = "google"
+        else:
+            embedding_type = "azure"
+
+        model = model_handler.initialize_model(
+            request.model_choice, request.file_id, embedding_type
+        )
+        initialized_models[request.file_id] = model
+        return {"message": f"Model {request.model_choice} initialized successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/file/chat")
 async def chat(query: Query):
+    """
+    Endpoint to interact with the chatbot using a specific file.
+    Checks if the model is initialized for the given file, retrieves the model,
+    and calls get_answer on the model with the provided text.
+    Returns the response from the model. Handles exceptions and logs errors appropriately.
+    """
     try:
-        file_id = query.file_id
-        model_choice = query.model_choice.lower()
-
-        if file_id not in initialized_models:
+        if query.file_id not in initialized_models:
             raise HTTPException(
                 status_code=404, detail="Model not initialized for this file"
             )
 
-        model_info = initialized_models[file_id]
+        model = initialized_models[query.file_id]
+        logging.info(f"Model type: {type(model)}")
 
-        if model_info["type"] == "gemini":
-            if gemini_handler is None:
-                raise HTTPException(
-                    status_code=404, detail="Gemini handler not initialized"
-                )
-            response = gemini_handler.get_answer(query.text, file_id)
-        else:
-            response = model_info["model"].get_answer(query.text)
-        logging.info(f"{model_choice} is used for chatting.")
+        if isinstance(model, dict):
+            model = model["model"]
+            logging.info(f"Model extracted from dict: {type(model)}")
+
+        logging.info(f"Calling get_answer on model: {type(model)}")
+        response = model.get_answer(query.text)
+
         return {"response": response}
-    except HTTPException as he:
-        raise he
     except Exception as e:
-        logging.error(f"Unexpected error in chat endpoint: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"An unexpected error occurred: {str(e)}"
-        ) @ app.get("/available-models")
+        logging.error(f"Error in chat endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/embeddings/create")
+async def create_embeddings(request: EmbeddingCreationRequest):
+    """
+    Endpoint to create embeddings for a file based on the provided request.
+
+    Parameters:
+        request (EmbeddingCreationRequest): Request object containing file_id and is_image flag.
+
+    Returns:
+        dict: A dictionary with a message indicating the status of the embeddings creation process.
+            If embeddings already exist, returns info if available; otherwise, returns appropriate messages.
+            Raises HTTPException with status code 500 in case of errors.
+    """
+    try:
+        embedding_handler = EmbeddingHandler(configs, gcs_handler)
+
+        if embedding_handler.embeddings_exist(request.file_id):
+            embeddings_info = embedding_handler.get_embeddings_info(request.file_id)
+            if embeddings_info:
+                return {
+                    "message": "Embeddings already exist for this file",
+                    "info": embeddings_info,
+                }
+            else:
+                return {"message": "Embeddings exist but info not found"}
+
+        result = await embedding_handler.create_and_upload_embeddings(
+            request.file_id, request.is_image
+        )
+
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/available-models")
 async def get_available_models():
+    """
+    Endpoint to retrieve a list of available models including Azure LLM models and Gemini models.
+    """
     azure_models = list(configs.azure_llm.models.keys())
     gemini_models = ["gemini-flash", "gemini-pro"]
     all_models = azure_models + gemini_models
@@ -156,210 +301,17 @@ async def cleanup_files():
         )
 
 
-@app.post("/file/upload", response_model=FileUploadResponse)
-async def upload_file(
-    file: UploadFile = File(...),
-    is_image: bool = Form(...),
-    model_choice: str = Form(...),
-):
-    global gemini_handler, initialized_models
-    try:
-        original_filename = file.filename
-        logging.info(
-            f"Received file for upload: {original_filename}, model: {model_choice}"
-        )
-
-        existing_file_id = gcs_handler.find_existing_file(original_filename)
-        if existing_file_id:
-            logging.info(
-                f"File {original_filename} already exists with ID: {existing_file_id}"
-            )
-            chroma_db_path = f"./chroma_db/{existing_file_id}"
-            os.makedirs(chroma_db_path, exist_ok=True)
-
-            try:
-                gcs_handler.download_files_from_folder_by_id(existing_file_id)
-                logging.info(
-                    f"Embeddings downloaded for existing file: {existing_file_id}"
-                )
-
-                return FileUploadResponse(
-                    message="File already exists. Embeddings downloaded.",
-                    file_id=existing_file_id,
-                    original_filename=original_filename,
-                    is_image=is_image,
-                )
-            except Exception as e:
-                logging.error(f"Error downloading embeddings: {str(e)}")
-                raise HTTPException(
-                    status_code=500, detail=f"Error processing existing file: {str(e)}"
-                )
-
-        # If the file doesn't exist, proceed with the new file upload process
-        file_id = str(uuid.uuid4())
-
-        logging.info(f"File {original_filename} is new. Processing....")
-        file_extension = os.path.splitext(original_filename)[1]
-        encrypted_filename = f"{original_filename}.encrypted"
-
-        temp_file_path = f"temp_{file_id}_{file_extension}"
-
-        with open(temp_file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-
-        encrypted_file_path = encrypt_file(temp_file_path)
-
-        raw_files_folder = "files-raw"
-        destination_blob_name = f"{raw_files_folder}/{file_id}/{encrypted_filename}"
-        gcs_handler.upload_to_gcs(
-            configs.gcp_resource.bucket_name,
-            {
-                "file": (encrypted_file_path, destination_blob_name),
-                "metadata": (
-                    {"is_image": is_image, "model_choice": model_choice},
-                    f"{raw_files_folder}/{file_id}/metadata.json",
-                ),
-            },
-        )
-
-        logging.info(f"File encrypted and uploaded to GCS: {destination_blob_name}")
-
-        os.remove(temp_file_path)
-        os.remove(encrypted_file_path)
-
-        chroma_db_path = f"./chroma_db/{file_id}"
-        os.makedirs(chroma_db_path, exist_ok=True)
-        os.chmod(chroma_db_path, 0o755)
-
-        destination_file_path = f"local_data/{file_id}/"
-        os.makedirs(destination_file_path, exist_ok=True)
-
-        analysis_json_path = None
-        decrypted_file_path = None
-        try:
-            decrypted_file_path = gcs_handler.download_and_decrypt_file(
-                file_id, destination_file_path
-            )
-            logging.info(f"File decrypted: {decrypted_file_path}")
-
-            # Verify that the file is readable
-            with open(decrypted_file_path, "rb") as test_file:
-                test_content = test_file.read(1024)  # Read first 1KB to test
-            if not test_content:
-                raise IOError(
-                    f"Decrypted file at {decrypted_file_path} appears to be empty or unreadable"
-                )
-
-            # logging.info(f"Successfully verified decrypted file: {decrypted_file_path}")
-
-            if is_image:
-                logging.info("Processing image file...")
-                image_analysis_result = analyze_images(decrypted_file_path)
-                if os.path.exists(decrypted_file_path):
-                    os.remove(decrypted_file_path)
-
-                analysis_json_path = os.path.join(
-                    destination_file_path, f"{file_id}_analysis.json"
-                )
-                with open(analysis_json_path, "w") as f:
-                    json.dump(image_analysis_result, f)
-
-            # Initialize the selected model before processing
-            if model_choice.lower() in ["gemini-flash", "gemini-pro"]:
-                if gemini_handler is None:
-                    gemini_handler = GeminiHandler(configs, gcs_handler)
-                gemini_model = (
-                    configs.gemini.model_flash
-                    if model_choice.lower() == "gemini-flash"
-                    else configs.gemini.model_pro
-                )
-                gemini_handler.initialize(model=gemini_model)
-                initialized_models[file_id] = {
-                    "type": "gemini",
-                    "model": gemini_handler,
-                }
-            else:
-                # Initialize Azure OpenAI model
-                azure_model = Chatbot(
-                    configs, file_id=file_id, model_choice=model_choice
-                )
-                initialized_models[file_id] = {"type": "azure", "model": azure_model}
-
-            # Use the initialized model based on the choice
-            if model_choice.lower() in ["gemini-flash", "gemini-pro"]:
-                gemini_handler.process_file(file_id, decrypted_file_path)
-                gemini_handler.upload_embeddings_to_gcs(file_id)
-                logging.info(f"Gemini embeddings uploaded to GCP for file: {file_id}")
-            else:
-                run_preprocessor(
-                    configs=configs,
-                    text_data_folder_path=destination_file_path,
-                    file_id=file_id,
-                    chroma_db_path=chroma_db_path,
-                    chroma_db=chromadb.PersistentClient(
-                        path=chroma_db_path,
-                        settings=Settings(allow_reset=True, is_persistent=True),
-                    ),
-                    is_image=is_image,
-                    gcs_handler=gcs_handler,
-                )
-                logging.info(f"Azure embeddings uploaded to GCP for file: {file_id}")
-
-        except Exception as e:
-            logging.error(f"Error during file processing: {str(e)}")
-            raise
-        finally:
-            if decrypted_file_path and os.path.exists(decrypted_file_path):
-                os.remove(decrypted_file_path)
-            if analysis_json_path and os.path.exists(analysis_json_path):
-                os.remove(analysis_json_path)
-            shutil.rmtree(destination_file_path, ignore_errors=True)
-
-        return FileUploadResponse(
-            message="File uploaded, encrypted, and preprocessed successfully",
-            file_id=file_id,
-            original_filename=original_filename,
-            is_image=is_image,
-        )
-
-    except Exception as e:
-        logging.error(
-            f"Error in file upload and preprocessing: {str(e)}", exc_info=True
-        )
-        raise HTTPException(
-            status_code=500, detail=f"An error occurred during file upload: {str(e)}"
-        )
-
-
-@app.post("/model/initialize")
-async def initialize_model(request: ModelInitRequest):
-    global initialized_azure_model, gemini_handler
-    try:
-        model_choice = request.model_choice.lower()
-
-        if model_choice in ["gemini-flash", "gemini-pro"]:
-            gemini_model = (
-                configs.gemini.model_flash
-                if model_choice == "gemini-flash"
-                else configs.gemini.model_pro
-            )
-            gemini_handler = GeminiHandler(configs, gcs_handler)
-            gemini_handler.initialize(model=gemini_model)
-        else:
-            # Initialize Azure OpenAI model
-            initialized_azure_model = Chatbot(
-                configs, file_id=request.file_id, model_choice=model_choice
-            )
-
-        return {"message": f"Model {model_choice} initialized successfully"}
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error initializing model: {str(e)}"
-        )
-
-
 async def initialize_chatbot(file_id: str, model_choice: str):
+    """
+    Initialize a chatbot with the given file ID and model choice.
+
+    Parameters:
+    - file_id (str): The ID of the file to initialize the chatbot with.
+    - model_choice (str): The choice of model for the chatbot.
+
+    Raises:
+    - HTTPException: If there is an error during chatbot setup, such as missing files or invalid model choice.
+    """
     chroma_db_path = f"./chroma_db/{file_id}"
     if not os.path.exists(chroma_db_path):
         logging.error(f"Chroma DB path not found: {chroma_db_path}")
@@ -383,43 +335,46 @@ async def initialize_chatbot(file_id: str, model_choice: str):
 
 @app.post("/file/neighbors")
 async def get_neighbors(query: NeighborsQuery):
+    """
+    Endpoint to retrieve nearest neighbors for a given text query and file ID.
+    Checks if the model is initialized for the specified file, then retrieves the nearest neighbors accordingly.
+    Returns a dictionary containing the list of neighbors.
+    Handles exceptions and returns appropriate HTTP status codes with error details.
+    """
+    if query.file_id not in initialized_models:
+        raise HTTPException(
+            status_code=404, detail="Model not initialized for this file"
+        )
+
     try:
-        file_id = query.file_id
+        model = initialized_models[query.file_id]
 
-        if file_id not in initialized_models:
-            raise HTTPException(
-                status_code=404, detail="Model not initialized for this file"
+        if isinstance(model, GeminiHandler):
+            neighbors = model.get_n_nearest_neighbours(
+                query.text, query.file_id, query.n_neighbors
             )
-
-        model_info = initialized_models[file_id]
-
-        if model_info["type"] == "gemini":
-            if gemini_handler is None:
-                raise HTTPException(
-                    status_code=404, detail="Gemini handler not initialized"
-                )
-            neighbors = gemini_handler.get_n_nearest_neighbours(
-                query.text, file_id, query.n_neighbors
-            )
-        else:
-            chatbot = model_info["model"]
-            neighbors_with_metadata = chatbot.get_n_nearest_neighbours(
+        else:  # Assuming it's a Chatbot instance for Azure models
+            neighbors_with_metadata = model.get_n_nearest_neighbours(
                 query.text, n_neighbours=query.n_neighbors
             )
-            neighbors = [neighbor.node.text for neighbor in neighbors_with_metadata]
+            neighbors = [
+                neighbor.node.text if hasattr(neighbor, "node") else neighbor
+                for neighbor in neighbors_with_metadata
+            ]
 
         return {"neighbors": neighbors}
-    except HTTPException as he:
-        raise he
     except Exception as e:
-        logging.error(f"Unexpected error in neighbors endpoint: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"An unexpected error occurred: {str(e)}"
-        )
+        logging.error(f"Error in get_neighbors: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
 @app.post("/image/analyze")
 async def analyze_image_endpoint(file: UploadFile = File(...)):
+    """
+    Endpoint to analyze an uploaded image file.
+    Saves the analysis result to a JSON file and returns the result details.
+    Handles file upload, temporary file creation, analysis, result saving, and error handling.
+    """
     try:
         # Get the file extension from the original filename
         file_extension = Path(file.filename).suffix
