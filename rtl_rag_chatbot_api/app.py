@@ -48,7 +48,35 @@ file_handler = FileHandler(configs, gcs_handler)
 model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
-app = FastAPI()
+title = "RAG PDF API"
+
+description = """
+RAG PDF API is a FastAPI-based application for processing and
+querying PDF documents using Retrieval-Augmented Generation (RAG).
+
+## Workflow
+
+1. Upload a PDF file using the `/file/upload` endpoint.
+2. Create embeddings for the uploaded file with the `/embeddings/create` endpoint.
+3. Initialize the model using the `/model/initialize` endpoint. By default
+GPT4_omni is selected. Its optional and mainly used when we need to change model for chatting.
+4. Chat with the PDF content using the `/file/chat` endpoint.
+
+Additional features:
+- Analyze images with the `/image/analyze` endpoint.
+- Get nearest neighbors for a query with the `/file/neighbors` endpoint.
+- View available models using the `/available-models` endpoint.
+- Clean up files with the `/file/cleanup` endpoint.
+
+For more detailed information, refer to the individual endpoint descriptions.
+"""
+
+app = FastAPI(
+    title=title,
+    description=description,
+    version="3.1.0",
+)
+
 global gemini_handler
 gemini_handler = None
 # Global dictionary to store initialized chatbots
