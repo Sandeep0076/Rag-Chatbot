@@ -9,8 +9,9 @@ RUN adduser \
     --disabled-password \
     --uid 4711 \
     worker \
-    && mkdir -p /code /opt/poetry \
-    && chown -R worker:worker /code
+    && mkdir -p /code /opt/poetry /nltk_data \
+    && chown -R worker:worker /code \
+    && chown -R worker:worker /nltk_data
 
 WORKDIR /code
 
@@ -42,6 +43,8 @@ RUN poetry install --no-interaction --only main
     # Clear the cache: it is mostly pip and poetry cache and the pipeline crashed without clearing it
 RUN rm -rf /home/nobody/.cache/pypoetry/cache \
     && rm -rf /home/nobody/.cache/pypoetry/artifacts
+    # Prepare nltk punkt data beforehand
+RUN nltk.download('punkt', download_dir='/nltk_data')
 
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                     Runtime - Stage                      │
@@ -51,6 +54,7 @@ ENV PATH="/opt/poetry/bin:code/.venv/bin:$PATH"
 
 COPY --from=build /opt/poetry /opt/poetry
 COPY --from=build --chown=worker:worker /code /code
+COPY --from=build --chown=worker:worker /nltk_data /nltk_data
 
 EXPOSE 8080
 
