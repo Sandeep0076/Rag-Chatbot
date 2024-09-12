@@ -33,7 +33,7 @@ USER worker
 WORKDIR /code
 COPY --chown=nobody . ./
 
-RUN python3 -m pip install --user python-dev-tools
+RUN python3 -m pip install --user python-dev-tools nltk
 ARG GITLAB_CI_TOKEN
 RUN poetry config repositories.python-packages https://gitlab.com/api/v4/projects/33281928/packages/pypi/simple/
 RUN poetry config http-basic.python-packages gitlab-ci-token ${GITLAB_CI_TOKEN} --no-interaction
