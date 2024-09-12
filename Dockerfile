@@ -10,8 +10,7 @@ RUN adduser \
     --uid 4711 \
     worker \
     && mkdir -p /code /opt/poetry /nltk_data \
-    && chown -R worker:worker /code \
-    && chown -R worker:worker /nltk_data
+    && chown -R worker:worker /code /opt/poetry /nltk_data
 
 WORKDIR /code
 
@@ -31,7 +30,6 @@ RUN apt-get update && apt-get install build-essential -y  && apt-get install -y 
     && curl -sSL https://install.python-poetry.org | python3 -
 
 USER worker
-
 WORKDIR /code
 COPY --chown=nobody . ./
 
