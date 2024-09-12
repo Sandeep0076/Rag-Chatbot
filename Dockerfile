@@ -44,7 +44,7 @@ RUN poetry install --no-interaction --only main
 RUN rm -rf /home/nobody/.cache/pypoetry/cache \
     && rm -rf /home/nobody/.cache/pypoetry/artifacts
     # Prepare nltk punkt data beforehand
-RUN nltk.download('punkt', download_dir='/nltk_data')
+RUN python -m nltk.downloader punkt -d /nltk_data
 
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                     Runtime - Stage                      │
