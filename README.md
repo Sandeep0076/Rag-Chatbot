@@ -119,6 +119,7 @@ pytest tests/api_unit_tests.py
 8. **Initialize Model**: POST `/model/initialize`
 9. **Analyze Image**: POST `/image/analyze`
 10. **Metrics**: GET `/metrics`
+11. **Delete**: GET `/delete`
 
 ## Architecture
 

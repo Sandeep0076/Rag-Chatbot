@@ -129,9 +129,6 @@ async def test_create_embeddings():
     assert response.json() == {"message": "Embeddings created successfully"}
 
 
-# -------
-
-
 @pytest.mark.asyncio
 async def test_get_neighbors_model_not_initialized():
     with patch("rtl_rag_chatbot_api.app.initialized_models", {}):
@@ -202,3 +199,56 @@ async def test_get_neighbors_gemini():
     assert response.json() == {
         "neighbors": ["Gemini Neighbor 1", "Gemini Neighbor 2", "Gemini Neighbor 3"]
     }
+
+
+@pytest.mark.asyncio
+async def test_delete_files():
+    file_ids = ["file1", "file2", "file3"]
+
+    # Mock GCSHandler and its methods
+    with patch("rtl_rag_chatbot_api.app.GCSHandler") as MockGCSHandler, patch(
+        "rtl_rag_chatbot_api.app.os.path.exists", return_value=True
+    ) as mock_exists, patch("rtl_rag_chatbot_api.app.shutil.rmtree") as mock_rmtree:
+        mock_gcs_handler = MockGCSHandler.return_value
+
+        # Set up spies on all potentially relevant methods
+        mock_gcs_handler.delete_file_and_embeddings = MagicMock()
+        mock_gcs_handler.delete_folder = MagicMock()
+
+        response = client.request("DELETE", "/files", json={"file_ids": file_ids})
+
+    print(f"Response status code: {response.status_code}")
+    print(f"Response content: {response.json()}")
+
+    print(f"GCSHandler initialization: {MockGCSHandler.call_args_list}")
+    print(
+        f"delete_file_and_embeddings call count: {mock_gcs_handler.delete_file_and_embeddings.call_count}"
+    )
+    print(
+        f"delete_file_and_embeddings call args: {mock_gcs_handler.delete_file_and_embeddings.call_args_list}"
+    )
+    print(f"delete_folder call count: {mock_gcs_handler.delete_folder.call_count}")
+    print(f"delete_folder call args: {mock_gcs_handler.delete_folder.call_args_list}")
+    print(f"os.path.exists call count: {mock_exists.call_count}")
+    print(f"os.path.exists call args: {mock_exists.call_args_list}")
+    print(f"shutil.rmtree call count: {mock_rmtree.call_count}")
+    print(f"shutil.rmtree call args: {mock_rmtree.call_args_list}")
+
+    assert response.status_code == 200
+    response_data = response.json()
+
+    assert "message" in response_data
+    assert "deleted_files" in response_data
+
+    # Check if any delete method was called
+    delete_method_called = (
+        mock_gcs_handler.delete_file_and_embeddings.call_count > 0
+        or mock_gcs_handler.delete_folder.call_count > 0
+    )
+
+    assert (
+        delete_method_called
+    ), "Either delete_file_and_embeddings or delete_folder should be called"
+
+    # Verify that all file_ids are in the deleted_files list
+    assert set(response_data["deleted_files"]) == set(file_ids)

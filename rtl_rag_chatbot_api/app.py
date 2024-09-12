@@ -1,8 +1,10 @@
+"""
+Main FastAPI application for the RAG PDF API.
+"""
 import json
 import logging
 import os
-
-# import shutil
+import shutil
 import uuid
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.common.models import (
     EmbeddingCreationRequest,
+    FileDeleteRequest,
     FileUploadResponse,
     ModelInitRequest,
     NeighborsQuery,
@@ -37,9 +40,6 @@ os.environ["GLOG_minloglevel"] = "2"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-"""
-Main FastAPI application for the RAG PDF API.
-"""
 logging.basicConfig(level=logging.INFO)
 
 configs = Config()
@@ -418,6 +418,45 @@ async def analyze_image_endpoint(file: UploadFile = File(...)):
         raise HTTPException(
             status_code=500, detail=f"An error occurred during image analysis: {str(e)}"
         )
+
+
+@app.delete("/files")
+async def delete_files(request: FileDeleteRequest):
+    file_ids = request.file_ids
+    deleted_files = []
+    errors = []
+
+    gcs_handler = GCSHandler(configs)
+
+    for file_id in file_ids:
+        try:
+            # Delete file and embeddings from GCS
+            gcs_handler.delete_file_and_embeddings(file_id)
+
+            # Delete local Chroma DB files
+            chroma_db_path = f"./chroma_db/{file_id}"
+            if os.path.exists(chroma_db_path):
+                shutil.rmtree(chroma_db_path)
+
+            # Remove the file from initialized_models if it exists
+            if file_id in initialized_models:
+                del initialized_models[file_id]
+
+            deleted_files.append(file_id)
+        except Exception as e:
+            errors.append({"file_id": file_id, "error": str(e)})
+
+    if errors:
+        return {
+            "message": "Some files could not be deleted",
+            "deleted_files": deleted_files,
+            "errors": errors,
+        }
+    else:
+        return {
+            "message": "All files and their embeddings have been deleted successfully",
+            "deleted_files": deleted_files,
+        }
 
 
 def start():

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -46,3 +46,7 @@ class ImageAnalysisUpload(BaseModel):
 class EmbeddingCreationRequest(BaseModel):
     file_id: str
     is_image: bool = Field(..., description="Whether the file is an image or not")
+
+
+class FileDeleteRequest(BaseModel):
+    file_ids: List[str]

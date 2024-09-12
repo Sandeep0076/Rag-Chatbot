@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import google.auth
 import google.oauth2.credentials
+from google.api_core import exceptions
 from google.cloud import storage
 
 from rtl_rag_chatbot_api.common.encryption_utils import decrypt_file
@@ -306,3 +307,31 @@ class GCSHandler:
         except Exception as e:
             logging.error(f"Error in find_existing_file_by_hash: {str(e)}")
             return None
+
+    def delete_folder(self, folder_path: str):
+        """
+        Deletes a folder and all its contents from the bucket.
+
+        Args:
+            folder_path (str): The path of the folder to delete.
+        """
+        blobs = self.bucket.list_blobs(prefix=folder_path)
+        try:
+            for blob in blobs:
+                blob.delete()
+            logging.info(f"Deleted folder: {folder_path}")
+        except exceptions.NotFound:
+            logging.warning(f"Folder not found: {folder_path}")
+        except exceptions.GoogleAPIError as e:
+            logging.error(f"An error occurred while deleting folder {folder_path}: {e}")
+
+    def delete_file_and_embeddings(self, file_id: str):
+        """
+        Deletes a file and its associated embeddings from GCS.
+
+        Args:
+            file_id (str): The ID of the file to delete.
+        """
+        folders_to_delete = [f"files-raw/{file_id}/", f"file-embeddings/{file_id}/"]
+        for folder in folders_to_delete:
+            self.delete_folder(folder)
