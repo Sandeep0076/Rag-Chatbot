@@ -9,8 +9,8 @@ RUN adduser \
     --disabled-password \
     --uid 4711 \
     worker \
-    && mkdir -p /code /opt/poetry \
-    && chown -R worker:worker /code
+    && mkdir -p /code /opt/poetry /nltk_data \
+    && chown -R worker:worker /code /opt/poetry /nltk_data
 
 WORKDIR /code
 
@@ -30,11 +30,10 @@ RUN apt-get update && apt-get install build-essential -y  && apt-get install -y 
     && curl -sSL https://install.python-poetry.org | python3 -
 
 USER worker
-
 WORKDIR /code
 COPY --chown=nobody . ./
 
-RUN python3 -m pip install --user python-dev-tools
+RUN python3 -m pip install --user python-dev-tools nltk
 ARG GITLAB_CI_TOKEN
 RUN poetry config repositories.python-packages https://gitlab.com/api/v4/projects/33281928/packages/pypi/simple/
 RUN poetry config http-basic.python-packages gitlab-ci-token ${GITLAB_CI_TOKEN} --no-interaction
@@ -42,6 +41,8 @@ RUN poetry install --no-interaction --only main
     # Clear the cache: it is mostly pip and poetry cache and the pipeline crashed without clearing it
 RUN rm -rf /home/nobody/.cache/pypoetry/cache \
     && rm -rf /home/nobody/.cache/pypoetry/artifacts
+    # Prepare nltk punkt data beforehand
+RUN python -m nltk.downloader punkt -d /nltk_data
 
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                     Runtime - Stage                      │
@@ -51,6 +52,7 @@ ENV PATH="/opt/poetry/bin:code/.venv/bin:$PATH"
 
 COPY --from=build /opt/poetry /opt/poetry
 COPY --from=build --chown=worker:worker /code /code
+COPY --from=build --chown=worker:worker /nltk_data /nltk_data
 
 EXPOSE 8080
 
