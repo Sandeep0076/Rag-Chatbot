@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -398,11 +399,15 @@ class GeminiHandler:
 
         return sub_chunks
 
-    def get_gemini_response(self, prompt: str) -> str:
-        # get answers without context limit(NO RAG)
+    async def get_gemini_response_stream(self, prompt: str):
         try:
-            response = self.generative_model.generate_content(prompt)
-            return response.text
+            responses = self.generative_model.generate_content(prompt, stream=True)
+            for chunk in responses:
+                if chunk.text:
+                    yield chunk.text
+                    await asyncio.sleep(
+                        0.1
+                    )  # Add a small delay to make streaming more noticeable
         except Exception as e:
-            logging.error(f"Error in get_gemini_response: {str(e)}")
-            raise
+            logging.error(f"Error in get_gemini_response_stream: {str(e)}")
+            yield f"Error: {str(e)}"

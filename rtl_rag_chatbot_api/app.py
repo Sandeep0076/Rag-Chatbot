@@ -8,13 +8,10 @@ import shutil
 import uuid
 from pathlib import Path
 
-# import chromadb
 import uvicorn
-
-# from chromadb.config import Settings
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
@@ -68,8 +65,8 @@ Additional features:
 - Get nearest neighbors for a query with the `/file/neighbors` endpoint.
 - View available models using the `/available-models` endpoint.
 - Clean up files with the `/file/cleanup` endpoint.
+- For chatting with Google models without RAG or file context./chat/gemini")
 
-For more detailed information, refer to the individual endpoint descriptions.
 """
 
 app = FastAPI(
@@ -461,7 +458,7 @@ async def delete_files(request: FileDeleteRequest):
 
 
 @app.post("/chat/gemini")
-async def chat_with_gemini(request: ChatRequest):
+async def get_gemini_response_stream(request: ChatRequest):
     """
     Endpoint for chatting with Gemini models (Flash or Pro) without RAG or file context.
 
@@ -488,8 +485,9 @@ async def chat_with_gemini(request: ChatRequest):
         model = model_handler.initialize_model(
             request.model, file_id=None, embedding_type="gemini"
         )
-        response = model.get_gemini_response(request.message)
-        return {"response": response}
+        return StreamingResponse(
+            model.get_gemini_response_stream(request.message), media_type="text/plain"
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 

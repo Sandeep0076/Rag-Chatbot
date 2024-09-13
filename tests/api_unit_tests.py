@@ -4,11 +4,22 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
 
+from configs.app_config import Config
 from rtl_rag_chatbot_api.app import app
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 
 client = TestClient(app)
+
+
+# Mock the Config class
+@pytest.fixture
+def mock_config():
+    mock_config = MagicMock(spec=Config)
+    mock_config.gemini = MagicMock()
+    mock_config.gemini.model_pro = "gemini-pro"
+    mock_config.gemini.model_flash = "gemini-flash"
+    return mock_config
 
 
 class MockNode:
@@ -252,3 +263,53 @@ async def test_delete_files():
 
     # Verify that all file_ids are in the deleted_files list
     assert set(response_data["deleted_files"]) == set(file_ids)
+
+
+# Create a new fixture for Gemini chat tests
+@pytest.fixture
+def gemini_chat_client(mock_config):
+    """
+    Fixture for creating a TestClient instance for Gemini chat tests.
+    Mocks the Config and GCSHandler classes for testing purposes.
+    """
+    with patch("rtl_rag_chatbot_api.app.Config", return_value=mock_config):
+        with patch("rtl_rag_chatbot_api.app.GCSHandler"):
+            with TestClient(app) as test_client:
+                yield test_client
+
+
+@pytest.mark.asyncio
+async def test_get_gemini_response_stream(gemini_chat_client):
+    """
+    Test the endpoint for getting a streaming response from the Gemini chatbot.
+    Mocks the ModelHandler class and asserts the expected behavior of the endpoint.
+    """
+    test_response = "Test response"
+
+    async def mock_stream():
+        for word in test_response.split():
+            yield word + " "
+
+    mock_model = MagicMock()
+    mock_model.get_gemini_response_stream.return_value = mock_stream()
+
+    with patch("rtl_rag_chatbot_api.app.ModelHandler") as MockModelHandler:
+        MockModelHandler.return_value.initialize_model.return_value = mock_model
+
+        response = gemini_chat_client.post(
+            "/chat/gemini", json={"model": "gemini-pro", "message": "Test message"}
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/plain")
+
+        # Read the streaming response
+        content = response.content.decode("utf-8")
+
+        assert content.strip() == test_response
+
+        MockModelHandler.assert_called_once()
+        MockModelHandler.return_value.initialize_model.assert_called_once_with(
+            "gemini-pro", file_id=None, embedding_type="gemini"
+        )
+        mock_model.get_gemini_response_stream.assert_called_once_with("Test message")
