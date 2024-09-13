@@ -61,7 +61,7 @@ class GeminiHandler:
         self.file_id = None
         self.embedding_type = None
 
-    def initialize(self, model: str, file_id: str, embedding_type: str):
+    def initialize(self, model: str, file_id: str = None, embedding_type: str = None):
         # Initializes the Gemini model with specific configurations.
         generation_config = GenerationConfig(
             temperature=0.9,
@@ -285,10 +285,11 @@ class GeminiHandler:
         return self.query_chroma(query, file_id, n_results=n_neighbors)
 
     # Generates a response using the Google model.
-    def get_gemini_response(self, prompt: str) -> str:
-        model = GenerativeModel(self.configs.gemini.model_pro)
-        response = model.generate_content(prompt)
-        return response.text
+    # Deprecated
+    # def get_gemini_response(self, prompt: str) -> str:
+    #     model = GenerativeModel(self.configs.gemini.model_pro)
+    #     response = model.generate_content(prompt)
+    #     return response.text
 
     #  Generates embeddings for given texts.
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -396,3 +397,12 @@ class GeminiHandler:
             sub_chunks.append(" ".join(current_sub_chunk))
 
         return sub_chunks
+
+    def get_gemini_response(self, prompt: str) -> str:
+        # get answers without context limit(NO RAG)
+        try:
+            response = self.generative_model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            logging.error(f"Error in get_gemini_response: {str(e)}")
+            raise
