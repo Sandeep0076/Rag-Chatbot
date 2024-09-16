@@ -52,7 +52,7 @@ def test_file_upload(mock_process_file):
     response = client.post(
         "/file/upload",
         files={"file": ("test.pdf", b"test content", "application/pdf")},
-        data={"is_image": "false"},
+        data={"is_image": "false", "username": "testuser"},
     )
     assert response.status_code == 200
     assert response.json()["file_id"] == "test_file_id"
