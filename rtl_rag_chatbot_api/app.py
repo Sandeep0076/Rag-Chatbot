@@ -136,6 +136,7 @@ async def info():
 async def upload_file(
     file: UploadFile = File(...),
     is_image: bool = Form(...),
+    username: str = Form(...),
 ):
     """
     Handles the uploading of a file with optional image flag.
@@ -151,7 +152,8 @@ async def upload_file(
         file_id = str(uuid.uuid4())
         original_filename = file.filename
 
-        result = await file_handler.process_file(file, file_id, is_image)
+        result = await file_handler.process_file(file, file_id, is_image, username)
+
         print(f"Result from process_file: {result}")
         if result["status"] == "existing":
             # Remove the await keyword here

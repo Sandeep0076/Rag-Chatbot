@@ -113,7 +113,14 @@ class GeminiHandler:
     def process_file(
         self, file_id: str, decrypted_file_path: str, subfolder: str = "google"
     ):
-        # Processes a file by extracting text, splitting it, and creating embeddings.
+        """
+        Processes a file by extracting text, splitting it into chunks, and creating/storing embeddings.
+
+        Args:
+            file_id (str): Identifier for the file being processed.
+            decrypted_file_path (str): Path to the decrypted file.
+            subfolder (str, optional): Subfolder for storing embeddings. Defaults to "google".
+        """
         text = self.extract_text_from_file(decrypted_file_path)
         chunks = self.split_text(text)
         self.create_and_store_embeddings(chunks, file_id, subfolder)

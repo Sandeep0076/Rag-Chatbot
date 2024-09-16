@@ -46,7 +46,9 @@ class FileHandler:
         """
         return hashlib.md5(file_content).hexdigest()
 
-    async def process_file(self, file: UploadFile, file_id: str, is_image: bool):
+    async def process_file(
+        self, file: UploadFile, file_id: str, is_image: bool, username: str
+    ):
         """
         Processes an uploaded file, including hash calculation, duplicate checking,
         encryption, and storage in Google Cloud Storage.
@@ -87,7 +89,11 @@ class FileHandler:
             {
                 "file": (encrypted_file_path, destination_blob_name),
                 "metadata": (
-                    {"is_image": is_image, "file_hash": file_hash},
+                    {
+                        "is_image": is_image,
+                        "file_hash": file_hash,
+                        "username": username,
+                    },
                     f"files-raw/{file_id}/metadata.json",
                 ),
             },

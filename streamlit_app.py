@@ -37,10 +37,10 @@ def handle_file_upload():
     if uploaded_file is not None:
         if st.button("Upload and Process File"):
             with st.spinner("Uploading and processing file..."):
-                # Step 1: Upload file
                 files = {"file": uploaded_file}
                 data = {
                     "is_image": str(is_image),
+                    "username": st.session_state.username,
                 }
                 upload_response = requests.post(
                     f"{API_URL}/file/upload", files=files, data=data
@@ -220,6 +220,9 @@ def initialize_model(model_choice):
 
 def main():
     st.title("RAG Chatbot")
+
+    username = st.text_input("Enter your username:")
+    st.session_state.username = username
     initialize_session_state()
 
     # Add New Chat button at the top right
