@@ -8,16 +8,19 @@ from PIL import Image
 API_URL = "http://localhost:8080"
 
 
+def reset_session():
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    initialize_session_state()
+
+
 def cleanup_files():
-    if st.button("Cleanup Files"):
-        response = requests.post(f"{API_URL}/file/cleanup")
-        if response.status_code == 200:
-            st.success("Cleanup completed successfully")
-            st.session_state.file_uploaded = False
-            st.session_state.file_id = None
-            st.session_state.messages = []
-        else:
-            st.error(f"Cleanup failed: {response.text}")
+    response = requests.post(f"{API_URL}/file/cleanup")
+    if response.status_code == 200:
+        st.success("Cleanup completed successfully")
+        reset_session()
+    else:
+        st.error(f"Cleanup failed: {response.text}")
 
 
 def handle_file_upload():
@@ -219,6 +222,13 @@ def main():
     st.title("RAG Chatbot")
     initialize_session_state()
 
+    # Add New Chat button at the top right
+    col1, col2 = st.columns([6, 1])
+    with col2:
+        if st.button("New Chat"):
+            cleanup_files()
+            st.rerun()
+
     # Model selection dropdown
     new_model_choice = st.selectbox(
         "Select Model",
@@ -234,7 +244,6 @@ def main():
     ):
         initialize_model(new_model_choice)
 
-    cleanup_files()
     handle_file_upload()
     display_chat_interface()
 
