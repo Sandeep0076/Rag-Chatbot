@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -61,7 +62,7 @@ class GeminiHandler:
         self.file_id = None
         self.embedding_type = None
 
-    def initialize(self, model: str, file_id: str, embedding_type: str):
+    def initialize(self, model: str, file_id: str = None, embedding_type: str = None):
         # Initializes the Gemini model with specific configurations.
         generation_config = GenerationConfig(
             temperature=0.9,
@@ -112,7 +113,14 @@ class GeminiHandler:
     def process_file(
         self, file_id: str, decrypted_file_path: str, subfolder: str = "google"
     ):
-        # Processes a file by extracting text, splitting it, and creating embeddings.
+        """
+        Processes a file by extracting text, splitting it into chunks, and creating/storing embeddings.
+
+        Args:
+            file_id (str): Identifier for the file being processed.
+            decrypted_file_path (str): Path to the decrypted file.
+            subfolder (str, optional): Subfolder for storing embeddings. Defaults to "google".
+        """
         text = self.extract_text_from_file(decrypted_file_path)
         chunks = self.split_text(text)
         self.create_and_store_embeddings(chunks, file_id, subfolder)
@@ -285,10 +293,11 @@ class GeminiHandler:
         return self.query_chroma(query, file_id, n_results=n_neighbors)
 
     # Generates a response using the Google model.
-    def get_gemini_response(self, prompt: str) -> str:
-        model = GenerativeModel(self.configs.gemini.model_pro)
-        response = model.generate_content(prompt)
-        return response.text
+    # Deprecated
+    # def get_gemini_response(self, prompt: str) -> str:
+    #     model = GenerativeModel(self.configs.gemini.model_pro)
+    #     response = model.generate_content(prompt)
+    #     return response.text
 
     #  Generates embeddings for given texts.
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -396,3 +405,16 @@ class GeminiHandler:
             sub_chunks.append(" ".join(current_sub_chunk))
 
         return sub_chunks
+
+    async def get_gemini_response_stream(self, prompt: str):
+        try:
+            responses = self.generative_model.generate_content(prompt, stream=True)
+            for chunk in responses:
+                if chunk.text:
+                    yield chunk.text
+                    await asyncio.sleep(
+                        0.1
+                    )  # Add a small delay to make streaming more noticeable
+        except Exception as e:
+            logging.error(f"Error in get_gemini_response_stream: {str(e)}")
+            yield f"Error: {str(e)}"

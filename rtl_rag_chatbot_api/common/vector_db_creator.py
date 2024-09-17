@@ -45,6 +45,7 @@ class VectorDbWrapper:
         file_id=None,
         chroma_db=None,
         is_image=False,
+        username=None,
     ):
         self.azure_api_key = azure_api_key
         self.azure_endpoint = azure_endpoint
@@ -59,6 +60,7 @@ class VectorDbWrapper:
         self.documents = self._create_list_of_documents()
         self.is_image = is_image
         self.gcs_handler = gcs_handler
+        self.username = username
 
     def _create_list_of_documents(self) -> List:
         """Create a list of Llama_index Document classes
@@ -256,7 +258,7 @@ class VectorDbWrapper:
         chroma_folder = Path(f"./chroma_db/{self.file_id}")
 
         # Upload metadata
-        metadata = {"is_image": self.is_image}
+        metadata = {"is_image": self.is_image, "username": self.username}
         self.gcs_handler.upload_to_gcs(
             self.bucket_name,
             {

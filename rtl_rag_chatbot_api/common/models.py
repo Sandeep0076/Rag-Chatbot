@@ -50,3 +50,8 @@ class EmbeddingCreationRequest(BaseModel):
 
 class FileDeleteRequest(BaseModel):
     file_ids: List[str]
+
+
+class ChatRequest(BaseModel):
+    model: str
+    message: str

@@ -335,3 +335,9 @@ class GCSHandler:
         folders_to_delete = [f"files-raw/{file_id}/", f"file-embeddings/{file_id}/"]
         for folder in folders_to_delete:
             self.delete_folder(folder)
+
+    def get_file_metadata(self, file_id: str):
+        blob = self.bucket.blob(f"files-raw/{file_id}/metadata.json")
+        if blob.exists():
+            return json.loads(blob.download_as_text())
+        return {}

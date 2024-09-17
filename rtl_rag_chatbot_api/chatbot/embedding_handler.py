@@ -41,6 +41,10 @@ class EmbeddingHandler:
             logging.info(f"Embeddings already exist for file_id: {file_id}")
             return {"message": "Embeddings already exist for this file"}
 
+        # Retrieve metadata including username
+        metadata = self.gcs_handler.get_file_metadata(file_id)
+        username = metadata.get("username", "Unknown")
+
         # Create necessary directories and paths
         chroma_db_path = f"./chroma_db/{file_id}"
         os.makedirs(os.path.join(chroma_db_path, "azure"), exist_ok=True)
@@ -82,11 +86,13 @@ class EmbeddingHandler:
                     self._create_azure_embeddings,
                     file_id,
                     decrypted_file_path if not is_image else analysis_json_path,
+                    username,
                 )
                 gemini_future = executor.submit(
                     self._create_gemini_embeddings,
                     file_id,
                     decrypted_file_path if not is_image else analysis_json_path,
+                    username,
                 )
 
                 azure_result = azure_future.result()
@@ -99,6 +105,7 @@ class EmbeddingHandler:
             file_info = {
                 "embeddings": {"azure": azure_result, "google": gemini_result},
                 "is_image": is_image,
+                "username": username,
             }
             self.gcs_handler.upload_to_gcs(
                 self.configs.gcp_resource.bucket_name,
@@ -126,7 +133,7 @@ class EmbeddingHandler:
                     os.remove(analysis_json_path)
 
     # Private method to create Azure embeddings
-    def _create_azure_embeddings(self, file_id, file_path):
+    def _create_azure_embeddings(self, file_id, file_path, username):
         logging.info("Generating Azure embeddings...")
         chroma_db = chromadb.PersistentClient(
             path=f"./chroma_db/{file_id}/azure",
@@ -140,12 +147,13 @@ class EmbeddingHandler:
             chroma_db=chroma_db,
             is_image=False,
             gcs_handler=self.gcs_handler,
+            username=username,
         )
         logging.info("Azure embeddings generated successfully")
         return "completed"
 
     # Private method to create Gemini embeddings
-    def _create_gemini_embeddings(self, file_id, file_path):
+    def _create_gemini_embeddings(self, file_id, file_path, username):
         logging.info("Generating Gemini embeddings...")
         gemini_handler = GeminiHandler(self.configs, self.gcs_handler)
         gemini_handler.process_file(file_id, file_path, subfolder="google")
