@@ -200,12 +200,21 @@ async def initialize_model(request: ModelInitRequest):
         else:
             embedding_type = "azure"
 
+        # Check if the Chroma DB path exists
+        chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
+        if not os.path.exists(chroma_db_path):
+            raise HTTPException(
+                status_code=404, detail=f"Chroma DB not found at {chroma_db_path}"
+            )
+
+        # Initialize the model with the correct path
         model = model_handler.initialize_model(
             request.model_choice, request.file_id, embedding_type
         )
         initialized_models[request.file_id] = model
         return {"message": f"Model {request.model_choice} initialized successfully"}
     except Exception as e:
+        logging.error(f"Error initializing model: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -1,3 +1,5 @@
+import os
+
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
 from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 
@@ -31,6 +33,9 @@ class ModelHandler:
         Returns:
             GeminiHandler or Chatbot: An instance of GeminiHandler or Chatbot based on the embedding type.
         """
+        chroma_db_path = f"./chroma_db/{file_id}/{embedding_type}"
+        if not os.path.exists(chroma_db_path):
+            raise ValueError(f"Chroma DB not found at {chroma_db_path}")
         if model_choice.lower() in ["gemini-flash", "gemini-pro"]:
             gemini_model = (
                 self.configs.gemini.model_flash
