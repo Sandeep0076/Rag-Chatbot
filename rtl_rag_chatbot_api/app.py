@@ -8,14 +8,17 @@ import shutil
 import uuid
 from pathlib import Path
 
+import pandas as pd
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import inspect
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
+from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.file_handler import FileHandler
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
@@ -45,6 +48,7 @@ gcs_handler = GCSHandler(configs)
 file_handler = FileHandler(configs, gcs_handler)
 model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler)
+tabular_data_handler = TabularDataHandler("./tabular_data")
 
 title = "RAG PDF API"
 
@@ -132,6 +136,8 @@ async def info():
     }
 
 
+# ‚ Todo : Modify the upload function to take csv and also download the csv to the correct place or adjust the urls
+# todo adjust the reference as i moved the files under chatbot and common
 @app.post("/file/upload", response_model=FileUploadResponse)
 async def upload_file(
     file: UploadFile = File(...),
@@ -156,11 +162,10 @@ async def upload_file(
 
         print(f"Result from process_file: {result}")
         if result["status"] == "existing":
-            # Remove the await keyword here
             if file_handler.download_existing_file(result["file_id"]):
-                message = "File already exists. Embeddings downloaded."
+                message = "File already exists. Requited files downloaded."
             else:
-                message = "File already exists, but error downloading embeddings."
+                message = "File already exists, but error downloading necessary files."
         else:
             message = "File uploaded, encrypted, and processed successfully"
 
@@ -501,6 +506,46 @@ async def get_gemini_response_stream(request: ChatRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
+
+@app.post("/tabular/query")
+async def query_tabular_data(query: str):
+    try:
+        response = tabular_data_handler.ask_question(query)
+        return {"response": response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tabular/info")
+async def get_tabular_info(table_name: str = None):
+    try:
+        if table_name:
+            # Get info for a specific table
+            inspector = inspect(tabular_data_handler.engine)
+            columns = inspector.get_columns(table_name)
+            schema = [
+                {"name": col["name"], "type": str(col["type"])} for col in columns
+            ]
+
+            query = f"SELECT * FROM {table_name} LIMIT 5"
+            df = pd.read_sql_query(query, tabular_data_handler.engine)
+            info = {
+                "table": table_name,
+                "row_count": len(df),
+                "column_count": len(df.columns),
+                "columns": list(df.columns),
+                "schema": schema,
+                "sample_data": df.to_dict(orient="records"),
+            }
+        else:
+            # Get list of all tables
+            tables = tabular_data_handler.get_table_names()
+            info = {"tables": tables}
+
+        return info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def start():
