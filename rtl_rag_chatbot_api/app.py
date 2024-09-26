@@ -5,15 +5,14 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
 import uuid
 from pathlib import Path
 
-import pandas as pd
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import inspect
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
@@ -519,32 +518,47 @@ async def query_tabular_data(query: str):
 @app.get("/tabular/info")
 async def get_tabular_info(table_name: str = None):
     try:
+        db_path = tabular_data_handler.db_path
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
         if table_name:
             # Get info for a specific table
-            inspector = inspect(tabular_data_handler.engine)
-            columns = inspector.get_columns(table_name)
-            schema = [
-                {"name": col["name"], "type": str(col["type"])} for col in columns
-            ]
+            cursor.execute(f"PRAGMA table_info('{table_name}')")
+            columns_info = cursor.fetchall()
 
-            query = f"SELECT * FROM {table_name} LIMIT 5"
-            df = pd.read_sql_query(query, tabular_data_handler.engine)
+            schema = [{"name": col[1], "type": col[2]} for col in columns_info]
+
+            cursor.execute(f"SELECT * FROM '{table_name}' LIMIT 5")
+            rows = cursor.fetchall()
+            columns = [description[0] for description in cursor.description]
+
+            sample_data = [dict(zip(columns, row)) for row in rows]
+
+            cursor.execute(f"SELECT COUNT(*) FROM '{table_name}'")
+            row_count = cursor.fetchone()[0]
+
             info = {
                 "table": table_name,
-                "row_count": len(df),
-                "column_count": len(df.columns),
-                "columns": list(df.columns),
+                "row_count": row_count,
+                "column_count": len(columns),
+                "columns": columns,
                 "schema": schema,
-                "sample_data": df.to_dict(orient="records"),
+                "sample_data": sample_data,
             }
         else:
             # Get list of all tables
-            tables = tabular_data_handler.get_table_names()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = [table[0] for table in cursor.fetchall()]
             info = {"tables": tables}
 
+        conn.close()
         return info
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error(f"Error in get_tabular_info: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Error getting table info: {str(e)}"
+        )
 
 
 def start():

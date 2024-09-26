@@ -19,6 +19,11 @@ class TabularDataHandler:
         self.db_name = "tabular_data.db"
         self.db_path = os.path.join(data_dir, self.db_name)
         self.db_url = f"sqlite:///{self.db_path}"
+
+        # Prepare the database if it doesn't exist
+        if not os.path.exists(self.db_path):
+            self.prepare_database()
+
         self.engine = create_engine(self.db_url)
         self.db = SQLDatabase(engine=self.engine)
         self.config = Config()
@@ -51,10 +56,14 @@ class TabularDataHandler:
             self._initialize_agent()
 
         try:
+            print(f"Debug: Available tables: {self.get_table_names()}")
+            print(f"Debug: Asking question: {question}")
             response = self.agent.invoke({"input": question})
+            print(f"Debug: Agent response: {response}")
             return response["output"]
         except Exception as e:
             print(f"An error occurred while processing the question: {e}")
+            print(f"Debug: Full exception: {repr(e)}")
             return None
 
     def interactive_session(self):
@@ -90,6 +99,6 @@ def main(data_dir: str):
     handler.interactive_session()
 
 
-if __name__ == "__main__":
-    data_dir = "rtl_rag_chatbot_api/tabularData/csv_dir"
-    main(data_dir)
+# if __name__ == "__main__":
+#     data_dir = "rtl_rag_chatbot_api/tabularData/csv_dir"
+#     main(data_dir)
