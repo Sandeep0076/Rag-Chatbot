@@ -48,10 +48,9 @@ gcs_handler = GCSHandler(configs)
 file_handler = FileHandler(configs, gcs_handler)
 model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler)
-tabular_data_handler = TabularDataHandler("./tabular_data")
+tabular_data_handler = TabularDataHandler("rtl_rag_chatbot_api/tabularData/csv_dir")
 
 title = "RAG PDF API"
-
 description = """
 RAG PDF API is a FastAPI-based application for processing and
 querying PDF documents using Retrieval-Augmented Generation (RAG).
