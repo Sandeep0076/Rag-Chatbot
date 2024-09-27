@@ -4,9 +4,9 @@ import os
 import msal
 import requests
 
-TENANT_ID = os.getenv("TENANT_ID")
-CLIENT_ID = os.getenv("CLIENT_ID")
-CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+TENANT_ID = os.getenv("RTL_TENANT_ID")
+CLIENT_ID = os.getenv("RTL_CLIENT_ID")
+CLIENT_SECRET = os.getenv("WF_CLIENT_SECRET")
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 SCOPE = ["https://graph.microsoft.com/.default"]
 GRAPH_API_ENDPOINT = "https://graph.microsoft.com/v1.0"
