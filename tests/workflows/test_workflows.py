@@ -1,4 +1,3 @@
-from datetime import datetime
 from unittest.mock import patch
 
 import pytest
@@ -6,6 +5,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from workflows.db.helpers import get_datetime_now
 from workflows.db.tables import Base, User
 from workflows.workflow import mark_deletion_candidates
 
@@ -85,12 +85,15 @@ def test_mark_deletion_candidates(
 
     # mock sone return values
     mock_get_user_list.return_value = mock_user_data
+
+    # "side_effect" simulates that the particular user is disabled in Azure,
+    # because is_user_account_enabled takes email as input and returns True/False.
     mock_is_user_account_enabled.side_effect = (
         lambda email: email != "user2@example.com"
     )  # Only 'user2@example.com' is disabled
-    mock_get_datetime_now.return_value = datetime(
-        2024, 9, 26
-    )  # Mock the current datetime
+
+    mock_datetime_now = get_datetime_now()
+    mock_get_datetime_now.return_value = mock_datetime_now
 
     # call the workflow function
     mark_deletion_candidates()
@@ -99,15 +102,14 @@ def test_mark_deletion_candidates(
     with get_db_session as session:
         # query for the users who should be marked for deletion
         user = session.query(User).filter(User.email == "user2@example.com").first()
-        print(user.wf_deletion_candidate)
         assert (
             user.wf_deletion_candidate is True
         ), "User 2 should be marked for deletion."
-        assert user.wf_deletion_timestamp == datetime(
-            2024, 9, 26
+        assert (
+            user.wf_deletion_timestamp == mock_datetime_now
         ), "User 2 should have the correct deletion timestamp."
 
-        # Assert that other users are not marked for deletion
+        # assert that other users are not marked for deletion
         for user in session.query(User).filter(User.email != "user2@example.com"):
             assert (
                 user.wf_deletion_candidate is False
