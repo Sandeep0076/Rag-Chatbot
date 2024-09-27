@@ -11,12 +11,14 @@ include:
     ref: v23.3.0
     file: /infra/pipelines/apps/main/include-all.yml
   - local: /ci/helm.yml
+  # add dev specific env variables.
+  - local: /ci/test_env_dev.yml
 
 poetry:test:
   parallel:
     matrix:
-      - PYTHON_VERSION:
-          - 3.11.6
+      - PYTHON_VERSION: 3.11.6
+      - MG_ENV: dev
   variables:
     COV_NAME: "rtl_rag_chatbot_api"
 

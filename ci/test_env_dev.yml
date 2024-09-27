@@ -1,0 +1,66 @@
+variables:
+  AZURE_OPENAI_API_KEY:
+  AZURE_OPENAI_ENDPOINT:
+  AZURE_OPENAI_LLM_API_KEY:
+  AZURE_OPENAI_LLM_ENDPOINT:
+  AZURE_OPENAI_EMBEDDING_API_KEY:
+  AZURE_OPENAI_EMBEDDING_ENDPOINT:
+  #
+  TITLE: "RTL-Deutschland RAG_CHATBOT"
+  DESCRIPTION: "Chat with PDF"
+  INFO_TEXT: "Welcome to the PDF Chatbot! You can ask any questions related to the content of your uploaded PDF document, and I will provide accurate and relevant answers based on the information in the document."
+  GCP_PROJECT: "dat-itowe-dev"
+  BUCKET_NAME: "chatbot-storage-dev-gcs-eu"
+  VECTOR_DB_COLLECTION_NAME: "RAG_CHATBOT"
+  SYSTEM_PROMPT_PLAIN_LLM: "At the end of each answer say ''"
+  SYSTEM_PROMPT_RAG_LLM: "At the end of each answer say '"
+  API_VERSION: "2023-10-01-preview"
+  AZURE_DEPLOYMENT: "mgr-openai-text-gpt35-turbo"
+  EMBEDDINGS_FOLDER: "embeddings_folder/"
+  AZURE_EMBEDDING_API_VERSION: "2024-02-01"
+  AZURE_EMBEDDING_DEPLOYMENT: "mgr-openai-embedding-ada-002"
+  AZURE_EMBEDDING_MODEL_NAME: "text-embedding-ada-002"
+  AZURE_LLM_API_VERSION: "2024-02-01"
+  AZURE_LLM_DEPLOYMENT: "mgr-openai-text-gpt35-turbo"
+  AZURE_LLM_MODEL_NAME: "gpt-35-turbo"
+  IMAGE_FILE_PATH: "jira-logo-scaled.png"
+  TEMPERATURE: 0.2
+  MAX_TOKENS: 3000
+  TOP_P: 0.9
+  FREQUENCY_PENALTY: 0.0
+  PRESENCE_PENALTY: 0.0
+  MAX_INPUT_SIZE: 4096
+  NUM_OUTPUTS: 300
+  MAX_CHUNK_OVERLAP: 0.3
+  CHUNK_SIZE_LIMIT: 1500
+  #
+  AZURE_LLM__MODELS__GPT_3_5_TURBO__API_KEY:
+  AZURE_LLM__MODELS__GPT_3_5_TURBO__ENDPOINT: "https://mgr-da-openai-westeu.openai.azure.com/"
+  AZURE_LLM__MODELS__GPT_3_5_TURBO__DEPLOYMENT: "mgr-openai-text-gpt35-turbo"
+  AZURE_LLM__MODELS__GPT_3_5_TURBO__API_VERSION: "2024-05-01-preview"
+  AZURE_LLM__MODELS__GPT_3_5_TURBO__MODEL_NAME: "gpt-35-turbo"
+  #
+  AZURE_LLM__MODELS__GPT_4__API_KEY:
+  AZURE_LLM__MODELS__GPT_4__ENDPOINT: "https://mgr-da-openai-dev.openai.azure.com/"
+  AZURE_LLM__MODELS__GPT_4__DEPLOYMENT: "gpt4-32k"
+  AZURE_LLM__MODELS__GPT_4__API_VERSION: "2024-05-01-preview"
+  AZURE_LLM__MODELS__GPT_4__MODEL_NAME: "gpt-4-32k"
+  #
+  ENCRYPTION_KEY:
+  #
+  AZURE_LLM__MODELS__GPT_4_OMNI__API_KEY:
+  AZURE_LLM__MODELS__GPT_4_OMNI__ENDPOINT: "https://ai-product.openai.azure.com/"
+  AZURE_LLM__MODELS__GPT_4_OMNI__DEPLOYMENT: "gpt4o"
+  AZURE_LLM__MODELS__GPT_4_OMNI__API_VERSION: "2024-02-15-preview"
+  AZURE_LLM__MODELS__GPT_4_OMNI__MODEL_NAME: "gpt-4o"
+  #
+  AZURE_LLM__MODELS__GPT_4O_MINI__API_KEY:
+  AZURE_LLM__MODELS__GPT_4O_MINI__ENDPOINT: "https://chatbotui-openai.openai.azure.com/"
+  AZURE_LLM__MODELS__GPT_4O_MINI__DEPLOYMENT: "chatbotui_openai_gpt4o_mini"
+  AZURE_LLM__MODELS__GPT_4O_MINI__API_VERSION: "2024-05-01-preview"
+  AZURE_LLM__MODELS__GPT_4O_MINI__MODEL_NAME: "gpt-4o-mini"
+  #
+  EMINI__MODEL_FLASH: "gemini-1.5-flash-001"
+  GEMINI__MODEL_PRO: "gemini-1.5-pro-001"
+  GEMINI__PROJECT: "dat-itowe-dev"
+  GEMINI__LOCATION: "europe-west4"
