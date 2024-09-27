@@ -12,7 +12,7 @@ include:
     file: /infra/pipelines/apps/main/include-all.yml
   - local: /ci/helm.yml
   # add dev specific env variables.
-  - local: /ci/test_env_variable.yml
+  - local: /ci/test_env_variables.yml
 
 poetry:test:
   parallel:
