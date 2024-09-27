@@ -96,14 +96,16 @@ if __name__ == "__main__":
                 )
             # call the method with the right number of arguments
             elif args.args and num_params == len(args.args):
-                method(*args.args)
+                val = method(*args.args)
+                print(val)
             elif args.args and num_params != len(args.args):
                 print(
                     f"Task '{args.task}' requires {num_params} arguments, but {len(args.args)} were provided."
                 )
             else:
                 # call method with no arguments if none are required
-                method()
+                val = method()
+                print(val)
         else:
             print(f"'{args.task}' is not a valid callable method.")
     except KeyError:

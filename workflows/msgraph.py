@@ -51,4 +51,4 @@ def is_user_account_enabled(user_email):
         log.error(
             f"Failed to fetch user details: {user_response.status_code}, {user_response.text}"
         )
-        return
+        return False
