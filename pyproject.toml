@@ -79,3 +79,6 @@ filterwarnings = [
 [tool.poetry.scripts]
 start = "rtl_rag_chatbot_api.app:start"
 streamlit = "run_streamlit:run"
+
+[tool.coverage.run]
+source = ["rtl_rag_chatbot_api"]
