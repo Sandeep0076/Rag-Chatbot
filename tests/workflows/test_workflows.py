@@ -67,13 +67,13 @@ def mock_user_data(get_db_session):
 
 
 @patch("workflows.workflow.get_db_session")
-@patch("workflows.workflow.get_user_list")
+@patch("workflows.workflow.get_users")
 @patch("workflows.msgraph.is_user_account_enabled")  # Mock the Azure Graph API call
 @patch("workflows.db.helpers.get_datetime_now")  # Mock the datetime helper
 def test_mark_deletion_candidates(
     mock_get_datetime_now,
     mock_is_user_account_enabled,
-    mock_get_user_list,
+    mock_get_users,
     mock_get_db_session,
     get_db_session,
     mock_user_data,
@@ -84,7 +84,7 @@ def test_mark_deletion_candidates(
     mock_get_db_session.return_value.__enter__.return_value = get_db_session
 
     # mock sone return values
-    mock_get_user_list.return_value = mock_user_data
+    mock_get_users.return_value = mock_user_data
 
     # "side_effect" simulates that the particular user is disabled in Azure,
     # because is_user_account_enabled takes email as input and returns True/False.

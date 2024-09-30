@@ -2,8 +2,8 @@
 INSERT INTO User (id, email, name) VALUES ('user1_id', 'user1@example.com', 'User 1');
 INSERT INTO User (id, email, name) VALUES ('user2_id', 'user2@example.com', 'User 2');
 INSERT INTO User (id, email, name) VALUES ('user3_id', 'user3@example.com', 'User 3');
-INSERT INTO User (id, email, name) VALUES ('user4_id', 'user4@example.com', 'User 4');
-INSERT INTO User (id, email, name) VALUES ('user5_id', 'user5@example.com', 'User 5');
+INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user4_id', 'user4@example.com', 'User 4', True, '2024-09-27T08:00:00.000Z');
+INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user5_id', 'user5@example.com', 'User 5', True, '2024-09-30T08:00:00.000Z');
 
 -- Insert Models
 INSERT INTO Model (id, name, maxLength, tokenLimit) VALUES ('model1_id', 'GPT-4', 2048, 4096);
