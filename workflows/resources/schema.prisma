@@ -1,0 +1,67 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-1.1.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id String @id @unique @default(cuid())
+  email String @unique
+  name String
+  wf_deletion_candidate Boolean @default(false)
+  wf_deletion_timestamp DateTime?
+  conversations Conversation[]
+  folders Folder[]
+}
+
+model Message {
+  id String @id @unique @default(cuid())
+  role String
+  content String
+  createdAt DateTime @default(now())
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+  conversationId String
+}
+
+model Conversation {
+  id String @id @unique @default(cuid())
+  user User @relation(fields: [userEmail], references: [email])
+  messages Message[]
+  temperature Int
+  folder Folder? @relation(fields: [folderId], references: [id])
+  folderId String?
+  prompt String
+  model Model? @relation(fields: [modelId], references: [id])
+  modelId String
+  name String
+  userEmail String
+  updatedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+}
+
+model Model {
+  id String @id @unique
+  name String
+  conversations Conversation[]
+  maxLength Int
+  tokenLimit Int
+}
+
+model Folder {
+  id String @id @unique @default(cuid())
+  user User @relation(fields: [userId], references: [id])
+  userId String
+  name String
+  isRoot Boolean @default(false)
+  conversations Conversation[]
+}
