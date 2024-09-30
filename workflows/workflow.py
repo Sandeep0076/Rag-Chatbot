@@ -48,7 +48,7 @@ def get_users_deletion_candicates():
     with get_db_session() as session:
         users = (
             session.query(User)
-            .filter(User.wf_deletion_candidate, User.wf_deletion_timestamp != None)
+            .filter(User.wf_deletion_candidate, User.wf_deletion_timestamp is not None)
             .all()
         )
 
@@ -70,7 +70,12 @@ def mark_deletion_candidates():
     # 3. mark those whose account is disabled
     with get_db_session() as session:
         for user in users:
-            if user.email in account_statuses and not account_statuses.get(user.email):
+            # mark those users for which we got the data, which are not marked, and which are not yet already marked
+            if (
+                user.email in account_statuses
+                and not account_statuses.get(user.email)
+                and not user.wf_deletion_candidate
+            ):
                 user.wf_deletion_candidate = True
                 user.wf_deletion_timestamp = db_helpers.get_datetime_now()
 
