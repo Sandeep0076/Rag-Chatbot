@@ -46,6 +46,7 @@ def get_users():
 def get_users_deletion_candicates():
     """"""
     with get_db_session() as session:
+        # get all users
         users = (
             session.query(User)
             .filter(User.wf_deletion_candidate, User.wf_deletion_timestamp is not None)
@@ -77,7 +78,7 @@ def mark_deletion_candidates():
                 and not user.wf_deletion_candidate
             ):
                 user.wf_deletion_candidate = True
-                user.wf_deletion_timestamp = db_helpers.get_datetime_now()
+                user.wf_deletion_timestamp = db_helpers.iso8601_timestamp_now()
 
             # add user to the session for committing changes
             session.add(user)

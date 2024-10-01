@@ -2,8 +2,11 @@
 INSERT INTO User (id, email, name) VALUES ('user1_id', 'user1@example.com', 'User 1');
 INSERT INTO User (id, email, name) VALUES ('user2_id', 'user2@example.com', 'User 2');
 INSERT INTO User (id, email, name) VALUES ('user3_id', 'user3@example.com', 'User 3');
+-- user marked as deletion candidate, but should not be deleted because timestamp is lower than 4 week
 INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user4_id', 'user4@example.com', 'User 4', True, '2024-09-27T08:00:00.000Z');
-INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user5_id', 'user5@example.com', 'User 5', True, '2024-09-30T08:00:00.000Z');
+-- user marked and timestamp older than 4 weeks
+INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user5_id', 'user5@example.com', 'User 5', True, '2024-08-01T08:00:00.000Z');
+INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user6_id', 'user6@example.com', 'User 6', True, '2024-08-04T08:00:00.000Z');
 
 -- Insert Models
 INSERT INTO Model (id, name, maxLength, tokenLimit) VALUES ('model1_id', 'GPT-4', 2048, 4096);
@@ -11,21 +14,22 @@ INSERT INTO Model (id, name, maxLength, tokenLimit) VALUES ('model2_id', 'GPT-3'
 
 -- Insert Folders
 INSERT INTO Folder (id, userId, name, isRoot) VALUES ('folder1_id', 'user1_id', 'User 1 Folder', true);
-INSERT INTO Folder (id, userId, name, isRoot) VALUES ('folder2_id', 'user2_id', 'User 2 Folder', true);
+INSERT INTO Folder (id, userId, name, isRoot) VALUES ('folder2_id', 'user1_id', 'User 1 Folder 2', true);
 INSERT INTO Folder (id, userId, name, isRoot) VALUES ('folder3_id', 'user3_id', 'User 3 Folder', true);
 INSERT INTO Folder (id, userId, name, isRoot) VALUES ('folder4_id', 'user4_id', 'User 4 Folder', true);
 INSERT INTO Folder (id, userId, name, isRoot) VALUES ('folder5_id', 'user5_id', 'User 5 Folder', true);
+INSERT INTO Folder (id, userId, name, isRoot) VALUES ('folder6_id', 'user5_id', 'User 5 Folder 2', true);
 
 -- Insert Conversations
 INSERT INTO Conversation (id, userEmail, temperature, folderId, modelId, name, prompt) VALUES
 ('conv1_id', 'user1@example.com', 0, 'folder1_id', 'model1_id', 'Conversation 1', 'Prompt for conversation 1'),
 ('conv2_id', 'user1@example.com', 1, 'folder1_id', 'model2_id', 'Conversation 2', 'Prompt for conversation 2'),
-('conv3_id', 'user2@example.com', 2, 'folder2_id', 'model1_id', 'Conversation 3', 'Prompt for conversation 3'),
+('conv3_id', 'user1@example.com', 2, 'folder2_id', 'model1_id', 'Conversation 3', 'Prompt for conversation 3'),
 ('conv4_id', 'user2@example.com', 0, 'folder2_id', 'model2_id', 'Conversation 4', 'Prompt for conversation 4'),
 ('conv5_id', 'user3@example.com', 1, 'folder3_id', 'model1_id', 'Conversation 5', 'Prompt for conversation 5'),
 ('conv6_id', 'user3@example.com', 0, 'folder3_id', 'model2_id', 'Conversation 6', 'Prompt for conversation 6'),
-('conv7_id', 'user4@example.com', 2, 'folder4_id', 'model1_id', 'Conversation 7', 'Prompt for conversation 7'),
-('conv8_id', 'user4@example.com', 1, 'folder4_id', 'model2_id', 'Conversation 8', 'Prompt for conversation 8'),
+('conv7_id', 'user3@example.com', 2, 'folder4_id', 'model1_id', 'Conversation 7', 'Prompt for conversation 7'),
+('conv8_id', 'user3@example.com', 1, 'folder4_id', 'model2_id', 'Conversation 8', 'Prompt for conversation 8'),
 ('conv9_id', 'user5@example.com', 0, 'folder5_id', 'model1_id', 'Conversation 9', 'Prompt for conversation 9'),
 ('conv10_id', 'user5@example.com', 1, 'folder5_id', 'model2_id', 'Conversation 10', 'Prompt for conversation 10');
 
@@ -38,6 +42,6 @@ INSERT INTO Message (id, role, content, createdAt, conversationId) VALUES
 ('msg5_id', 'system', 'Welcome to the conversation!', '2024-09-25 09:00:00', 'conv3_id'),
 ('msg6_id', 'user', 'User input here.', '2024-09-25 09:05:00', 'conv3_id'),
 ('msg7_id', 'system', 'Conversation initialized.', '2024-09-25 12:00:00', 'conv4_id'),
-('msg8_id', 'user', 'User message in conversation 4.', '2024-09-25 12:05:00', 'conv4_id'),
-('msg9_id', 'system', 'Chat started.', '2024-09-25 13:00:00', 'conv5_id'),
-('msg10_id', 'user', 'User feedback here.', '2024-09-25 13:10:00', 'conv5_id');
+('msg8_id', 'user', 'User message in conversation 4.', '2024-09-25 12:05:00', 'conv9_id'),
+('msg9_id', 'system', 'Chat started.', '2024-09-25 13:00:00', 'conv9_id'),
+('msg10_id', 'user', 'User feedback here.', '2024-09-25 13:10:00', 'conv10_id');
