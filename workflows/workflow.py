@@ -12,7 +12,7 @@ import workflows.msgraph as msgraph
 from workflows.db.tables import Conversation, Folder, Message, User
 
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(levelname)s/%(funcName)s - %(message)s"
 )
 log = logging.getLogger(__name__)
 
