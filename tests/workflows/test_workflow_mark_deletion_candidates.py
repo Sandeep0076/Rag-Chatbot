@@ -19,7 +19,7 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 
 
 @pytest.fixture
-def get_db_session():
+def test_db_session():
     """"""
     try:
         db = TestingSessionLocal()
@@ -124,4 +124,33 @@ def test_mark_deletion_candidates(
             ), f"{user.email} should not be marked for deletion."
 
 
-# TODO: add test to do not mark already marked users
+@patch("workflows.workflow.get_db_session")
+@patch("workflows.msgraph.is_user_account_enabled")  # Mock the Azure Graph API call
+@patch("workflows.db.helpers.iso8601_timestamp_now")  # Mock the datetime helper
+def test_already_marked_users(
+    mock_iso8601_timestamp_now,
+    mock_is_user_account_enabled,
+    mock_get_db_session,
+    test_db_session,
+):
+    """"""
+    # db session should use the test session. Use of __enter__ is necessary because
+    # workflows.workflow.get_db_session has a `with get_db_session as ..:` statement.
+    mock_get_db_session.return_value.__enter__.return_value = test_db_session
+
+    # iso8601_timestamp_now needs to be mocked because otherwise iso8601_timestamp_now()
+    # will return a new timestamp each time
+    mock_datetime_now = iso8601_timestamp_now()
+    mock_iso8601_timestamp_now.return_value = mock_datetime_now
+
+    # call the workflow function
+    mark_deletion_candidates()
+
+    # assert user5 does not have a new timestamp, since it got already marked
+    with test_db_session as db:
+        user5 = db.query(User).filter(User.email == "user5@example.com").first()
+
+        assert user5.wf_deletion_candidate is True
+        # user5 already marked and timestamp must keep its value
+        assert user5.wf_deletion_timestamp != iso8601_timestamp_now
+        assert user5.wf_deletion_timestamp == "2024-08-01T08:00:00.000Z"
