@@ -86,6 +86,7 @@ def mark_deletion_candidates():
     }
 
     # 3. mark those whose account is disabled
+    users_marked = []
     with get_db_session() as session:
         for user in users:
             # mark those users for which we got the data, which are not marked, and which are not yet already marked
@@ -96,10 +97,14 @@ def mark_deletion_candidates():
             ):
                 user.wf_deletion_candidate = True
                 user.wf_deletion_timestamp = db_helpers.iso8601_timestamp_now()
+                users_marked.append(user.email)
 
             # add user to the session for committing changes
             session.add(user)
 
+        log.info(
+            f"Found {len(users_marked)} deletion candidates: {', '.join(users_marked)}"
+        )
         # commit changes to the database
         session.commit()
 
