@@ -193,12 +193,11 @@ def test_delete_candidate_user_data_failure(
     """"""
     # mock the get_db_session to return the in-memory test session
     mock_get_db_session.return_value.__enter__.return_value = test_db_session
-    session_mock = mock_get_db_session.return_value.__enter__.return_value
 
     # simulate an exception when trying to delete data for the second user
-    session_mock.rollback = Mock()
-    session_mock.delete = Mock()
-    session_mock.delete.side_effect = (
+    test_db_session.rollback = Mock()
+    test_db_session.delete = Mock()
+    test_db_session.delete.side_effect = (
         lambda user: None if user.email != "user6@example.com" else raise_exception()
     )
 
@@ -206,8 +205,8 @@ def test_delete_candidate_user_data_failure(
     delete_candidate_user_data()
 
     # ensure function calls on exception
-    session_mock.delete.call_count = 2
-    session_mock.rollback.call_count = 1
+    test_db_session.delete.call_count = 2
+    test_db_session.rollback.call_count = 1
 
     # ensure the first user was deleted successfully and the second caused a failure
     mock_log.info.assert_any_call("Loading user data for user5@example.com")
