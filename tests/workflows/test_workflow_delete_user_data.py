@@ -1,4 +1,4 @@
-from unittest.mock import call, patch
+from unittest.mock import Mock, call, patch
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from workflows.db.tables import Base, Conversation, Folder, Message, User
-from workflows.workflow import delete_candidate_user_data
+from workflows.workflow import delete_candidate_user_data, get_users_deletion_candicates
 
 # Create a session for a SQLite in-memory database
 engine = create_engine(
@@ -18,7 +18,7 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 
 
 @pytest.fixture
-def get_db_session():
+def test_db_session():
     """
     Loads the example sqlite database which contains 6 users. 3 were marked
     as candidates for deletion, i.e. user4, user5, user 6. 2 with timestamp
@@ -56,10 +56,10 @@ def mock_log():
         yield mock_log
 
 
-def test_user_count_deletion_candidates(get_db_session):
+def test_user_count_deletion_candidates(test_db_session):
     """Test to ensure that there are 5 users in the User table."""
 
-    with get_db_session as db:
+    with test_db_session as db:
         user_count = db.query(
             User
         ).count()  # Query the number of users in the User table
@@ -70,28 +70,28 @@ def test_user_count_deletion_candidates(get_db_session):
 
 
 @patch("workflows.workflow.get_db_session")
-def test_all_deletion_candidates_gone(mock_get_db_session, mock_log, get_db_session):
+def test_all_deletion_candidates_gone(mock_get_db_session, mock_log, test_db_session):
     """
     This method checks whether all user data has been sucessfully deleted.
     """
     # Mock the get_db_session to return the in-memory test session
-    mock_get_db_session.return_value = get_db_session
+    mock_get_db_session.return_value = test_db_session
 
     # call the function under test
     delete_candidate_user_data()
 
     # check the database for changes
-    with get_db_session as db:
+    with test_db_session as db:
         # 2 deleted, 1 left
         delete_candidate_users = db.query(User).filter(User.wf_deletion_candidate).all()
         assert len(delete_candidate_users) == 1
 
 
 @patch("workflows.workflow.get_db_session")
-def test_deletion_successful_logging(mock_get_db_session, mock_log, get_db_session):
+def test_deletion_successful_logging(mock_get_db_session, mock_log, test_db_session):
     """"""
     # Mock the get_db_session to return the in-memory test session
-    mock_get_db_session.return_value = get_db_session
+    mock_get_db_session.return_value = test_db_session
 
     # call the function under test
     delete_candidate_user_data()
@@ -116,11 +116,11 @@ def test_deletion_successful_logging(mock_get_db_session, mock_log, get_db_sessi
 
 @patch("workflows.workflow.get_db_session")
 def test_all_deletion_candidates_data_gone(
-    mock_get_db_session, mock_log, get_db_session
+    mock_get_db_session, mock_log, test_db_session
 ):
     """"""
     # Mock the get_db_session to return the in-memory test session
-    mock_get_db_session.return_value = get_db_session
+    mock_get_db_session.return_value = test_db_session
 
     # call the function under test
     delete_candidate_user_data()
@@ -128,7 +128,7 @@ def test_all_deletion_candidates_data_gone(
     test_data = [{"email": f"user{i}@example.com", "id": f"user{i}_id"} for i in [5, 6]]
 
     # check the database for changes
-    with get_db_session as db:
+    with test_db_session as db:
         for user in test_data:
             messages = (
                 db.query(Message)
@@ -151,19 +151,19 @@ def test_all_deletion_candidates_data_gone(
 
 
 @patch("workflows.workflow.get_db_session")
-def test_no_else_data_deleted(mock_get_db_session, mock_log, get_db_session):
+def test_no_else_data_deleted(mock_get_db_session, mock_log, test_db_session):
     """
     Example sqlite database contains 5 users, where 2 users are marked
     as candidates for deletion, i.e. user4@example.com and user5@example.com.
     """
     # Mock the get_db_session to return the in-memory test session
-    mock_get_db_session.return_value = get_db_session
+    mock_get_db_session.return_value = test_db_session
 
     # call the function under test
     delete_candidate_user_data()
 
     # check the database for changes
-    with get_db_session as db:
+    with test_db_session as db:
         # conversations left
         conversations = db.query(Conversation).all()
         assert len(conversations) == 8
@@ -179,3 +179,44 @@ def test_no_else_data_deleted(mock_get_db_session, mock_log, get_db_session):
         # users left
         users = db.query(User).all()
         assert len(users) == 4
+
+
+# Helper function to raise the exception
+def raise_exception():
+    raise Exception("Delete error")
+
+
+@patch("workflows.workflow.get_db_session")
+def test_delete_candidate_user_data_failure(
+    mock_get_db_session, mock_log, test_db_session
+):
+    """"""
+    # mock the get_db_session to return the in-memory test session
+    mock_get_db_session.return_value.__enter__.return_value = test_db_session
+    session_mock = mock_get_db_session.return_value.__enter__.return_value
+
+    # simulate an exception when trying to delete data for the second user
+    session_mock.rollback = Mock()
+    session_mock.delete = Mock()
+    session_mock.delete.side_effect = (
+        lambda user: None if user.email != "user6@example.com" else raise_exception()
+    )
+
+    # call the function under test
+    delete_candidate_user_data()
+
+    # ensure function calls on exception
+    session_mock.delete.call_count = 2
+    session_mock.rollback.call_count = 1
+
+    # ensure the first user was deleted successfully and the second caused a failure
+    mock_log.info.assert_any_call("Loading user data for user5@example.com")
+    mock_log.info.assert_any_call("Loading user data for user6@example.com")
+    mock_log.error.assert_any_call(
+        "Failed to delete data for user user6@example.com: Delete error"
+    )
+
+    # check if users are still there
+    remaining_users = get_users_deletion_candicates()
+    # 1 successfully deleted, 2 left (see `test_all_deletion_candidates_gone`)
+    assert len(remaining_users) == 2
