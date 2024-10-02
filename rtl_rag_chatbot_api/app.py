@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import shutil
-import sqlite3
 import uuid
 from pathlib import Path
 
@@ -33,6 +32,9 @@ from rtl_rag_chatbot_api.common.models import (
     NeighborsQuery,
     Query,
 )
+from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
+    PrepareSQLFromTabularData,
+)
 
 # Suppress logging warnings
 os.environ["GRPC_VERBOSITY"] = "ERROR"
@@ -47,7 +49,7 @@ gcs_handler = GCSHandler(configs)
 file_handler = FileHandler(configs, gcs_handler)
 model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler)
-tabular_data_handler = TabularDataHandler("rtl_rag_chatbot_api/tabularData/csv_dir")
+
 
 title = "RAG PDF API"
 description = """
@@ -84,6 +86,9 @@ gemini_handler = None
 initialized_chatbots = {}
 
 initialized_models = {}
+# Global dictionary to store initialized handlers
+initialized_handlers = {}
+
 
 # Global variables to store initialized models
 initialized_azure_model = None
@@ -134,8 +139,6 @@ async def info():
     }
 
 
-# ‚ Todo : Modify the upload function to take csv and also download the csv to the correct place or adjust the urls
-# todo adjust the reference as i moved the files under chatbot and common
 @app.post("/file/upload", response_model=FileUploadResponse)
 async def upload_file(
     file: UploadFile = File(...),
@@ -155,17 +158,22 @@ async def upload_file(
     try:
         file_id = str(uuid.uuid4())
         original_filename = file.filename
+        file_extension = os.path.splitext(original_filename)[1].lower()
 
         result = await file_handler.process_file(file, file_id, is_image, username)
 
         print(f"Result from process_file: {result}")
         if result["status"] == "existing":
             if file_handler.download_existing_file(result["file_id"]):
-                message = "File already exists. Requited files downloaded."
+                message = "File already exists. Required files downloaded."
             else:
                 message = "File already exists, but error downloading necessary files."
         else:
             message = "File uploaded, encrypted, and processed successfully"
+
+        # If it's a CSV or Excel file, prepare the SQLite database
+        if file_extension in [".csv", ".xlsx", ".xls"]:
+            await prepare_sqlite_db(file_id)
 
         return FileUploadResponse(
             message=message,
@@ -176,6 +184,34 @@ async def upload_file(
     except Exception as e:
         print(f"Exception in upload_file: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def prepare_sqlite_db(file_id: str):
+    try:
+        data_dir = f"./chroma_db/{file_id}"
+        os.makedirs(data_dir, exist_ok=True)
+
+        # Download and decrypt the file
+        decrypted_file_path = gcs_handler.download_and_decrypt_file(file_id, data_dir)
+
+        # Prepare SQLite database
+        data_preparer = PrepareSQLFromTabularData(data_dir)
+        data_preparer.run_pipeline()
+
+        # Upload the SQLite database to GCS
+        db_path = os.path.join(data_dir, "tabular_data.db")
+        gcs_handler.upload_to_gcs(
+            configs.gcp_resource.bucket_name,
+            source=db_path,
+            destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db",
+        )
+
+        # Clean up the decrypted file
+        os.remove(decrypted_file_path)
+
+    except Exception as e:
+        logging.error(f"Error preparing SQLite database: {str(e)}")
+        raise
 
 
 @app.post("/model/initialize")
@@ -193,27 +229,29 @@ async def initialize_model(request: ModelInitRequest):
     """
     try:
         file_info = embedding_handler.get_embeddings_info(request.file_id)
-        if not file_info:
-            raise HTTPException(
-                status_code=404, detail="Embeddings not found for this file"
-            )
 
-        if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]:
-            embedding_type = "google"
+        # Check if the file is a tabular data file
+        db_path = f"./chroma_db/{request.file_id}/tabular_data.db"
+        if os.path.exists(db_path):
+            # Initialize TabularDataHandler for CSV/Excel files
+            model = TabularDataHandler(configs, request.file_id, request.model_choice)
         else:
-            embedding_type = "azure"
+            # For PDF/Image files, proceed with the existing logic
+            if not file_info:
+                raise HTTPException(
+                    status_code=404, detail="Embeddings not found for this file"
+                )
 
-        # Check if the Chroma DB path exists
-        chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
-        if not os.path.exists(chroma_db_path):
-            raise HTTPException(
-                status_code=404, detail=f"Chroma DB not found at {chroma_db_path}"
+            if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]:
+                embedding_type = "google"
+            else:
+                embedding_type = "azure"
+
+            # chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
+            model = model_handler.initialize_model(
+                request.model_choice, request.file_id, embedding_type
             )
 
-        # Initialize the model with the correct path
-        model = model_handler.initialize_model(
-            request.model_choice, request.file_id, embedding_type
-        )
         initialized_models[request.file_id] = model
         return {"message": f"Model {request.model_choice} initialized successfully"}
     except Exception as e:
@@ -504,61 +542,6 @@ async def get_gemini_response_stream(request: ChatRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
-
-
-@app.post("/tabular/query")
-async def query_tabular_data(query: str):
-    try:
-        response = tabular_data_handler.ask_question(query)
-        return {"response": response}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/tabular/info")
-async def get_tabular_info(table_name: str = None):
-    try:
-        db_path = tabular_data_handler.db_path
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        if table_name:
-            # Get info for a specific table
-            cursor.execute(f"PRAGMA table_info('{table_name}')")
-            columns_info = cursor.fetchall()
-
-            schema = [{"name": col[1], "type": col[2]} for col in columns_info]
-
-            cursor.execute(f"SELECT * FROM '{table_name}' LIMIT 5")
-            rows = cursor.fetchall()
-            columns = [description[0] for description in cursor.description]
-
-            sample_data = [dict(zip(columns, row)) for row in rows]
-
-            cursor.execute(f"SELECT COUNT(*) FROM '{table_name}'")
-            row_count = cursor.fetchone()[0]
-
-            info = {
-                "table": table_name,
-                "row_count": row_count,
-                "column_count": len(columns),
-                "columns": columns,
-                "schema": schema,
-                "sample_data": sample_data,
-            }
-        else:
-            # Get list of all tables
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tables = [table[0] for table in cursor.fetchall()]
-            info = {"tables": tables}
-
-        conn.close()
-        return info
-    except Exception as e:
-        logging.error(f"Error in get_tabular_info: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500, detail=f"Error getting table info: {str(e)}"
-        )
 
 
 def start():
