@@ -145,16 +145,6 @@ async def upload_file(
     is_image: bool = Form(...),
     username: str = Form(...),
 ):
-    """
-    Handles the uploading of a file with optional image flag.
-
-    Args:
-        file (UploadFile): The file to be uploaded.
-        is_image (bool): Flag indicating if the file is an image.
-
-    Returns:
-        FileUploadResponse: Response containing details of the uploaded file.
-    """
     try:
         file_id = str(uuid.uuid4())
         original_filename = file.filename
@@ -164,20 +154,20 @@ async def upload_file(
 
         print(f"Result from process_file: {result}")
         if result["status"] == "existing":
-            if file_handler.download_existing_file(result["file_id"]):
+            file_id = result["file_id"]  # Use the existing file_id
+            if file_handler.download_existing_file(file_id):
                 message = "File already exists. Required files downloaded."
             else:
                 message = "File already exists, but error downloading necessary files."
         else:
             message = "File uploaded, encrypted, and processed successfully"
-
-        # If it's a CSV or Excel file, prepare the SQLite database
-        if file_extension in [".csv", ".xlsx", ".xls"]:
-            await prepare_sqlite_db(file_id)
+            # If it's a CSV or Excel file and it's a new upload, prepare the SQLite database
+            if file_extension in [".csv", ".xlsx", ".xls"]:
+                await prepare_sqlite_db(file_id)
 
         return FileUploadResponse(
             message=message,
-            file_id=result["file_id"],
+            file_id=file_id,
             original_filename=original_filename,
             is_image=is_image,
         )
@@ -191,6 +181,12 @@ async def prepare_sqlite_db(file_id: str):
         data_dir = f"./chroma_db/{file_id}"
         os.makedirs(data_dir, exist_ok=True)
 
+        # Check if the database already exists
+        db_path = os.path.join(data_dir, "tabular_data.db")
+        if os.path.exists(db_path):
+            logging.info(f"SQLite database already exists for file_id: {file_id}")
+            return
+
         # Download and decrypt the file
         decrypted_file_path = gcs_handler.download_and_decrypt_file(file_id, data_dir)
 
@@ -199,7 +195,6 @@ async def prepare_sqlite_db(file_id: str):
         data_preparer.run_pipeline()
 
         # Upload the SQLite database to GCS
-        db_path = os.path.join(data_dir, "tabular_data.db")
         gcs_handler.upload_to_gcs(
             configs.gcp_resource.bucket_name,
             source=db_path,
