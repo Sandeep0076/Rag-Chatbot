@@ -65,9 +65,9 @@ def get_users_deletion_candicates():
         )
 
         log.info(
-            f"Found {len(users)} deletion candidates, ",
-            f"{len(filtered_users)} of them marked older than 4 weeks: ",
-            f"{', '.join(list(map(lambda u: u.email, filtered_users)))}",
+            f"Found {len(users)} deletion candidates, "
+            f"{len(filtered_users)} of them marked older than 4 weeks: "
+            f"{', '.join(list(map(lambda u: u.email, filtered_users)))}"
         )
 
         return filtered_users
@@ -135,10 +135,10 @@ def delete_candidate_user_data():
                 folders = session.query(Folder).filter(Folder.userId == user.id).all()
 
                 log.info(
-                    "About to delete: ",
-                    f"{len(messages)} messages, ",
-                    f"{len(conversations)} conversations, ",
-                    f"{len(folders)} folders.",
+                    "About to delete: "
+                    f"{len(messages)} messages, "
+                    f"{len(conversations)} conversations, "
+                    f"{len(folders)} folders."
                 )
 
                 # delete the messages, conversations, and folders related to the user
