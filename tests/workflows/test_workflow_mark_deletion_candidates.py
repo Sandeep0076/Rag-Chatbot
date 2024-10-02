@@ -7,7 +7,11 @@ from sqlalchemy.pool import StaticPool
 
 from workflows.db.helpers import iso8601_timestamp_now
 from workflows.db.tables import Base, User
-from workflows.workflow import mark_deletion_candidates
+from workflows.workflow import (
+    get_users,
+    get_users_deletion_candicates,
+    mark_deletion_candidates,
+)
 
 # Create a session for a SQLite in-memory database
 engine = create_engine(
@@ -48,39 +52,57 @@ def test_db_session():
 
 
 @pytest.fixture
-def mock_user_data(get_db_session):
-    """Fixture to set up user data in the database for testing."""
-    with get_db_session as session:
-        users = session.query(User).all()
-
-    return users  # Return the user objects for testing
-
-
-@pytest.fixture
 def mock_log():
     with patch("workflows.workflow.log") as mock_log:
         yield mock_log
 
 
 @patch("workflows.workflow.get_db_session")
-@patch("workflows.workflow.get_users")
+def test_workflow_get_users(mock_get_db_session, test_db_session):
+    """
+    Tests whether workflows.workflow.get_users() returns all users in db.
+    """
+    # db session should use the test session. Use of __enter__ is necessary because
+    # workflows.workflow.get_db_session has a `with get_db_session as ..:` statement.
+    mock_get_db_session.return_value.__enter__.return_value = test_db_session
+
+    users = get_users()
+    assert len(users) == 6
+
+
+@patch("workflows.workflow.get_db_session")
+def test_workflow_get_users_deletion_candicates(mock_get_db_session, test_db_session):
+    """
+    Tests whether workflows.workflow.get_users_deletion_candicates() returns all users
+    marked as deletion candidates in db.
+    """
+    # db session should use the test session. Use of __enter__ is necessary because
+    # workflows.workflow.get_db_session has a `with get_db_session as ..:` statement.
+    mock_get_db_session.return_value.__enter__.return_value = test_db_session
+
+    users = get_users_deletion_candicates()
+    assert len(users) == 2
+    assert users[0].email == "user5@example.com"
+    assert users[1].email == "user6@example.com"
+
+
+@patch("workflows.workflow.get_db_session")
 @patch("workflows.msgraph.is_user_account_enabled")  # Mock the Azure Graph API call
 @patch("workflows.db.helpers.iso8601_timestamp_now")  # Mock the datetime helper
 def test_mark_deletion_candidates(
     mock_iso8601_timestamp_now,
     mock_is_user_account_enabled,
-    mock_get_users,
     mock_get_db_session,
-    get_db_session,
-    mock_user_data,
+    test_db_session,
 ):
-    """Test the mark_deletion_candidates function."""
+    """
+    Mocks is_user_account_enabled() to return an inactive user: user2@example.com.
+    This should lead mark_deletion_candidates to return more users that were marked as
+    inactive in the function.
+    """
     # db session should use the test session. Use of __enter__ is necessary because
     # workflows.workflow.get_db_session has a `with get_db_session as ..:` statement.
-    mock_get_db_session.return_value.__enter__.return_value = get_db_session
-
-    # mock sone return values
-    mock_get_users.return_value = mock_user_data
+    mock_get_db_session.return_value.__enter__.return_value = test_db_session
 
     # "side_effect" simulates that the particular user is disabled in Azure,
     # because is_user_account_enabled takes email as input and returns True/False.
@@ -88,14 +110,14 @@ def test_mark_deletion_candidates(
         lambda email: email != "user2@example.com"
     )  # Only 'user2@example.com' is disabled
 
-    mock_datetime_now = iso8601_timestamp_now()
+    mock_datetime_now = "2024-10-02T15:48:39.500Z"
     mock_iso8601_timestamp_now.return_value = mock_datetime_now
 
     # call the workflow function
     mark_deletion_candidates()
 
     # check the database for changes
-    with get_db_session as session:
+    with test_db_session as session:
         for user in session.query(User).all():
             print(f"{user.email} -> {user.wf_deletion_candidate}")
 
