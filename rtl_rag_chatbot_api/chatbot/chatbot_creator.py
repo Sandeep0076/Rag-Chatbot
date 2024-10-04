@@ -1,6 +1,5 @@
 import base64
 import io
-import logging
 import os
 
 import chromadb
@@ -308,15 +307,3 @@ class Chatbot:
             "x_label": "Categories",
             "y_label": "Values",
         }
-
-
-def get_azure_non_rag_response(
-    configs, query: str, model_choice: str = "gpt_4o_mini"
-) -> str:
-    try:
-        chatbot = Chatbot(configs, file_id=None, model_choice=model_choice)
-        response = chatbot.get_llm_answer(query)
-        return response
-    except Exception as e:
-        logging.error(f"Error in get_azure_non_rag_response: {str(e)}")
-        raise Exception(f"Failed to get response: {str(e)}")

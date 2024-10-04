@@ -25,17 +25,11 @@ def cleanup_files():
 
 def handle_file_upload():
     st.session_state.file_type = st.radio(
-        "Select file type:", ["PDF", "CSV", "Image"], horizontal=True
+        "Select file type:", ["PDF", "Image"], horizontal=True
     )
 
     is_image = st.session_state.file_type == "Image"
-    if is_image:
-        file_types = ["jpg", "png"]
-    elif st.session_state.file_type in ["CSV"]:
-        file_types = ["xlsx", "xls", "csv"]
-    else:  # PDF
-        file_types = ["pdf"]
-
+    file_types = ["jpg", "png"] if is_image else ["pdf"]
     uploaded_file = st.file_uploader(
         f"Choose a {st.session_state.file_type} file", type=file_types
     )
@@ -55,47 +49,43 @@ def handle_file_upload():
                 if upload_response.status_code == 200:
                     upload_result = upload_response.json()
                     file_id = upload_result["file_id"]
-                    st.session_state.file_id = file_id
-                    st.session_state.file_uploaded = True
 
-                    # Step 2: Create embeddings or prepare SQLite DB
-                    with st.spinner("Creating embeddings or preparing database..."):
-                        if st.session_state.file_type in ["PDF", "Image"]:
-                            embed_response = requests.post(
-                                f"{API_URL}/embeddings/create",
-                                json={
-                                    "file_id": file_id,
-                                    "is_image": is_image,
-                                },
-                            )
-                            if embed_response.status_code == 200:
-                                st.success(
-                                    "File processed and embeddings created successfully."
-                                )
-                        else:  # CSV/Excel
+                    # Step 2: Create embeddings
+                    with st.spinner("Creating embeddings..."):
+                        embed_response = requests.post(
+                            f"{API_URL}/embeddings/create",
+                            json={
+                                "file_id": file_id,
+                                "is_image": is_image,
+                            },
+                        )
+                        if embed_response.status_code == 200:
                             st.success(
-                                "File processed and SQLite database created successfully."
+                                "File processed and embeddings created successfully."
                             )
+                            st.session_state.file_id = file_id
+                            st.session_state.file_uploaded = True
+                            if is_image:
+                                st.session_state.uploaded_image = uploaded_file
 
-                    if is_image:
-                        st.session_state.uploaded_image = uploaded_file
+                            # Initialize the selected model
+                            initialize_model(st.session_state.model_choice)
 
-                    # Initialize the selected model
-                    initialize_model(st.session_state.model_choice)
-
-                    # Reset messages when a new file is uploaded
-                    st.session_state.messages = []
-
-                    # st.experimental_rerun()  # Add this line to force a rerun
+                            # Reset messages when a new file is uploaded
+                            st.session_state.messages = []
+                        else:
+                            st.error(
+                                f"Embedding creation failed: {embed_response.text}"
+                            )
                 else:
                     st.error(f"File upload failed: {upload_response.text}")
 
-    # Display image in sidebar if it's an image file
-    if is_image and st.session_state.uploaded_image is not None:
-        with st.sidebar:
-            st.subheader("Uploaded Image:")
-            img = Image.open(st.session_state.uploaded_image)
-            st.image(img, use_column_width=True)
+            # Display image in sidebar if it's an image file
+            if is_image and st.session_state.uploaded_image is not None:
+                with st.sidebar:
+                    st.subheader("Uploaded Image:")
+                    img = Image.open(st.session_state.uploaded_image)
+                    st.image(img, use_column_width=True)
 
 
 def display_chat_interface():
@@ -137,7 +127,7 @@ def display_chat_interface():
                     st.session_state.messages.append(ai_message)
 
                     with st.chat_message("assistant"):
-                        st.markdown(chat_result["response"])
+                        st.write(chat_result["response"])
                         st.markdown(f"Model: **{st.session_state.model_choice}**")
                         if "chart_data" in chat_result:
                             chart_data = chat_result["chart_data"]["chart_data"]
@@ -157,24 +147,23 @@ def display_chat_interface():
                             img = Image.open(st.session_state.uploaded_image)
                             st.image(img, use_column_width=True)
 
-                    # Nearest neighbors request (only for PDF and Image files)
-                    if st.session_state.file_type in ["PDF", "Image"]:
-                        neighbors_payload = {
-                            "text": user_input,
-                            "file_id": st.session_state.file_id,
-                            "n_neighbors": 3,
-                        }
-                        neighbors_response = requests.post(
-                            f"{API_URL}/file/neighbors", json=neighbors_payload
-                        )
-                        if neighbors_response.status_code == 200:
-                            neighbors_result = neighbors_response.json()
-                            with st.sidebar:
-                                st.subheader("Nearest Neighbors:")
-                                for i, neighbor in enumerate(
-                                    neighbors_result["neighbors"], 1
-                                ):
-                                    st.write(f"{i}. {neighbor}")
+                    # Nearest neighbors request
+                    neighbors_payload = {
+                        "text": user_input,
+                        "file_id": st.session_state.file_id,
+                        "n_neighbors": 3,
+                    }
+                    neighbors_response = requests.post(
+                        f"{API_URL}/file/neighbors", json=neighbors_payload
+                    )
+                    if neighbors_response.status_code == 200:
+                        neighbors_result = neighbors_response.json()
+                        with st.sidebar:
+                            st.subheader("Nearest Neighbors:")
+                            for i, neighbor in enumerate(
+                                neighbors_result["neighbors"], 1
+                            ):
+                                st.write(f"{i}. {neighbor}")
                 else:
                     st.error(f"Request failed: {chat_response.text}")
 
@@ -194,11 +183,11 @@ def initialize_session_state():
         if response.status_code == 200:
             st.session_state.available_models = response.json()["models"]
         else:
-            st.session_state.available_models = ["gpt_4o_mini", "gemini-pro"]
+            st.session_state.available_models = ["gpt_3_5_turbo", "gemini-pro"]
     if "model_choice" not in st.session_state:
         st.session_state.model_choice = "gpt_4o_mini"
     if "file_type" not in st.session_state:
-        st.session_state.file_type = "PDF"
+        st.session_state.file_type = "pdf"
     if "model_initialized" not in st.session_state:
         st.session_state.model_initialized = False
 

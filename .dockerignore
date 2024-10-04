@@ -1,2 +1,0 @@
-# ignore local .venv to be added from the context to the image
-.venv
