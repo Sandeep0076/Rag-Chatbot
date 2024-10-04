@@ -7,7 +7,6 @@ metadata:
   description: RTL RAG CHATBOT API
   annotations:
     backstage.io/techdocs-ref: dir:.
-    sonarqube.org/project-key: dataalliance_rtl-rag-chatbot-api
 spec:
   type: service
   owner: ecina
