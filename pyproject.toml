@@ -46,9 +46,10 @@ pdf2image = "^1.17.0"
 pytesseract = "^0.3.13"
 nltk = "^3.9.1"
 langchain-openai = "0.1.6"
+psycopg2-binary = "^2.9.9"
+sqlalchemy = "^2.0.35"
 [tool.poetry.dev-dependencies]
 pytest = "^7.1.0"
-pytest-cov = "^3.0.0"
 pytest-sugar = "^0.9.4"
 httpx = "^0.26.0"
 isort = "^5.10.1"
@@ -57,6 +58,8 @@ flake8 = "^6.0.0"
 pre-commit = "^2.15.0"
 pytest-asyncio = "^0.21.1"
 
+[tool.poetry.group.dev.dependencies]
+pytest-cov = "^5.0.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -76,3 +79,6 @@ filterwarnings = [
 [tool.poetry.scripts]
 start = "rtl_rag_chatbot_api.app:start"
 streamlit = "run_streamlit:run"
+
+[tool.coverage.run]
+source = ["rtl_rag_chatbot_api"]
