@@ -242,16 +242,19 @@ async def initialize_model(request: ModelInitRequest):
             else:
                 embedding_type = "azure"
 
-            # chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
             model = model_handler.initialize_model(
                 request.model_choice, request.file_id, embedding_type
             )
 
         initialized_models[request.file_id] = model
         return {"message": f"Model {request.model_choice} initialized successfully"}
+    except HTTPException as http_exc:
+        raise http_exc
     except Exception as e:
         logging.error(f"Error initializing model: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500, detail=f"Error initializing model: {str(e)}"
+        )
 
 
 @app.post("/file/chat")

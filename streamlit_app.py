@@ -137,7 +137,7 @@ def display_chat_interface():
                     st.session_state.messages.append(ai_message)
 
                     with st.chat_message("assistant"):
-                        st.write(chat_result["response"])
+                        st.markdown(chat_result["response"])
                         st.markdown(f"Model: **{st.session_state.model_choice}**")
                         if "chart_data" in chat_result:
                             chart_data = chat_result["chart_data"]["chart_data"]
