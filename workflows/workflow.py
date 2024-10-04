@@ -9,10 +9,10 @@ from sqlalchemy.orm import sessionmaker
 
 import workflows.db.helpers as db_helpers
 import workflows.msgraph as msgraph
-from workflows.db.tables import User
+from workflows.db.tables import Conversation, Folder, Message, User
 
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(levelname)s/%(funcName)s - %(message)s"
 )
 log = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def get_db_session():
         db_session.close()
 
 
-def get_user_list():
+def get_users():
     """"""
     with get_db_session() as session:
         users = session.query(User).all()
@@ -43,10 +43,40 @@ def get_user_list():
         return users
 
 
+def get_users_deletion_candicates():
+    """"""
+    with get_db_session() as session:
+        # get all users
+        users = (
+            session.query(User)
+            .filter(User.wf_deletion_candidate, User.wf_deletion_timestamp is not None)
+            .all()
+        )
+
+        # filter those with timestamp older than 4 weeks
+        filtered_users = list(
+            filter(
+                lambda user: db_helpers.datetime_from_iso8601_timestamp(
+                    user.wf_deletion_timestamp
+                )
+                <= db_helpers.datetime_four_weeks_ago(),
+                users,
+            )
+        )
+
+        log.info(
+            f"Found {len(users)} deletion candidates, "
+            f"{len(filtered_users)} of them marked older than 4 weeks: "
+            f"{', '.join(list(map(lambda u: u.email, filtered_users)))}"
+        )
+
+        return filtered_users
+
+
 def mark_deletion_candidates():
     """"""
     # 1. get the list of users from the chatbot database
-    users = get_user_list()
+    users = get_users()
 
     # 2. get account info from azure graph for all users
     user_emails = [user.email for user in users]
@@ -56,17 +86,89 @@ def mark_deletion_candidates():
     }
 
     # 3. mark those whose account is disabled
+    users_marked = []
     with get_db_session() as session:
         for user in users:
-            if user.email in account_statuses and not account_statuses.get(user.email):
+            # mark those users for which we got the data, which are not marked, and which are not yet already marked
+            if (
+                user.email in account_statuses
+                and not account_statuses.get(user.email)
+                and not user.wf_deletion_candidate
+            ):
                 user.wf_deletion_candidate = True
-                user.wf_deletion_timestamp = db_helpers.get_datetime_now()
+                user.wf_deletion_timestamp = db_helpers.iso8601_timestamp_now()
+                users_marked.append(user.email)
 
             # add user to the session for committing changes
             session.add(user)
 
+        log.info(
+            f"Found {len(users_marked)} deletion candidates: {', '.join(users_marked)}"
+        )
         # commit changes to the database
         session.commit()
+
+
+def delete_candidate_user_data():
+    """
+    Workflow to delete user data for those marked as deletion candidates.
+    """
+    # 1. Get the list of users marked for deletion from the chatbot database
+    users = get_users_deletion_candicates()
+
+    # 2. Get related data for each user and perform the necessary actions
+    with get_db_session() as session:
+        for user in users:
+            try:
+                print(f"loading user data for {user.email}")
+                log.info(f"Loading user data for {user.email}")
+
+                # 2. get the list of Messages related to the user's conversations
+                messages = (
+                    session.query(Message)
+                    .join(Conversation)
+                    .filter(Conversation.userEmail == user.email)
+                    .all()
+                )
+                # 3. get the list of Conversations related to the user
+                conversations = (
+                    session.query(Conversation)
+                    .filter(Conversation.userEmail == user.email)
+                    .all()
+                )
+                # 4. get the list of Folders related to the user
+                folders = session.query(Folder).filter(Folder.userId == user.id).all()
+
+                log.info(
+                    "About to delete: "
+                    f"{len(messages)} messages, "
+                    f"{len(conversations)} conversations, "
+                    f"{len(folders)} folders."
+                )
+
+                # delete the messages, conversations, and folders related to the user
+                for message in messages:
+                    session.delete(message)
+
+                for conversation in conversations:
+                    session.delete(conversation)
+
+                for folder in folders:
+                    session.delete(folder)
+
+                # Finally, delete the user itself
+                session.delete(user)
+
+                # Commit changes to delete the user and related data
+                session.commit()
+
+                # Log success
+                log.info(f"Successfully deleted data for user {user.email}.")
+
+            except Exception as e:
+                # Rollback in case of any errors and log the failure
+                session.rollback()
+                log.error(f"Failed to delete data for user {user.email}: {e}")
 
 
 if __name__ == "__main__":

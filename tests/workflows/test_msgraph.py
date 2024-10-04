@@ -18,6 +18,12 @@ def mock_requests_get():
         yield mock_get
 
 
+@pytest.fixture
+def mock_log():
+    with patch("workflows.msgraph.log") as mock_log:
+        yield mock_log
+
+
 def test_is_user_account_enabled_success(mock_get_access_token, mock_requests_get):
     """"""
     # mock a successful API response
@@ -64,7 +70,9 @@ def test_is_user_account_enabled_disabled_account(
     assert result is False
 
 
-def test_is_user_account_enabled_failure(mock_get_access_token, mock_requests_get):
+def test_is_user_account_enabled_failure(
+    mock_get_access_token, mock_requests_get, mock_log
+):
     """"""
     # mock an API failure response
     mock_response = MagicMock()
@@ -77,5 +85,8 @@ def test_is_user_account_enabled_failure(mock_get_access_token, mock_requests_ge
     result = is_user_account_enabled("nonexistentuser@example.com")
 
     # Assertions
-    assert result is None
+    assert result is False
+    mock_log.error.assert_any_call(
+        "Failed to fetch user details for nonexistentuser@example.com: 404, Not Found"
+    )
     mock_requests_get.assert_called_once()
