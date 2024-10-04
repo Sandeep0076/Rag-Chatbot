@@ -140,6 +140,11 @@ def test_cleanup_files(mock_gcs_handler):
 
 @patch("rtl_rag_chatbot_api.app.analyze_images")
 def test_analyze_image(mock_analyze_images):
+    """
+    Test the functionality of analyzing an image by mocking the 'analyze_images' function.
+    Ensure that the API endpoint '/image/analyze' returns a status code of 200 and
+    includes the keys 'message' and 'analysis' in the JSON response.
+    """
     mock_analyze_images.return_value = [{"analysis": "Test analysis"}]
 
     response = client.post(
@@ -153,6 +158,10 @@ def test_analyze_image(mock_analyze_images):
 
 @patch("rtl_rag_chatbot_api.app.initialized_models")
 def test_chat(mock_initialized_models):
+    """
+    Test the chat functionality by mocking initialized models and checking
+    responses for different scenarios.
+    """
     mock_model = MagicMock()
     mock_model.get_answer.return_value = "Test response"
     mock_initialized_models.__getitem__.return_value = mock_model
@@ -188,6 +197,12 @@ def test_chat(mock_initialized_models):
 
 @pytest.mark.asyncio
 async def test_create_embeddings():
+    """
+    Asynchronous test function to verify the creation of embeddings.
+    Mocks the EmbeddingHandler methods to simulate successful creation and upload of embeddings.
+    Sends a POST request to test the creation of embeddings with specified file_id and image status.
+    Checks the response status code and content for successful creation.
+    """
     async with AsyncClient(app=app, base_url="http://test") as ac:
         with patch.object(
             EmbeddingHandler, "embeddings_exist", return_value=False
@@ -225,6 +240,11 @@ async def test_get_neighbors_model_not_initialized():
 
 @pytest.mark.asyncio
 async def test_get_neighbors():
+    """
+    Asynchronous unit test for the 'test_get_neighbors' function.
+    Mocks a model to return nearest neighbors and tests the API endpoint '/file/neighbors'.
+    Asserts the response status code and content against expected values.
+    """
     mock_model = MagicMock()
     mock_model.get_n_nearest_neighbours.return_value = [
         MagicMock(node=MagicMock(text="Neighbor 1")),
@@ -252,6 +272,12 @@ async def test_get_neighbors():
 
 @pytest.mark.asyncio
 async def test_get_neighbors_gemini():
+    """
+    Asynchronous unit test for the function that retrieves Gemini neighbors.
+    Mocks the GeminiHandler to return a list of neighbors.
+    Sends a POST request to test the endpoint for retrieving neighbors.
+    Checks the response status code and content for correctness.
+    """
     mock_gemini_handler = MagicMock(spec=GeminiHandler)
     mock_gemini_handler.get_n_nearest_neighbours.return_value = [
         "Gemini Neighbor 1",
@@ -282,6 +308,12 @@ async def test_get_neighbors_gemini():
 
 @pytest.mark.asyncio
 async def test_delete_files():
+    """
+    Asynchronous unit test for deleting files from the server.
+    Mocks GCSHandler methods to simulate file deletion.
+    Verifies the response status code, content, and method calls.
+    Asserts the expected response data and method calls.
+    """
     file_ids = ["file1", "file2", "file3"]
 
     # Mock GCSHandler and its methods

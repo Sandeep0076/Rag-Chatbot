@@ -145,6 +145,17 @@ async def upload_file(
     is_image: bool = Form(...),
     username: str = Form(...),
 ):
+    """
+    Handles the uploading of a file with optional image flag.
+
+    Args:
+        file (UploadFile): The file to be uploaded.
+        is_image (bool): Flag indicating if the file is an image.
+        username (str): The username associated with the uploaded file.
+
+    Returns:
+        FileUploadResponse: Response containing details of the uploaded file.
+    """
     try:
         file_id = str(uuid.uuid4())
         original_filename = file.filename
@@ -177,6 +188,11 @@ async def upload_file(
 
 
 async def prepare_sqlite_db(file_id: str):
+    """
+    Handles the preparation of a SQLite database for tabular data from the uploaded file.
+    Downloads and decrypts the file, prepares the SQLite database,
+    uploads it to GCS, and cleans up the decrypted file if successful.
+    """
     try:
         data_dir = f"./chroma_db/{file_id}"
         os.makedirs(data_dir, exist_ok=True)
@@ -470,6 +486,16 @@ async def analyze_image_endpoint(file: UploadFile = File(...)):
 
 @app.delete("/files")
 async def delete_files(request: FileDeleteRequest):
+    """
+    Delete files and their embeddings based on the provided file IDs.
+
+    Args:
+        file_ids (List[str]): List of file IDs to delete.
+
+    Returns:
+        dict: A message indicating the status of the deletion process,
+        along with the list of deleted files and any errors encountered.
+    """
     file_ids = request.file_ids
     deleted_files = []
     errors = []
