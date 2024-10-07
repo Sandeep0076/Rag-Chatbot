@@ -37,6 +37,13 @@ class TabularDataHandler:
         self.db = SQLDatabase(engine=self.engine)
         self.llm = self._initialize_llm()
         self.agent = None
+        self.table_info = self.get_table_info()
+        if self.table_info:
+            self.table_name = self.table_info[0][
+                "name"
+            ]  # Assuming the first table is the one we want
+        else:
+            raise ValueError("No tables found in the database")
 
     def _initialize_llm(self) -> AzureChatOpenAI:
         model_config = self.config.azure_llm.models.get(self.model_choice)
@@ -58,10 +65,34 @@ class TabularDataHandler:
         data_preparer.run_pipeline()
 
     def _initialize_agent(self):
-        toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
-        self.agent = create_sql_agent(
-            llm=self.llm, toolkit=toolkit, verbose=True, handle_parsing_errors=True
+        toolkit = SQLDatabaseToolkit(
+            db=self.db, llm=self.llm, handle_parsing_errors=True
         )
+        self.agent = create_sql_agent(
+            llm=self.llm,
+            toolkit=toolkit,
+            verbose=True,
+            handle_parsing_errors=True,
+            agent_executor_kwargs={"handle_parsing_errors": True},
+        )
+
+    def debug_database(self):
+        try:
+            logging.info(
+                f"Tables in the database: {[table['name'] for table in self.table_info]}"
+            )
+
+            if self.table_name:
+                with self.engine.connect() as connection:
+                    result = connection.execute(
+                        text(f"SELECT * FROM `{self.table_name}` LIMIT 5")
+                    )
+                    rows = result.fetchall()
+                    logging.info(f"First 5 rows of '{self.table_name}' table: {rows}")
+            else:
+                logging.info("No tables found in the database.")
+        except Exception as e:
+            logging.error(f"Error debugging database: {str(e)}", exc_info=True)
 
     def get_table_info(self) -> List[dict]:
         inspector = inspect(self.engine)
@@ -139,8 +170,10 @@ class TabularDataHandler:
         try:
             answer = self.ask_question(question)
             if answer:
+                print("Direct answer")
                 return answer
             else:
+                print("Forced answer")
                 return self.get_forced_answer(question, answer)
         except Exception as e:
             logging.error(f"Error in TabularDataHandler get_answer: {str(e)}")
@@ -151,12 +184,11 @@ class TabularDataHandler:
             self._initialize_agent()
 
         try:
-            # Get database info
-            db_info = self.get_table_info()
-
             # Use the format_question function from prompt_handler
-            formatted_question = format_question(db_info, question)
-            print(f"This is a formatted by GPT: {formatted_question}")
+            formatted_question = format_question(
+                self.table_info, question, self.table_name
+            )
+            logging.info(f"Formatted question: {formatted_question}")
 
             # Check if the formatted question contains specific keywords
             keywords = ["SELECT", "FIND", "LIST", "SHOW", "CALCULATE"]

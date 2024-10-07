@@ -290,14 +290,29 @@ async def chat(query: Query):
         model = initialized_models[query.file_id]
         logging.info(f"Model type: {type(model)}")
 
-        if isinstance(model, dict):
-            model = model["model"]
-            logging.info(f"Model extracted from dict: {type(model)}")
+        if isinstance(model, TabularDataHandler):
+            logging.info("Debugging database contents:")
+            model.debug_database()
 
         logging.info(f"Calling get_answer on model: {type(model)}")
         response = model.get_answer(query.text)
 
-        return {"response": response}
+        # Check if the response is a list (tabular data)
+        if isinstance(response, list) and len(response) > 1:
+            headers = response[0]
+            rows = response[1:]
+
+            # Format the table as a string
+            table_str = "| " + " | ".join(str(h) for h in headers) + " |\n"
+            table_str += "|" + "|".join(["---" for _ in headers]) + "|\n"
+            for row in rows:
+                table_str += "| " + " | ".join(str(cell) for cell in row) + " |\n"
+
+            return {"response": table_str}
+        else:
+            # For non-tabular data (e.g., PDF, image analysis)
+            return {"response": str(response)}
+
     except Exception as e:
         logging.error(f"Error in chat endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
