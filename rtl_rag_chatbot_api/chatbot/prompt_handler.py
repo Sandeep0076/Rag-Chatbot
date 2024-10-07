@@ -36,6 +36,7 @@ Analyze the given database_info and user_question. Your task is to:
    This query should be structured similarly to SQL but written in plain English.
 
 Database Info: {database_info}
+Table Name: {table_name}
 User Question: {user_question}
 
 Guidelines for generating SQL-like natural language queries:
@@ -57,8 +58,11 @@ Do not explain or provide multiple options. Output a single, coherent response.
 """
 
 
-def format_question(database_info, user_question):
+def format_question(database_info, user_question, table_name):
     formatted_prompt = special_prompt.format(
-        database_info=database_info, user_question=user_question, examples=examples
+        database_info=database_info,
+        user_question=user_question,
+        table_name=table_name,
+        examples=examples,
     )
     return get_azure_non_rag_response(configs, formatted_prompt)
