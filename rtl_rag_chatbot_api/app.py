@@ -16,6 +16,7 @@ from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
+from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.file_handler import FileHandler
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
@@ -30,6 +31,9 @@ from rtl_rag_chatbot_api.common.models import (
     ModelInitRequest,
     NeighborsQuery,
     Query,
+)
+from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
+    PrepareSQLFromTabularData,
 )
 
 # Suppress logging warnings
@@ -46,8 +50,8 @@ file_handler = FileHandler(configs, gcs_handler)
 model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
-title = "RAG PDF API"
 
+title = "RAG PDF API"
 description = """
 RAG PDF API is a FastAPI-based application for processing and
 querying PDF documents using Retrieval-Augmented Generation (RAG).
@@ -82,6 +86,9 @@ gemini_handler = None
 initialized_chatbots = {}
 
 initialized_models = {}
+# Global dictionary to store initialized handlers
+initialized_handlers = {}
+
 
 # Global variables to store initialized models
 initialized_azure_model = None
@@ -144,6 +151,7 @@ async def upload_file(
     Args:
         file (UploadFile): The file to be uploaded.
         is_image (bool): Flag indicating if the file is an image.
+        username (str): The username associated with the uploaded file.
 
     Returns:
         FileUploadResponse: Response containing details of the uploaded file.
@@ -151,28 +159,70 @@ async def upload_file(
     try:
         file_id = str(uuid.uuid4())
         original_filename = file.filename
+        file_extension = os.path.splitext(original_filename)[1].lower()
 
         result = await file_handler.process_file(file, file_id, is_image, username)
 
         print(f"Result from process_file: {result}")
         if result["status"] == "existing":
-            # Remove the await keyword here
-            if file_handler.download_existing_file(result["file_id"]):
-                message = "File already exists. Embeddings downloaded."
+            file_id = result["file_id"]  # Use the existing file_id
+            if file_handler.download_existing_file(file_id):
+                message = "File already exists. Required files downloaded."
             else:
-                message = "File already exists, but error downloading embeddings."
+                message = "File already exists, but error downloading necessary files."
         else:
             message = "File uploaded, encrypted, and processed successfully"
+            # If it's a CSV or Excel file and it's a new upload, prepare the SQLite database
+            if file_extension in [".csv", ".xlsx", ".xls"]:
+                await prepare_sqlite_db(file_id)
 
         return FileUploadResponse(
             message=message,
-            file_id=result["file_id"],
+            file_id=file_id,
             original_filename=original_filename,
             is_image=is_image,
         )
     except Exception as e:
         print(f"Exception in upload_file: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def prepare_sqlite_db(file_id: str):
+    """
+    Handles the preparation of a SQLite database for tabular data from the uploaded file.
+    Downloads and decrypts the file, prepares the SQLite database,
+    uploads it to GCS, and cleans up the decrypted file if successful.
+    """
+    try:
+        data_dir = f"./chroma_db/{file_id}"
+        os.makedirs(data_dir, exist_ok=True)
+
+        # Check if the database already exists
+        db_path = os.path.join(data_dir, "tabular_data.db")
+        if os.path.exists(db_path):
+            logging.info(f"SQLite database already exists for file_id: {file_id}")
+            return
+
+        # Download and decrypt the file
+        decrypted_file_path = gcs_handler.download_and_decrypt_file(file_id, data_dir)
+
+        # Prepare SQLite database
+        data_preparer = PrepareSQLFromTabularData(data_dir)
+        data_preparer.run_pipeline()
+
+        # Upload the SQLite database to GCS
+        gcs_handler.upload_to_gcs(
+            configs.gcp_resource.bucket_name,
+            source=db_path,
+            destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db",
+        )
+
+        # Clean up the decrypted file
+        os.remove(decrypted_file_path)
+
+    except Exception as e:
+        logging.error(f"Error preparing SQLite database: {str(e)}")
+        raise
 
 
 @app.post("/model/initialize")
@@ -190,32 +240,37 @@ async def initialize_model(request: ModelInitRequest):
     """
     try:
         file_info = embedding_handler.get_embeddings_info(request.file_id)
-        if not file_info:
-            raise HTTPException(
-                status_code=404, detail="Embeddings not found for this file"
-            )
 
-        if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]:
-            embedding_type = "google"
+        # Check if the file is a tabular data file
+        db_path = f"./chroma_db/{request.file_id}/tabular_data.db"
+        if os.path.exists(db_path):
+            # Initialize TabularDataHandler for CSV/Excel files
+            model = TabularDataHandler(configs, request.file_id, request.model_choice)
         else:
-            embedding_type = "azure"
+            # For PDF/Image files, proceed with the existing logic
+            if not file_info:
+                raise HTTPException(
+                    status_code=404, detail="Embeddings not found for this file"
+                )
 
-        # Check if the Chroma DB path exists
-        chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
-        if not os.path.exists(chroma_db_path):
-            raise HTTPException(
-                status_code=404, detail=f"Chroma DB not found at {chroma_db_path}"
+            if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]:
+                embedding_type = "google"
+            else:
+                embedding_type = "azure"
+
+            model = model_handler.initialize_model(
+                request.model_choice, request.file_id, embedding_type
             )
 
-        # Initialize the model with the correct path
-        model = model_handler.initialize_model(
-            request.model_choice, request.file_id, embedding_type
-        )
         initialized_models[request.file_id] = model
         return {"message": f"Model {request.model_choice} initialized successfully"}
+    except HTTPException as http_exc:
+        raise http_exc
     except Exception as e:
         logging.error(f"Error initializing model: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500, detail=f"Error initializing model: {str(e)}"
+        )
 
 
 @app.post("/file/chat")
@@ -431,6 +486,16 @@ async def analyze_image_endpoint(file: UploadFile = File(...)):
 
 @app.delete("/files")
 async def delete_files(request: FileDeleteRequest):
+    """
+    Delete files and their embeddings based on the provided file IDs.
+
+    Args:
+        file_ids (List[str]): List of file IDs to delete.
+
+    Returns:
+        dict: A message indicating the status of the deletion process,
+        along with the list of deleted files and any errors encountered.
+    """
     file_ids = request.file_ids
     deleted_files = []
     errors = []
