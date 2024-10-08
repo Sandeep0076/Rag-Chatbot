@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 import uvicorn
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile  # , Depends,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette_exporter import PrometheusMiddleware, handle_metrics
@@ -35,7 +35,8 @@ from rtl_rag_chatbot_api.common.models import (
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
-from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
+
+# from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
 
 # Suppress logging warnings
 os.environ["GRPC_VERBOSITY"] = "ERROR"
@@ -119,8 +120,8 @@ app.add_route("/metrics", handle_metrics)
 
 
 @app.get("/health")
-# async def health():
-async def health(current_user=Depends(get_current_user)):
+async def health():
+    # async def health(current_user=Depends(get_current_user)):
     """
     Shows application health information.
     In the future this could do some actual checks.

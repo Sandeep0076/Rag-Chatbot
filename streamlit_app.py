@@ -201,6 +201,8 @@ def initialize_session_state():
         st.session_state.file_type = "PDF"
     if "model_initialized" not in st.session_state:
         st.session_state.model_initialized = False
+    if "uploaded_image" not in st.session_state:
+        st.session_state.uploaded_image = None
 
 
 def initialize_model(model_choice):
