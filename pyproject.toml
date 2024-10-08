@@ -48,6 +48,8 @@ nltk = "^3.9.1"
 langchain-openai = "0.1.6"
 psycopg2-binary = "^2.9.9"
 sqlalchemy = "^2.0.35"
+python-jose = "^3.3.0"
+requests = "^2.32.3"
 [tool.poetry.dev-dependencies]
 pytest = "^7.1.0"
 pytest-sugar = "^0.9.4"
