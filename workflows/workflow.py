@@ -54,16 +54,7 @@ def get_users_deletion_candicates():
             .all()
         )
 
-        # filter those with timestamp older than 4 weeks
-        filtered_users = list(
-            filter(
-                lambda user: db_helpers.datetime_from_iso8601_timestamp(
-                    user.wf_deletion_timestamp
-                )
-                <= db_helpers.datetime_four_weeks_ago(),
-                users,
-            )
-        )
+        filtered_users = db_helpers.filter_older_than_4_weeks(users)
 
         log.info(
             f"Found {len(users)} deletion candidates, "
