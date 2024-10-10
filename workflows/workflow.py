@@ -5,7 +5,7 @@ import os
 from contextlib import contextmanager
 from typing import Dict
 
-from sqlalchemy import create_engine
+from sqlalchemy import and_, create_engine
 from sqlalchemy.orm import sessionmaker
 
 import workflows.db.helpers as db_helpers
@@ -50,7 +50,9 @@ def get_users_deletion_candicates():
         # get all users
         users = (
             session.query(User)
-            .filter(User.wf_deletion_candidate, User.wf_deletion_timestamp is not None)
+            .filter(
+                and_(User.wf_deletion_candidate, User.wf_deletion_timestamp is not None)
+            )
             .all()
         )
 
