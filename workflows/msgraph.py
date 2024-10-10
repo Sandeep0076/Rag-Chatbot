@@ -51,4 +51,6 @@ def is_user_account_enabled(user_email):
         log.error(
             f"Failed to fetch user details for {user_email}: {user_response.status_code}, {user_response.text}"
         )
-        return False
+        # return None here in case of error, since False would mean that the requested user is not enabled,
+        # and thus marked as a deletion candidate
+        return None

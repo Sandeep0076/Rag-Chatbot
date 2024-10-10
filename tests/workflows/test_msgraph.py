@@ -85,7 +85,7 @@ def test_is_user_account_enabled_failure(
     result = is_user_account_enabled("nonexistentuser@example.com")
 
     # Assertions
-    assert result is False
+    assert result is None
     mock_log.error.assert_any_call(
         "Failed to fetch user details for nonexistentuser@example.com: 404, Not Found"
     )

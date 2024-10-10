@@ -3,8 +3,9 @@ import inspect
 import logging
 import os
 from contextlib import contextmanager
+from typing import Dict
 
-from sqlalchemy import create_engine
+from sqlalchemy import and_, create_engine
 from sqlalchemy.orm import sessionmaker
 
 import workflows.db.helpers as db_helpers
@@ -49,20 +50,13 @@ def get_users_deletion_candicates():
         # get all users
         users = (
             session.query(User)
-            .filter(User.wf_deletion_candidate, User.wf_deletion_timestamp is not None)
+            .filter(
+                and_(User.wf_deletion_candidate, User.wf_deletion_timestamp is not None)
+            )
             .all()
         )
 
-        # filter those with timestamp older than 4 weeks
-        filtered_users = list(
-            filter(
-                lambda user: db_helpers.datetime_from_iso8601_timestamp(
-                    user.wf_deletion_timestamp
-                )
-                <= db_helpers.datetime_four_weeks_ago(),
-                users,
-            )
-        )
+        filtered_users = db_helpers.filter_older_than_4_weeks(users)
 
         log.info(
             f"Found {len(users)} deletion candidates, "
@@ -71,6 +65,25 @@ def get_users_deletion_candicates():
         )
 
         return filtered_users
+
+
+def is_new_deletion_candidate(user: User, account_statuses: Dict = {}) -> bool:
+    """
+    Implements the logic that determines whether the user should be marked as deletion candidate.
+    Requirements:
+        a. the user must exist;
+        b. there should be information about the status (not None);
+        c. the user is marked inactive in msgraph; and
+        d. the user is not already marked as inactive (would result in setting a new timestamp)
+    """
+    return (
+        user.email in account_statuses  # a. we got the user
+        and account_statuses.get(user.email)
+        is not None  # b. we got the information (None if user does not exist)
+        and account_statuses.get(user.email) is False  # c. user is inactive
+        and user.wf_deletion_candidate
+        is False  # d. user is not already set to be inactive
+    )
 
 
 def mark_deletion_candidates():
@@ -89,12 +102,8 @@ def mark_deletion_candidates():
     users_marked = []
     with get_db_session() as session:
         for user in users:
-            # mark those users for which we got the data, which are not marked, and which are not yet already marked
-            if (
-                user.email in account_statuses
-                and not account_statuses.get(user.email)
-                and not user.wf_deletion_candidate
-            ):
+            # mark those users for which , which are not marked, and which are not yet already marked
+            if is_new_deletion_candidate(user, account_statuses):
                 user.wf_deletion_candidate = True
                 user.wf_deletion_timestamp = db_helpers.iso8601_timestamp_now()
                 users_marked.append(user.email)
