@@ -34,47 +34,28 @@ class EmbeddingHandler:
             os.path.exists(gemini_path) and len(os.listdir(gemini_path)) > 0
         )
 
-    async def create_and_upload_embeddings(self, file_id: str, is_image: bool):
-        # Method to create and upload embeddings for Azure and Gemini
-        # Check if embeddings already exist
-        if self.embeddings_exist(file_id):
-            logging.info(f"Embeddings already exist for file_id: {file_id}")
-            return {"message": "Embeddings already exist for this file"}
-
-        # Retrieve metadata including username
-        metadata = self.gcs_handler.get_file_metadata(file_id)
-        username = metadata.get("username", "Unknown")
-
-        # Create necessary directories and paths
-        chroma_db_path = f"./chroma_db/{file_id}"
-        os.makedirs(os.path.join(chroma_db_path, "azure"), exist_ok=True)
-        os.makedirs(os.path.join(chroma_db_path, "google"), exist_ok=True)
-
-        destination_file_path = f"local_data/{file_id}/"
-        os.makedirs(destination_file_path, exist_ok=True)
-
-        # Download and decrypt the file
-        decrypted_file_path = self.gcs_handler.download_and_decrypt_file(
-            file_id, destination_file_path
-        )
-
+    async def create_and_upload_embeddings(
+        self, file_id: str, is_image: bool, temp_file_path: str
+    ):
         try:
-            # Verify the decrypted file
-            with open(decrypted_file_path, "rb") as test_file:
-                test_content = test_file.read(1024)
-            if not test_content:
-                raise IOError(
-                    f"Decrypted file at {decrypted_file_path} appears to be empty or unreadable"
-                )
+            file_info = self.gcs_handler.get_file_info(file_id)
+            if file_info.get("embeddings"):
+                logging.info(f"Embeddings already exist for file_id: {file_id}")
+                return {"message": "Embeddings already exist for this file"}
 
-            logging.info(f"Successfully verified decrypted file: {decrypted_file_path}")
+            username = file_info.get("username", "Unknown")
+
+            # Create necessary directories
+            chroma_db_path = f"./chroma_db/{file_id}"
+            os.makedirs(os.path.join(chroma_db_path, "azure"), exist_ok=True)
+            os.makedirs(os.path.join(chroma_db_path, "google"), exist_ok=True)
 
             # Process image file if required
             if is_image:
                 logging.info("Processing image file...")
-                image_analysis_result = analyze_images(decrypted_file_path)
+                image_analysis_result = analyze_images(temp_file_path)
                 analysis_json_path = os.path.join(
-                    destination_file_path, f"{file_id}_analysis.json"
+                    os.path.dirname(temp_file_path), f"{file_id}_analysis.json"
                 )
                 with open(analysis_json_path, "w") as f:
                     json.dump(image_analysis_result, f)
@@ -85,13 +66,13 @@ class EmbeddingHandler:
                 azure_future = executor.submit(
                     self._create_azure_embeddings,
                     file_id,
-                    decrypted_file_path if not is_image else analysis_json_path,
+                    temp_file_path if not is_image else analysis_json_path,
                     username,
                 )
                 gemini_future = executor.submit(
                     self._create_gemini_embeddings,
                     file_id,
-                    decrypted_file_path if not is_image else analysis_json_path,
+                    temp_file_path if not is_image else analysis_json_path,
                     username,
                 )
 
@@ -101,33 +82,27 @@ class EmbeddingHandler:
             # Upload embeddings to GCS
             self._upload_embeddings_to_gcs(file_id)
 
-            # Prepare and upload file info
-            file_info = {
+            # Update file info with embedding status
+            new_info = {
                 "embeddings": {"azure": azure_result, "google": gemini_result},
-                "is_image": is_image,
-                "username": username,
             }
-            self.gcs_handler.upload_to_gcs(
-                self.configs.gcp_resource.bucket_name,
-                {
-                    "file_info": (
-                        file_info,
-                        f"file-embeddings/{file_id}/file_info.json",
-                    )
-                },
-            )
+            self.gcs_handler.update_file_info(file_id, new_info)
 
             return {
                 "message": "Embeddings created and uploaded successfully for both Azure and Gemini"
             }
 
+        except Exception as e:
+            logging.error(
+                f"Error in create_and_upload_embeddings: {str(e)}", exc_info=True
+            )
+            raise
+
         finally:
-            # Clean up decrypted file and analysis JSON if they exist
-            if os.path.exists(decrypted_file_path):
-                os.remove(decrypted_file_path)
+            # Clean up analysis JSON if it exists
             if is_image:
                 analysis_json_path = os.path.join(
-                    destination_file_path, f"{file_id}_analysis.json"
+                    os.path.dirname(temp_file_path), f"{file_id}_analysis.json"
                 )
                 if os.path.exists(analysis_json_path):
                     os.remove(analysis_json_path)
@@ -135,49 +110,64 @@ class EmbeddingHandler:
     # Private method to create Azure embeddings
     def _create_azure_embeddings(self, file_id, file_path, username):
         logging.info("Generating Azure embeddings...")
-        chroma_db = chromadb.PersistentClient(
-            path=f"./chroma_db/{file_id}/azure",
-            settings=Settings(allow_reset=True, is_persistent=True),
-        )
-        run_preprocessor(
-            configs=self.configs,
-            text_data_folder_path=os.path.dirname(file_path),
-            file_id=file_id,
-            chroma_db_path=f"./chroma_db/{file_id}/azure",
-            chroma_db=chroma_db,
-            is_image=False,
-            gcs_handler=self.gcs_handler,
-            username=username,
-        )
-        logging.info("Azure embeddings generated successfully")
-        return "completed"
+        try:
+            chroma_db = chromadb.PersistentClient(
+                path=f"./chroma_db/{file_id}/azure",
+                settings=Settings(allow_reset=True, is_persistent=True),
+            )
+            run_preprocessor(
+                configs=self.configs,
+                text_data_folder_path=os.path.dirname(file_path),
+                file_id=file_id,
+                chroma_db_path=f"./chroma_db/{file_id}/azure",
+                chroma_db=chroma_db,
+                is_image=False,
+                gcs_handler=self.gcs_handler,
+                username=username,
+            )
+            logging.info("Azure embeddings generated successfully")
+            return "completed"
+        except Exception as e:
+            logging.error(f"Error creating Azure embeddings: {str(e)}", exc_info=True)
+            raise
 
     # Private method to create Gemini embeddings
     def _create_gemini_embeddings(self, file_id, file_path, username):
         logging.info("Generating Gemini embeddings...")
-        gemini_handler = GeminiHandler(self.configs, self.gcs_handler)
-        gemini_handler.process_file(file_id, file_path, subfolder="google")
-        logging.info("Gemini embeddings generated successfully")
-        return "completed"
+        try:
+            gemini_handler = GeminiHandler(self.configs, self.gcs_handler)
+            gemini_handler.process_file(file_id, file_path, subfolder="google")
+            logging.info("Gemini embeddings generated successfully")
+            return "completed"
+        except Exception as e:
+            logging.error(f"Error creating Gemini embeddings: {str(e)}", exc_info=True)
+            raise
 
     # Private method to upload embeddings to GCS
     def _upload_embeddings_to_gcs(self, file_id):
         logging.info("Uploading embeddings to GCS...")
-        for model in ["azure", "google"]:
-            chroma_db_path = f"./chroma_db/{file_id}/{model}"
-            gcs_subfolder = f"file-embeddings/{file_id}/{model}"
+        try:
+            for model in ["azure", "google"]:
+                chroma_db_path = f"./chroma_db/{file_id}/{model}"
+                gcs_subfolder = f"file-embeddings/{file_id}/{model}"
 
-            files_to_upload = {}
-            for file in Path(chroma_db_path).rglob("*"):
-                if file.is_file():
-                    relative_path = file.relative_to(chroma_db_path)
-                    gcs_object_name = f"{gcs_subfolder}/{relative_path}"
-                    files_to_upload[str(relative_path)] = (str(file), gcs_object_name)
+                files_to_upload = {}
+                for file in Path(chroma_db_path).rglob("*"):
+                    if file.is_file():
+                        relative_path = file.relative_to(chroma_db_path)
+                        gcs_object_name = f"{gcs_subfolder}/{relative_path}"
+                        files_to_upload[str(relative_path)] = (
+                            str(file),
+                            gcs_object_name,
+                        )
 
-            self.gcs_handler.upload_to_gcs(
-                self.configs.gcp_resource.bucket_name, files_to_upload
-            )
-        logging.info("Embeddings uploaded to GCS successfully")
+                self.gcs_handler.upload_to_gcs(
+                    self.configs.gcp_resource.bucket_name, files_to_upload
+                )
+            logging.info("Embeddings uploaded to GCS successfully")
+        except Exception as e:
+            logging.error(f"Error uploading embeddings to GCS: {str(e)}", exc_info=True)
+            raise
 
     def get_embeddings_info(self, file_id: str):
         # Retrieve embeddings info from GCS

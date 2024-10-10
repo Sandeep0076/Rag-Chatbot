@@ -3,8 +3,6 @@ import os
 
 from fastapi import UploadFile
 
-from rtl_rag_chatbot_api.common.encryption_utils import encrypt_file
-
 
 class FileHandler:
     """
@@ -69,44 +67,50 @@ class FileHandler:
         existing_file_id = self.gcs_handler.find_existing_file_by_hash(file_hash)
 
         if existing_file_id:
-            return {
-                "file_id": existing_file_id,
-                "is_image": is_image,
-                "message": "File already exists. Embeddings/db downloaded.",
-                "status": "existing",
-            }
+            existing_file_info = self.gcs_handler.get_file_info(existing_file_id)
+            if existing_file_info.get("embeddings"):
+                return {
+                    "file_id": existing_file_id,
+                    "is_image": is_image,
+                    "message": "File already exists and has embeddings.",
+                    "status": "existing",
+                }
+            else:
+                return {
+                    "file_id": existing_file_id,
+                    "is_image": is_image,
+                    "message": "File exists but embeddings need to be created.",
+                    "status": "pending_embeddings",
+                }
 
-        temp_file_path = f"temp_{file_id}_{os.path.splitext(original_filename)[1]}"
-
+        # Save file temporarily
+        temp_file_path = f"local_data/{file_id}_{original_filename}"
+        os.makedirs(os.path.dirname(temp_file_path), exist_ok=True)
         with open(temp_file_path, "wb") as buffer:
             buffer.write(file_content)
 
-        encrypted_file_path = encrypt_file(temp_file_path)
-
-        destination_blob_name = f"files-raw/{file_id}/{original_filename}.encrypted"
+        # Store metadata in GCS
+        metadata = {
+            "is_image": is_image,
+            "file_hash": file_hash,
+            "username": username,
+            "original_filename": original_filename,
+            "file_id": file_id,
+            "embeddings_status": "pending",
+        }
         self.gcs_handler.upload_to_gcs(
             self.configs.gcp_resource.bucket_name,
             {
-                "file": (encrypted_file_path, destination_blob_name),
-                "metadata": (
-                    {
-                        "is_image": is_image,
-                        "file_hash": file_hash,
-                        "username": username,
-                    },
-                    f"files-raw/{file_id}/metadata.json",
-                ),
+                "metadata": (metadata, f"file-embeddings/{file_id}/file_info.json"),
             },
         )
-
-        os.remove(temp_file_path)
-        os.remove(encrypted_file_path)
 
         return {
             "file_id": file_id,
             "is_image": is_image,
-            "message": "File uploaded, encrypted, and processed successfully",
+            "message": "File processed and metadata stored successfully. Embeddings pending.",
             "status": "new",
+            "temp_file_path": temp_file_path,
         }
 
     def download_existing_file(self, file_id: str):

@@ -170,16 +170,20 @@ async def upload_file(
 
         print(f"Result from process_file: {result}")
         if result["status"] == "existing":
-            file_id = result["file_id"]  # Use the existing file_id
+            file_id = result["file_id"]
             if file_handler.download_existing_file(file_id):
                 message = "File already exists. Required files downloaded."
             else:
                 message = "File already exists, but error downloading necessary files."
         else:
-            message = "File uploaded, encrypted, and processed successfully"
+            message = result["message"]
+            temp_file_path = result["temp_file_path"]
+
             # If it's a CSV or Excel file and it's a new upload, prepare the SQLite database
             if file_extension in [".csv", ".xlsx", ".xls"]:
-                await prepare_sqlite_db(file_id)
+                await prepare_sqlite_db(file_id, temp_file_path)
+
+            # Note: We do not delete the temporary file here
 
         return FileUploadResponse(
             message=message,
@@ -343,22 +347,43 @@ async def create_embeddings(request: EmbeddingCreationRequest):
     try:
         embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
-        if embedding_handler.embeddings_exist(request.file_id):
-            embeddings_info = embedding_handler.get_embeddings_info(request.file_id)
-            if embeddings_info:
-                return {
-                    "message": "Embeddings already exist for this file",
-                    "info": embeddings_info,
-                }
-            else:
-                return {"message": "Embeddings exist but info not found"}
+        # Get file info
+        file_info = gcs_handler.get_file_info(request.file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="File info not found")
 
-        result = await embedding_handler.create_and_upload_embeddings(
-            request.file_id, request.is_image
+        if file_info.get("embeddings_status") == "completed":
+            return {
+                "message": "Embeddings already exist for this file",
+                "info": file_info.get("embeddings"),
+            }
+
+        # Construct the path to the temporary file
+        temp_file_path = (
+            f"local_data/{request.file_id}_{file_info.get('original_filename', '')}"
         )
 
-        return result
+        if not os.path.exists(temp_file_path):
+            raise HTTPException(status_code=404, detail="Temporary file not found")
+
+        try:
+            result = await embedding_handler.create_and_upload_embeddings(
+                request.file_id, file_info.get("is_image", False), temp_file_path
+            )
+
+            # Update file info to indicate embeddings are completed
+            gcs_handler.update_file_info(
+                request.file_id, {"embeddings_status": "completed"}
+            )
+
+            return result
+        finally:
+            # Clean up the temporary file after successful embedding creation
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+
     except Exception as e:
+        logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
