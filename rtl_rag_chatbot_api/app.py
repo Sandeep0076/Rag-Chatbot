@@ -251,6 +251,11 @@ async def initialize_model(request: ModelInitRequest):
     try:
         file_info = embedding_handler.get_embeddings_info(request.file_id)
 
+        if not file_info:
+            raise HTTPException(
+                status_code=404, detail="Embeddings not found for this file"
+            )
+
         # Check if the file is a tabular data file
         db_path = f"./chroma_db/{request.file_id}/tabular_data.db"
         if os.path.exists(db_path):
@@ -258,15 +263,15 @@ async def initialize_model(request: ModelInitRequest):
             model = TabularDataHandler(configs, request.file_id, request.model_choice)
         else:
             # For PDF/Image files, proceed with the existing logic
-            if not file_info:
-                raise HTTPException(
-                    status_code=404, detail="Embeddings not found for this file"
-                )
-
             if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]:
                 embedding_type = "google"
             else:
                 embedding_type = "azure"
+
+            # Ensure the Chroma DB files are present
+            chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
+            if not os.path.exists(chroma_db_path):
+                gcs_handler.download_files_from_folder_by_id(request.file_id)
 
             model = model_handler.initialize_model(
                 request.model_choice, request.file_id, embedding_type
@@ -274,10 +279,8 @@ async def initialize_model(request: ModelInitRequest):
 
         initialized_models[request.file_id] = model
         return {"message": f"Model {request.model_choice} initialized successfully"}
-    except HTTPException as http_exc:
-        raise http_exc
     except Exception as e:
-        logging.error(f"Error initializing model: {str(e)}")
+        logging.error(f"Error initializing model: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Error initializing model: {str(e)}"
         )
