@@ -242,16 +242,14 @@ class VectorDbWrapper:
                 print(f"Uploaded {file} to gs://{self.bucket_name}/{gcs_object_name}")
 
     def delete_db_artifacts(self, folder_path):
-        # Iterate over all items in the folder
         for item in os.listdir(folder_path):
             item_path = os.path.join(folder_path, item)
-            # If it's a file, delete it
+
             if os.path.isfile(item_path):
                 os.remove(item_path)
-            # If it's a directory, recursively delete its contents
+
             elif os.path.isdir(item_path):
                 self.delete_db_artifacts(item_path)
-                # Once the contents are deleted, remove the empty directory
                 os.rmdir(item_path)
 
     def upload_db_files_to_gcs(self) -> None:

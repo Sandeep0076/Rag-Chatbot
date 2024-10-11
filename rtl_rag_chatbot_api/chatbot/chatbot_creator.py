@@ -2,12 +2,15 @@ import base64
 import io
 import logging
 import os
+import shutil
+import sqlite3
 
 import chromadb
 import matplotlib.pyplot as plt
 import openai
 import seaborn as sns
 from chromadb.config import Settings
+from chromadb.errors import ChromaError
 from llama_index.core import ServiceContext, VectorStoreIndex
 from llama_index.core.storage.storage_context import StorageContext
 from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
@@ -45,6 +48,7 @@ class Chatbot:
         self.model_config = self._get_model_config()
         self._vanilla_llm = self._create_llm_instance_only()
         self.chat_engine = self._create_chat_gpt_instance()
+        self.chroma_db_path = f"./chroma_db/{file_id}/{embedding_type}"
 
         if file_id:
             self._index = self._create_index()
@@ -77,46 +81,59 @@ class Chatbot:
         Returns:
         VectorStoreIndex: Index object created from the vector store.
         """
-        chroma_folder_path = f"./chroma_db/{self.file_id}/{self.embedding_type}"
-        llm_llama = AzureOpenAI(
-            api_key=self.model_config.api_key,
-            azure_endpoint=self.model_config.endpoint,
-            azure_deployment=self.model_config.deployment,
-            api_version=self.model_config.api_version,
-            model=self.model_config.model_name,
-            system_prompt=self.configs.chatbot.system_prompt_rag_llm,
-        )
 
-        embedding_function_llama = AzureOpenAIEmbedding(
-            api_key=self.configs.azure_embedding.azure_embedding_api_key,
-            azure_endpoint=self.configs.azure_embedding.azure_embedding_endpoint,
-            model=self.configs.azure_embedding.azure_embedding_model_name,
-            deployment_name=self.configs.azure_embedding.azure_embedding_deployment,
-            api_version=self.configs.azure_embedding.azure_embedding_api_version,
-        )
-        db = chromadb.PersistentClient(
-            path=chroma_folder_path,
-            settings=Settings(allow_reset=True, is_persistent=True),
-        )
-        chroma_collection = db.get_or_create_collection(
-            self.configs.chatbot.vector_db_collection_name
-        )
-        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-        storage_context = StorageContext.from_defaults(vector_store=vector_store)
-        service_context = ServiceContext.from_defaults(
-            llm=llm_llama,
-            embed_model=embedding_function_llama,
-            chunk_size=self.configs.chatbot.chunk_size_limit,
-            chunk_overlap=self.configs.chatbot.max_chunk_overlap,
-        )
+        try:
+            logging.info(
+                f"Attempting to create Chroma DB at path: {self.chroma_db_path}"
+            )
 
-        index = VectorStoreIndex.from_vector_store(
-            vector_store=vector_store,
-            service_context=service_context,
-            storage_context=storage_context,
-        )
+            db = chromadb.PersistentClient(
+                path=self.chroma_db_path,
+                settings=Settings(allow_reset=True, is_persistent=True),
+            )
+            llm_llama = AzureOpenAI(
+                api_key=self.model_config.api_key,
+                azure_endpoint=self.model_config.endpoint,
+                azure_deployment=self.model_config.deployment,
+                api_version=self.model_config.api_version,
+                model=self.model_config.model_name,
+                system_prompt=self.configs.chatbot.system_prompt_rag_llm,
+            )
 
-        return index
+            embedding_function_llama = AzureOpenAIEmbedding(
+                api_key=self.configs.azure_embedding.azure_embedding_api_key,
+                azure_endpoint=self.configs.azure_embedding.azure_embedding_endpoint,
+                model=self.configs.azure_embedding.azure_embedding_model_name,
+                deployment_name=self.configs.azure_embedding.azure_embedding_deployment,
+                api_version=self.configs.azure_embedding.azure_embedding_api_version,
+            )
+
+            chroma_collection = db.get_or_create_collection(
+                self.configs.chatbot.vector_db_collection_name
+            )
+            vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+            storage_context = StorageContext.from_defaults(vector_store=vector_store)
+            service_context = ServiceContext.from_defaults(
+                llm=llm_llama,
+                embed_model=embedding_function_llama,
+                chunk_size=self.configs.chatbot.chunk_size_limit,
+                chunk_overlap=self.configs.chatbot.max_chunk_overlap,
+            )
+
+            index = VectorStoreIndex.from_vector_store(
+                vector_store=vector_store,
+                service_context=service_context,
+                storage_context=storage_context,
+            )
+
+            return index
+        except (ChromaError, ValueError, sqlite3.OperationalError) as e:
+            logging.error(f"Failed to initialize Chroma DB. Error: {str(e)}")
+            logging.error(f"Chroma DB path contents: {os.listdir(self.chroma_db_path)}")
+            if os.path.exists(self.chroma_db_path):
+                shutil.rmtree(self.chroma_db_path)
+                logging.info(f"Cleaned up Chroma DB folder at {self.chroma_db_path}")
+        raise
 
     def _create_llm_instance_only(self):
         """

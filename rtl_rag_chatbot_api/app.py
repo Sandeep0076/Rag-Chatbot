@@ -175,15 +175,18 @@ async def upload_file(
                 message = "File already exists. Required files downloaded."
             else:
                 message = "File already exists, but error downloading necessary files."
+
+            # Add temp_file_path for existing files
+            temp_file_path = f"local_data/{file_id}_{original_filename}"
+            result["temp_file_path"] = temp_file_path
         else:
             message = result["message"]
-            temp_file_path = result["temp_file_path"]
 
-            # If it's a CSV or Excel file and it's a new upload, prepare the SQLite database
-            if file_extension in [".csv", ".xlsx", ".xls"]:
-                await prepare_sqlite_db(file_id, temp_file_path)
+        temp_file_path = result["temp_file_path"]
 
-            # Note: We do not delete the temporary file here
+        # If it's a CSV or Excel file and it's a new upload, prepare the SQLite database
+        if file_extension in [".csv", ".xlsx", ".xls"] and result["status"] == "new":
+            await prepare_sqlite_db(file_id, temp_file_path)
 
         return FileUploadResponse(
             message=message,
@@ -250,39 +253,42 @@ async def initialize_model(request: ModelInitRequest):
     """
     try:
         file_info = embedding_handler.get_embeddings_info(request.file_id)
-
         if not file_info:
             raise HTTPException(
                 status_code=404, detail="Embeddings not found for this file"
             )
 
-        # Check if the file is a tabular data file
-        db_path = f"./chroma_db/{request.file_id}/tabular_data.db"
-        if os.path.exists(db_path):
-            # Initialize TabularDataHandler for CSV/Excel files
-            model = TabularDataHandler(configs, request.file_id, request.model_choice)
-        else:
-            # For PDF/Image files, proceed with the existing logic
-            if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]:
-                embedding_type = "google"
-            else:
-                embedding_type = "azure"
+        embedding_type = (
+            "google"
+            if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+            else "azure"
+        )
+        chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
 
-            # Ensure the Chroma DB files are present
-            chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
-            if not os.path.exists(chroma_db_path):
-                gcs_handler.download_files_from_folder_by_id(request.file_id)
+        logging.info(f"Initializing model for {embedding_type} embeddings")
+        logging.info(f"Chroma DB path: {chroma_db_path}")
+        logging.info(
+            f"Contents of chroma_db folder: {os.listdir(f'./chroma_db/{request.file_id}')}"
+        )
 
-            model = model_handler.initialize_model(
-                request.model_choice, request.file_id, embedding_type
+        if not os.path.exists(chroma_db_path):
+            logging.warning(
+                f"{embedding_type} embeddings not found locally. Downloading..."
             )
+            gcs_handler.download_files_from_folder_by_id(request.file_id)
 
+        logging.info(f"Contents of {chroma_db_path}: {os.listdir(chroma_db_path)}")
+
+        model = model_handler.initialize_model(
+            request.model_choice, request.file_id, embedding_type
+        )
         initialized_models[request.file_id] = model
         return {"message": f"Model {request.model_choice} initialized successfully"}
     except Exception as e:
-        logging.error(f"Error initializing model: {str(e)}", exc_info=True)
+        logging.error(f"Error in initialize_model: {str(e)}", exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Error initializing model: {str(e)}"
+            status_code=500,
+            detail=f"An error occurred while initializing the model: {str(e)}",
         )
 
 

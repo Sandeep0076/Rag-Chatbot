@@ -66,6 +66,11 @@ class FileHandler:
 
         existing_file_id = self.gcs_handler.find_existing_file_by_hash(file_hash)
 
+        temp_file_path = f"local_data/{file_id}_{original_filename}"
+        os.makedirs(os.path.dirname(temp_file_path), exist_ok=True)
+        with open(temp_file_path, "wb") as buffer:
+            buffer.write(file_content)
+
         if existing_file_id:
             existing_file_info = self.gcs_handler.get_file_info(existing_file_id)
             if existing_file_info.get("embeddings"):
@@ -74,6 +79,7 @@ class FileHandler:
                     "is_image": is_image,
                     "message": "File already exists and has embeddings.",
                     "status": "existing",
+                    "temp_file_path": temp_file_path,
                 }
             else:
                 return {
@@ -81,13 +87,8 @@ class FileHandler:
                     "is_image": is_image,
                     "message": "File exists but embeddings need to be created.",
                     "status": "pending_embeddings",
+                    "temp_file_path": temp_file_path,
                 }
-
-        # Save file temporarily
-        temp_file_path = f"local_data/{file_id}_{original_filename}"
-        os.makedirs(os.path.dirname(temp_file_path), exist_ok=True)
-        with open(temp_file_path, "wb") as buffer:
-            buffer.write(file_content)
 
         # Store metadata in GCS
         metadata = {
