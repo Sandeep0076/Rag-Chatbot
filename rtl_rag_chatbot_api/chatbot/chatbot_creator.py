@@ -2,7 +2,6 @@ import base64
 import io
 import logging
 import os
-import shutil
 import sqlite3
 
 import chromadb
@@ -81,15 +80,14 @@ class Chatbot:
         Returns:
         VectorStoreIndex: Index object created from the vector store.
         """
-
         try:
             logging.info(
                 f"Attempting to create Chroma DB at path: {self.chroma_db_path}"
             )
-
+            chromadb.api.client.SharedSystemClient.clear_system_cache()
             db = chromadb.PersistentClient(
                 path=self.chroma_db_path,
-                settings=Settings(allow_reset=True, is_persistent=True),
+                settings=Settings(allow_reset=True, anonymized_telemetry=False),
             )
             llm_llama = AzureOpenAI(
                 api_key=self.model_config.api_key,
@@ -107,10 +105,17 @@ class Chatbot:
                 deployment_name=self.configs.azure_embedding.azure_embedding_deployment,
                 api_version=self.configs.azure_embedding.azure_embedding_api_version,
             )
+            # Check if the collection already exists
+            try:
+                chroma_collection = db.get_collection(
+                    self.configs.chatbot.vector_db_collection_name
+                )
+            except ValueError:
+                # Collection doesn't exist, create a new one
+                chroma_collection = db.create_collection(
+                    self.configs.chatbot.vector_db_collection_name
+                )
 
-            chroma_collection = db.get_or_create_collection(
-                self.configs.chatbot.vector_db_collection_name
-            )
             vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
             storage_context = StorageContext.from_defaults(vector_store=vector_store)
             service_context = ServiceContext.from_defaults(
@@ -130,9 +135,6 @@ class Chatbot:
         except (ChromaError, ValueError, sqlite3.OperationalError) as e:
             logging.error(f"Failed to initialize Chroma DB. Error: {str(e)}")
             logging.error(f"Chroma DB path contents: {os.listdir(self.chroma_db_path)}")
-            if os.path.exists(self.chroma_db_path):
-                shutil.rmtree(self.chroma_db_path)
-                logging.info(f"Cleaned up Chroma DB folder at {self.chroma_db_path}")
         raise
 
     def _create_llm_instance_only(self):

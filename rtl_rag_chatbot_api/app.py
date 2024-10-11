@@ -278,6 +278,9 @@ async def initialize_model(request: ModelInitRequest):
             gcs_handler.download_files_from_folder_by_id(request.file_id)
 
         logging.info(f"Contents of {chroma_db_path}: {os.listdir(chroma_db_path)}")
+        logging.info(
+            f"model choice: {request.model_choice} { request.file_id}, { embedding_type}"
+        )
 
         model = model_handler.initialize_model(
             request.model_choice, request.file_id, embedding_type

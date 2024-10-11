@@ -91,9 +91,11 @@ class GCSHandler:
 
         logging.info(f"Finished downloading all files for folder ID: {file_id}")
 
-    def cleanup_local_files(self):
+    def cleanup_local_files(self, exclude=[]):
         folders_to_clean = ["chroma_db", "local_data", "processed_data"]
         for folder in folders_to_clean:
+            if folder in exclude:
+                continue
             folder_path = os.path.join(os.getcwd(), folder)
             if os.path.exists(folder_path):
                 for item in os.listdir(folder_path):
