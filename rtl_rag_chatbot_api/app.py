@@ -199,7 +199,7 @@ async def upload_file(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def prepare_sqlite_db(file_id: str):
+async def prepare_sqlite_db(file_id: str, temp_file_path: str):
     """
     Handles the preparation of a SQLite database for tabular data from the uploaded file.
     Downloads and decrypts the file, prepares the SQLite database,
@@ -215,11 +215,8 @@ async def prepare_sqlite_db(file_id: str):
             logging.info(f"SQLite database already exists for file_id: {file_id}")
             return
 
-        # Download and decrypt the file
-        decrypted_file_path = gcs_handler.download_and_decrypt_file(file_id, data_dir)
-
         # Prepare SQLite database
-        data_preparer = PrepareSQLFromTabularData(data_dir)
+        data_preparer = PrepareSQLFromTabularData(temp_file_path, data_dir)
         data_preparer.run_pipeline()
 
         # Upload the SQLite database to GCS
@@ -228,9 +225,6 @@ async def prepare_sqlite_db(file_id: str):
             source=db_path,
             destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db",
         )
-
-        # Clean up the decrypted file
-        os.remove(decrypted_file_path)
 
     except Exception as e:
         logging.error(f"Error preparing SQLite database: {str(e)}")
@@ -258,33 +252,38 @@ async def initialize_model(request: ModelInitRequest):
                 status_code=404, detail="Embeddings not found for this file"
             )
 
-        embedding_type = (
-            "google"
-            if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]
-            else "azure"
-        )
-        chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
-
-        logging.info(f"Initializing model for {embedding_type} embeddings")
-        logging.info(f"Chroma DB path: {chroma_db_path}")
-        logging.info(
-            f"Contents of chroma_db folder: {os.listdir(f'./chroma_db/{request.file_id}')}"
-        )
-
-        if not os.path.exists(chroma_db_path):
-            logging.warning(
-                f"{embedding_type} embeddings not found locally. Downloading..."
+            # Check if the file is a tabular data file
+        db_path = f"./chroma_db/{request.file_id}/tabular_data.db"
+        if os.path.exists(db_path):
+            # Initialize TabularDataHandler for CSV/Excel files
+            model = TabularDataHandler(configs, request.file_id, request.model_choice)
+        else:
+            embedding_type = (
+                "google"
+                if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+                else "azure"
             )
-            gcs_handler.download_files_from_folder_by_id(request.file_id)
+            chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
 
-        logging.info(f"Contents of {chroma_db_path}: {os.listdir(chroma_db_path)}")
-        logging.info(
-            f"model choice: {request.model_choice} { request.file_id}, { embedding_type}"
-        )
+            logging.info(f"Initializing model for {embedding_type} embeddings")
+            logging.info(f"Chroma DB path: {chroma_db_path}")
+            logging.info(
+                f"Contents of chroma_db folder: {os.listdir(f'./chroma_db/{request.file_id}')}"
+            )
 
-        model = model_handler.initialize_model(
-            request.model_choice, request.file_id, embedding_type
-        )
+            if not os.path.exists(chroma_db_path):
+                logging.warning(
+                    f"{embedding_type} embeddings not found locally. Downloading..."
+                )
+                gcs_handler.download_files_from_folder_by_id(request.file_id)
+
+            logging.info(f"Contents of {chroma_db_path}: {os.listdir(chroma_db_path)}")
+            logging.info(
+                f"model choice: {request.model_choice} { request.file_id}, { embedding_type}"
+            )
+            model = model_handler.initialize_model(
+                request.model_choice, request.file_id, embedding_type
+            )
         initialized_models[request.file_id] = model
         return {"message": f"Model {request.model_choice} initialized successfully"}
     except Exception as e:
