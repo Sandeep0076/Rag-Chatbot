@@ -55,24 +55,28 @@ embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
 title = "RAG PDF API"
 description = """
-RAG PDF API is a FastAPI-based application for processing and
-querying PDF documents using Retrieval-Augmented Generation (RAG).
+RAG PDF API is a FastAPI-based application for processing and querying various document types
+including PDFs, images, and tabular data (CSV/Excel) using Retrieval-Augmented Generation (RAG)
+and SQL querying capabilities.
 
 ## Workflow
 
-1. Upload a PDF file using the `/file/upload` endpoint.
-2. Create embeddings for the uploaded file with the `/embeddings/create` endpoint.
+1. Upload a file (PDF, image, CSV, or Excel) using the `/file/upload` endpoint.
+2. Create embeddings for the uploaded file with the `/embeddings/create` endpoint (for PDFs and images).
 3. Initialize the model using the `/model/initialize` endpoint. By default
-GPT4_omni is selected. Its optional and mainly used when we need to change model for chatting.
-4. Chat with the PDF content using the `/file/chat` endpoint.
+GPT4_omni_mini is selected. It's optional and mainly used when we need to change model for chatting.
+4. Chat with the content using the `/file/chat` endpoint.
 
 Additional features:
+- Query tabular data (CSV/Excel) using natural language with SQL-like capabilities.
 - Analyze images with the `/image/analyze` endpoint.
 - Get nearest neighbors for a query with the `/file/neighbors` endpoint.
 - View available models using the `/available-models` endpoint.
 - Clean up files with the `/file/cleanup` endpoint.
-- For chatting with Google models without RAG or file context./chat/gemini")
+- Chat with Google Gemini models without RAG or file context using `/chat/gemini`.
+- Delete files using the `/files` DELETE endpoint.
 
+Note: File storage in GCP has been removed from this version.
 """
 
 app = FastAPI(
@@ -151,15 +155,10 @@ async def upload_file(
     # current_user = Depends(get_current_user)
 ):
     """
-    Handles the uploading of a file with optional image flag.
-
-    Args:
-        file (UploadFile): The file to be uploaded.
-        is_image (bool): Flag indicating if the file is an image.
-        username (str): The username associated with the uploaded file.
-
-    Returns:
-        FileUploadResponse: Response containing details of the uploaded file.
+    Handles the uploading of a file, processes it accordingly, and prepares a response with relevant details.
+    Supports file processing for various types including images, CSV, and Excel files.
+    If the file already exists, downloads necessary files; otherwise,
+    processes the file and optionally prepares a SQLite database for tabular data.
     """
     try:
         file_id = str(uuid.uuid4())
@@ -170,16 +169,23 @@ async def upload_file(
 
         print(f"Result from process_file: {result}")
         if result["status"] == "existing":
-            file_id = result["file_id"]  # Use the existing file_id
+            file_id = result["file_id"]
             if file_handler.download_existing_file(file_id):
                 message = "File already exists. Required files downloaded."
             else:
                 message = "File already exists, but error downloading necessary files."
+
+            # Add temp_file_path for existing files
+            temp_file_path = f"local_data/{file_id}_{original_filename}"
+            result["temp_file_path"] = temp_file_path
         else:
-            message = "File uploaded, encrypted, and processed successfully"
-            # If it's a CSV or Excel file and it's a new upload, prepare the SQLite database
-            if file_extension in [".csv", ".xlsx", ".xls"]:
-                await prepare_sqlite_db(file_id)
+            message = result["message"]
+
+        temp_file_path = result["temp_file_path"]
+
+        # If it's a CSV or Excel file and it's a new upload, prepare the SQLite database
+        if file_extension in [".csv", ".xlsx", ".xls"] and result["status"] == "new":
+            await prepare_sqlite_db(file_id, temp_file_path)
 
         return FileUploadResponse(
             message=message,
@@ -192,7 +198,7 @@ async def upload_file(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def prepare_sqlite_db(file_id: str):
+async def prepare_sqlite_db(file_id: str, temp_file_path: str):
     """
     Handles the preparation of a SQLite database for tabular data from the uploaded file.
     Downloads and decrypts the file, prepares the SQLite database,
@@ -208,11 +214,8 @@ async def prepare_sqlite_db(file_id: str):
             logging.info(f"SQLite database already exists for file_id: {file_id}")
             return
 
-        # Download and decrypt the file
-        decrypted_file_path = gcs_handler.download_and_decrypt_file(file_id, data_dir)
-
         # Prepare SQLite database
-        data_preparer = PrepareSQLFromTabularData(data_dir)
+        data_preparer = PrepareSQLFromTabularData(temp_file_path, data_dir)
         data_preparer.run_pipeline()
 
         # Upload the SQLite database to GCS
@@ -221,9 +224,6 @@ async def prepare_sqlite_db(file_id: str):
             source=db_path,
             destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db",
         )
-
-        # Clean up the decrypted file
-        os.remove(decrypted_file_path)
 
     except Exception as e:
         logging.error(f"Error preparing SQLite database: {str(e)}")
@@ -246,36 +246,52 @@ async def initialize_model(request: ModelInitRequest):
     """
     try:
         file_info = embedding_handler.get_embeddings_info(request.file_id)
+        if not file_info:
+            raise HTTPException(
+                status_code=404, detail="Embeddings not found for this file"
+            )
 
-        # Check if the file is a tabular data file
+            # Check if the file is a tabular data file
         db_path = f"./chroma_db/{request.file_id}/tabular_data.db"
         if os.path.exists(db_path):
             # Initialize TabularDataHandler for CSV/Excel files
             model = TabularDataHandler(configs, request.file_id, request.model_choice)
         else:
-            # For PDF/Image files, proceed with the existing logic
-            if not file_info:
-                raise HTTPException(
-                    status_code=404, detail="Embeddings not found for this file"
+            embedding_type = (
+                "google"
+                if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+                else "azure"
+            )
+            chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
+
+            logging.info(f"Initializing model for {embedding_type} embeddings")
+            logging.info(f"Chroma DB path: {chroma_db_path}")
+            logging.info(
+                f"Contents of chroma_db folder: {os.listdir(f'./chroma_db/{request.file_id}')}"
+            )
+
+            if not os.path.exists(chroma_db_path):
+                logging.warning(
+                    f"{embedding_type} embeddings not found locally. Downloading..."
                 )
+                gcs_handler.download_files_from_folder_by_id(request.file_id)
 
-            if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]:
-                embedding_type = "google"
-            else:
-                embedding_type = "azure"
-
+            logging.info(f"Contents of {chroma_db_path}: {os.listdir(chroma_db_path)}")
+            logging.info(
+                f"model choice: {request.model_choice} { request.file_id}, { embedding_type}"
+            )
             model = model_handler.initialize_model(
                 request.model_choice, request.file_id, embedding_type
             )
-
         initialized_models[request.file_id] = model
         return {"message": f"Model {request.model_choice} initialized successfully"}
-    except HTTPException as http_exc:
-        raise http_exc
+    except HTTPException as http_ex:
+        raise http_ex
     except Exception as e:
-        logging.error(f"Error initializing model: {str(e)}")
+        logging.error(f"Error in initialize_model: {str(e)}", exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Error initializing model: {str(e)}"
+            status_code=500,
+            detail=f"An error occurred while initializing the model: {str(e)}",
         )
 
 
@@ -343,22 +359,43 @@ async def create_embeddings(request: EmbeddingCreationRequest):
     try:
         embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
-        if embedding_handler.embeddings_exist(request.file_id):
-            embeddings_info = embedding_handler.get_embeddings_info(request.file_id)
-            if embeddings_info:
-                return {
-                    "message": "Embeddings already exist for this file",
-                    "info": embeddings_info,
-                }
-            else:
-                return {"message": "Embeddings exist but info not found"}
+        # Get file info
+        file_info = gcs_handler.get_file_info(request.file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="File info not found")
 
-        result = await embedding_handler.create_and_upload_embeddings(
-            request.file_id, request.is_image
+        if file_info.get("embeddings_status") == "completed":
+            return {
+                "message": "Embeddings already exist for this file",
+                "info": file_info.get("embeddings"),
+            }
+
+        # Construct the path to the temporary file
+        temp_file_path = (
+            f"local_data/{request.file_id}_{file_info.get('original_filename', '')}"
         )
 
-        return result
+        if not os.path.exists(temp_file_path):
+            raise HTTPException(status_code=404, detail="Temporary file not found")
+
+        try:
+            result = await embedding_handler.create_and_upload_embeddings(
+                request.file_id, file_info.get("is_image", False), temp_file_path
+            )
+
+            # Update file info to indicate embeddings are completed
+            gcs_handler.update_file_info(
+                request.file_id, {"embeddings_status": "completed"}
+            )
+
+            return result
+        finally:
+            # Clean up the temporary file after successful embedding creation
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+
     except Exception as e:
+        logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

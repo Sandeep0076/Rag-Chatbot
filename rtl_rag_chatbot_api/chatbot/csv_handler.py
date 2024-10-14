@@ -18,9 +18,40 @@ from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
 
 
 class TabularDataHandler:
+    """
+    Handles processing and querying of tabular data stored in SQLite databases.
+
+    This class provides functionality to initialize SQLite databases from CSV or Excel files,
+    and to query these databases using natural language processing techniques.
+
+    Attributes:
+        config (Config): Configuration object containing necessary settings.
+        file_id (str): Unique identifier for the file being processed.
+        model_choice (str): The chosen language model for processing queries.
+        data_dir (str): Directory path for storing data files.
+        db_name (str): Name of the SQLite database file.
+        db_path (str): Full path to the SQLite database file.
+        db_url (str): SQLite database URL.
+        engine (Engine): SQLAlchemy database engine.
+        Session (sessionmaker): SQLAlchemy session maker.
+        db (SQLDatabase): SQLDatabase instance for database operations.
+        llm (AzureChatOpenAI): Language model instance for natural language processing.
+        agent (Agent): SQL agent for executing database queries.
+        table_info (List[dict]): Information about tables in the database.
+        table_name (str): Name of the main table in the database.
+    """
+
     def __init__(
         self, config: Config, file_id: str = None, model_choice: str = "gpt_4o_mini"
     ):
+        """
+        Initializes the TabularDataHandler with the given configuration and file information.
+
+        Args:
+            config (Config): Configuration object containing necessary settings.
+            file_id (str, optional): Unique identifier for the file being processed. Defaults to None.
+            model_choice (str, optional): The chosen language model. Defaults to "gpt_4o_mini".
+        """
         self.config = config
         self.file_id = file_id
         self.model_choice = model_choice
@@ -46,6 +77,15 @@ class TabularDataHandler:
             raise ValueError("No tables found in the database")
 
     def _initialize_llm(self) -> AzureChatOpenAI:
+        """
+        Initializes and returns an instance of AzureChatOpenAI.
+
+        Returns:
+            AzureChatOpenAI: An instance of the Azure OpenAI chat model.
+
+        Raises:
+            ValueError: If the configuration for the specified model is not found.
+        """
         model_config = self.config.azure_llm.models.get(self.model_choice)
 
         if not model_config:
@@ -61,10 +101,16 @@ class TabularDataHandler:
         )
 
     def prepare_database(self):
+        """
+        Prepares the SQLite database by processing the CSV or Excel file.
+        """
         data_preparer = PrepareSQLFromTabularData(self.data_dir)
         data_preparer.run_pipeline()
 
     def _initialize_agent(self):
+        """
+        Initializes the SQL agent for executing database queries.
+        """
         toolkit = SQLDatabaseToolkit(
             db=self.db, llm=self.llm, handle_parsing_errors=True
         )
@@ -77,6 +123,9 @@ class TabularDataHandler:
         )
 
     def debug_database(self):
+        """
+        Logs debug information about the database, including table names and sample data.
+        """
         try:
             logging.info(
                 f"Tables in the database: {[table['name'] for table in self.table_info]}"
@@ -95,6 +144,13 @@ class TabularDataHandler:
             logging.error(f"Error debugging database: {str(e)}", exc_info=True)
 
     def get_table_info(self) -> List[dict]:
+        """
+        Retrieves detailed information about all tables in the database.
+
+        Returns:
+            List[dict]: A list of dictionaries containing table information, including
+                        table name, columns, row count, sample data, and column statistics.
+        """
         inspector = inspect(self.engine)
         table_info = []
         with self.Session() as session:
@@ -137,6 +193,10 @@ class TabularDataHandler:
         return table_info
 
     def interactive_session(self):
+        """
+        Starts an interactive session for querying the database.
+        Allows users to input questions and receive answers based on the database content.
+        """
         print("Welcome to the interactive SQL query session.")
         print("Type 'exit' to end the session.")
 
@@ -158,6 +218,16 @@ class TabularDataHandler:
                 return self.get_forced_answer(question, answer)
 
     def get_forced_answer(self, question: str, answer: str):
+        """
+        Attempts to extract an answer from a given text when a direct answer is not available.
+
+        Args:
+            question (str): The original question asked by the user.
+            answer (str): The text to search for an answer.
+
+        Returns:
+            str: An extracted answer or "Cannot find answer" if no suitable answer is found.
+        """
         prompt = (
             f"Question: {question}\n\n"
             f"Try to find an answer from the following text:\n{answer}\n\n"
@@ -167,6 +237,15 @@ class TabularDataHandler:
         return get_azure_non_rag_response(self.config, prompt)
 
     def get_answer(self, question: str) -> str:
+        """
+        Processes a user's question and returns an answer based on the database content.
+
+        Args:
+            question (str): The user's input question.
+
+        Returns:
+            str: The answer to the user's question or an error message if processing fails.
+        """
         try:
             answer = self.ask_question(question)
             if answer:
@@ -180,6 +259,15 @@ class TabularDataHandler:
             return f"An error occurred while processing your question: {str(e)}"
 
     def ask_question(self, question: str) -> Optional[str]:
+        """
+        Processes a question using natural language processing and database querying.
+
+        Args:
+            question (str): The user's input question.
+
+        Returns:
+            Optional[str]: The answer to the question, or None if processing fails.
+        """
         if not self.agent:
             self._initialize_agent()
 

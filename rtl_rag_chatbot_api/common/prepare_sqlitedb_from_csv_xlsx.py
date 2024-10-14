@@ -12,24 +12,19 @@ class PrepareSQLFromTabularData:
     stores it as a table in a SQLite database, which is specified by the application configuration.
     """
 
-    def __init__(self, files_dir) -> None:
+    def __init__(self, file_path, output_dir) -> None:
         """
         Initialize an instance of PrepareSQLFromTabularData.
-
-        Args:
-            files_dir (str): The directory containing the CSV or XLSX files to be converted to SQL tables.
         """
-        self.files_directory = files_dir
-        self.file_dir_list = [
-            f for f in os.listdir(files_dir) if f.endswith((".csv", ".xlsx"))
-        ]
+        self.file_path = file_path
+        self.output_dir = output_dir
+        self.file_name = os.path.basename(file_path)
+        self.file_extension = os.path.splitext(self.file_name)[1].lower()
 
         db_name = "tabular_data.db"
-        self.db_path = os.path.join(files_dir, db_name)
+        self.db_path = os.path.join(output_dir, db_name)
         self.db_url = f"sqlite:///{self.db_path}"
         self.engine = create_engine(self.db_url)
-
-        print("Number of CSV/XLSX files:", len(self.file_dir_list))
 
     def _prepare_db(self):
         """
@@ -38,24 +33,18 @@ class PrepareSQLFromTabularData:
         Each file's name (excluding the extension) is used as the table name.
         The data is saved into the SQLite database referenced by the engine attribute.
         """
-        for file in self.file_dir_list:
-            full_file_path = os.path.join(self.files_directory, file)
-            file_name, file_extension = os.path.splitext(file)
-            if file_extension == ".csv":
-                df = pd.read_csv(full_file_path)
-                self._save_dataframe_to_sql(df, file_name)
-            elif file_extension == ".xlsx":
-                # Handle multiple sheets in Excel files
-                excel_file = pd.ExcelFile(full_file_path)
-                for sheet_name in excel_file.sheet_names:
-                    df = pd.read_excel(full_file_path, sheet_name=sheet_name)
-                    table_name = f"{file_name}_{sheet_name}"
-                    self._save_dataframe_to_sql(df, table_name)
-            else:
-                raise ValueError("The selected file type is not supported")
-        print(
-            "All CSV and Excel files have been processed and saved to the SQL database."
-        )
+        if self.file_extension == ".csv":
+            df = pd.read_csv(self.file_path)
+            self._save_dataframe_to_sql(df, self.file_name)
+        elif self.file_extension in [".xlsx", ".xls"]:
+            excel_file = pd.ExcelFile(self.file_path)
+            for sheet_name in excel_file.sheet_names:
+                df = pd.read_excel(self.file_path, sheet_name=sheet_name)
+                table_name = f"{self.file_name}_{sheet_name}"
+                self._save_dataframe_to_sql(df, table_name)
+        else:
+            raise ValueError("The selected file type is not supported")
+        print("File has been processed and saved to the SQL database.")
 
     def _save_dataframe_to_sql(self, df, table_name):
         inspector = inspect(self.engine)
