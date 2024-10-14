@@ -110,7 +110,6 @@ app.add_middleware(
 )
 
 app.add_route("/metrics", handle_metrics)
-print(os.getenv("ALLOWED_ORIGIN"))
 
 @app.get("/health")
 async def health(current_user = Depends(get_current_user)):
@@ -288,6 +287,7 @@ async def create_embeddings(request: EmbeddingCreationRequest, current_user = De
 
 
 @app.get("/available-models")
+# async def get_available_models(current_user = Depends(get_current_user)):
 async def get_available_models(current_user = Depends(get_current_user)):
     """
     Endpoint to retrieve a list of available models including Azure LLM models and Gemini models.
