@@ -332,6 +332,23 @@ class Chatbot:
 def get_azure_non_rag_response(
     configs, query: str, model_choice: str = "gpt_4o_mini"
 ) -> str:
+    """
+    Retrieves a response from Azure OpenAI without using Retrieval-Augmented Generation (RAG).
+
+    This function initializes a Chatbot instance with the given configurations and model choice,
+    then uses it to generate a response to the provided query.
+
+    Args:
+        configs (Config): Configuration object containing necessary settings for the Chatbot.
+        query (str): The user's input query or prompt.
+        model_choice (str, optional): The specific Azure OpenAI model to use. Defaults to "gpt_4o_mini".
+
+    Returns:
+        str: The generated response from the Azure OpenAI model.
+
+    Raises:
+        Exception: If there's an error in getting the response, with the error message included.
+    """
     try:
         chatbot = Chatbot(configs, file_id=None, model_choice=model_choice)
         response = chatbot.get_llm_answer(query)

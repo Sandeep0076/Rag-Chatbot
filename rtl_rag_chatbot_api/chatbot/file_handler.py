@@ -48,17 +48,26 @@ class FileHandler:
         self, file: UploadFile, file_id: str, is_image: bool, username: str
     ):
         """
-        Processes an uploaded file, including hash calculation, duplicate checking,
-        encryption, and storage in Google Cloud Storage.
+        Asynchronously processes an uploaded file, including hash calculation, duplicate checking,
+        and storage in Google Cloud Storage.
 
         Args:
             file (UploadFile): The uploaded file object.
             file_id (str): Unique identifier for the file.
             is_image (bool): Flag indicating if the file is an image.
+            username (str): The username associated with the uploaded file.
 
         Returns:
-            dict: A dictionary containing processing results, including file_id,
-                  is_image flag, status message, and processing status.
+            dict: A dictionary containing processing results, including:
+                - file_id (str): The unique identifier for the file.
+                - is_image (bool): Flag indicating if the file is an image.
+                - is_tabular (bool): Flag indicating if the file is a tabular data file.
+                - message (str): A status message describing the processing outcome.
+                - status (str): The processing status ('new', 'existing', or 'pending_embeddings').
+                - temp_file_path (str): The path to the temporary stored file.
+
+        Raises:
+            Exception: If an error occurs during file processing.
         """
         original_filename = file.filename
         file_content = await file.read()

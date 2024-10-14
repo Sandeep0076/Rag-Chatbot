@@ -55,24 +55,28 @@ embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
 title = "RAG PDF API"
 description = """
-RAG PDF API is a FastAPI-based application for processing and
-querying PDF documents using Retrieval-Augmented Generation (RAG).
+RAG PDF API is a FastAPI-based application for processing and querying various document types
+including PDFs, images, and tabular data (CSV/Excel) using Retrieval-Augmented Generation (RAG)
+and SQL querying capabilities.
 
 ## Workflow
 
-1. Upload a PDF file using the `/file/upload` endpoint.
-2. Create embeddings for the uploaded file with the `/embeddings/create` endpoint.
+1. Upload a file (PDF, image, CSV, or Excel) using the `/file/upload` endpoint.
+2. Create embeddings for the uploaded file with the `/embeddings/create` endpoint (for PDFs and images).
 3. Initialize the model using the `/model/initialize` endpoint. By default
-GPT4_omni is selected. Its optional and mainly used when we need to change model for chatting.
-4. Chat with the PDF content using the `/file/chat` endpoint.
+GPT4_omni_mini is selected. It's optional and mainly used when we need to change model for chatting.
+4. Chat with the content using the `/file/chat` endpoint.
 
 Additional features:
+- Query tabular data (CSV/Excel) using natural language with SQL-like capabilities.
 - Analyze images with the `/image/analyze` endpoint.
 - Get nearest neighbors for a query with the `/file/neighbors` endpoint.
 - View available models using the `/available-models` endpoint.
 - Clean up files with the `/file/cleanup` endpoint.
-- For chatting with Google models without RAG or file context./chat/gemini")
+- Chat with Google Gemini models without RAG or file context using `/chat/gemini`.
+- Delete files using the `/files` DELETE endpoint.
 
+Note: File storage in GCP has been removed from this version.
 """
 
 app = FastAPI(
@@ -151,15 +155,10 @@ async def upload_file(
     # current_user = Depends(get_current_user)
 ):
     """
-    Handles the uploading of a file with optional image flag.
-
-    Args:
-        file (UploadFile): The file to be uploaded.
-        is_image (bool): Flag indicating if the file is an image.
-        username (str): The username associated with the uploaded file.
-
-    Returns:
-        FileUploadResponse: Response containing details of the uploaded file.
+    Handles the uploading of a file, processes it accordingly, and prepares a response with relevant details.
+    Supports file processing for various types including images, CSV, and Excel files.
+    If the file already exists, downloads necessary files; otherwise,
+    processes the file and optionally prepares a SQLite database for tabular data.
     """
     try:
         file_id = str(uuid.uuid4())
@@ -286,6 +285,8 @@ async def initialize_model(request: ModelInitRequest):
             )
         initialized_models[request.file_id] = model
         return {"message": f"Model {request.model_choice} initialized successfully"}
+    except HTTPException as http_ex:
+        raise http_ex
     except Exception as e:
         logging.error(f"Error in initialize_model: {str(e)}", exc_info=True)
         raise HTTPException(
