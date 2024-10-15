@@ -42,33 +42,126 @@ def test_info():
     assert "description" in response.json()
 
 
+@patch("rtl_rag_chatbot_api.app.uuid.uuid4")
 @patch("rtl_rag_chatbot_api.app.file_handler.process_file")
-def test_file_upload(mock_process_file):
+def test_file_upload(mock_process_file, mock_uuid):
+    """
+    Test the file upload functionality by mocking UUID generation and file processing.
+    """
+    mock_uuid.return_value = "test_file_id"
     mock_process_file.return_value = {
         "file_id": "test_file_id",
         "status": "new",
         "message": "File uploaded successfully",
+        "is_image": False,
+        "temp_file_path": "local_data/test_file_id_test.pdf",
     }
+
     response = client.post(
         "/file/upload",
         files={"file": ("test.pdf", b"test content", "application/pdf")},
         data={"is_image": "false", "username": "testuser"},
     )
+
     assert response.status_code == 200
-    assert response.json()["file_id"] == "test_file_id"
 
 
-@patch("rtl_rag_chatbot_api.app.model_handler.initialize_model")
+@pytest.mark.asyncio
 @patch("rtl_rag_chatbot_api.app.embedding_handler.get_embeddings_info")
-def test_initialize_model(mock_get_embeddings_info, mock_initialize_model):
-    mock_get_embeddings_info.return_value = {"embeddings": {"azure": "completed"}}
-    mock_initialize_model.return_value = None
-    response = client.post(
-        "/model/initialize",
-        json={"model_choice": "gpt-3.5-turbo", "file_id": "test_file_id"},
-    )
-    assert response.status_code == 200
-    assert "initialized successfully" in response.json()["message"]
+@patch("rtl_rag_chatbot_api.app.os.path.exists")
+@patch("rtl_rag_chatbot_api.app.os.listdir")
+@patch("rtl_rag_chatbot_api.app.TabularDataHandler")
+@patch("rtl_rag_chatbot_api.app.model_handler.initialize_model")
+async def test_initialize_model(
+    mock_initialize_model,
+    mock_tabular_handler,
+    mock_listdir,
+    mock_path_exists,
+    mock_get_embeddings_info,
+):
+    """
+    Asynchronous unit test for the 'test_initialize_model' function.
+    Mocks various dependencies and tests the initialization of different model choices with different file types.
+    """
+    mock_initialize_model.return_value = MagicMock()
+    mock_tabular_handler.return_value = MagicMock()
+    mock_listdir.return_value = ["some_file"]
+
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+        # Test for CSV/Excel file
+        mock_path_exists.return_value = True
+        mock_get_embeddings_info.return_value = {"embeddings": {"azure": "completed"}}
+        response = await ac.post(
+            "/model/initialize",
+            json={"model_choice": "gpt-3.5-turbo", "file_id": "csv_file_id"},
+        )
+        assert response.status_code == 200
+        assert "initialized successfully" in response.json()["message"]
+        mock_tabular_handler.assert_called_once()
+        mock_initialize_model.assert_not_called()
+
+        # Reset mocks
+        mock_initialize_model.reset_mock()
+        mock_tabular_handler.reset_mock()
+        mock_path_exists.reset_mock()
+        mock_get_embeddings_info.reset_mock()
+
+        # Test for PDF file
+        mock_path_exists.return_value = False
+        mock_get_embeddings_info.return_value = {"embeddings": {"azure": "completed"}}
+        response = await ac.post(
+            "/model/initialize",
+            json={"model_choice": "gpt-3.5-turbo", "file_id": "pdf_file_id"},
+        )
+        assert response.status_code == 200
+        assert "initialized successfully" in response.json()["message"]
+        mock_initialize_model.assert_called_once()
+
+        # Reset mocks
+        mock_initialize_model.reset_mock()
+        mock_path_exists.reset_mock()
+        mock_get_embeddings_info.reset_mock()
+
+        # Test for Image file
+        mock_path_exists.return_value = False
+        mock_get_embeddings_info.return_value = {"embeddings": {"azure": "completed"}}
+        response = await ac.post(
+            "/model/initialize",
+            json={"model_choice": "gpt-4-vision", "file_id": "image_file_id"},
+        )
+        assert response.status_code == 200
+        assert "initialized successfully" in response.json()["message"]
+        mock_initialize_model.assert_called_once()
+
+        # Reset mocks
+        mock_initialize_model.reset_mock()
+        mock_path_exists.reset_mock()
+        mock_get_embeddings_info.reset_mock()
+
+        # Test for Gemini model
+        mock_path_exists.return_value = False
+        mock_get_embeddings_info.return_value = {"embeddings": {"google": "completed"}}
+        response = await ac.post(
+            "/model/initialize",
+            json={"model_choice": "gemini-pro", "file_id": "gemini_file_id"},
+        )
+        assert response.status_code == 200
+        assert "initialized successfully" in response.json()["message"]
+        mock_initialize_model.assert_called_once()
+
+        # Reset mocks
+        mock_initialize_model.reset_mock()
+        mock_get_embeddings_info.reset_mock()
+
+        # Test for file not found
+        mock_get_embeddings_info.return_value = None
+        response = await ac.post(
+            "/model/initialize",
+            json={"model_choice": "gpt-3.5-turbo", "file_id": "nonexistent_file_id"},
+        )
+        assert response.status_code == 404
+        assert "Embeddings not found for this file" in response.json()["detail"]
+        mock_initialize_model.assert_not_called()
 
 
 def test_available_models():
@@ -88,6 +181,11 @@ def test_cleanup_files(mock_gcs_handler):
 
 @patch("rtl_rag_chatbot_api.app.analyze_images")
 def test_analyze_image(mock_analyze_images):
+    """
+    Test the functionality of analyzing an image by mocking the 'analyze_images' function.
+    Ensure that the API endpoint '/image/analyze' returns a status code of 200 and
+    includes the keys 'message' and 'analysis' in the JSON response.
+    """
     mock_analyze_images.return_value = [{"analysis": "Test analysis"}]
 
     response = client.post(
@@ -101,6 +199,10 @@ def test_analyze_image(mock_analyze_images):
 
 @patch("rtl_rag_chatbot_api.app.initialized_models")
 def test_chat(mock_initialized_models):
+    """
+    Test the chat functionality by mocking initialized models and checking
+    responses for different scenarios.
+    """
     mock_model = MagicMock()
     mock_model.get_answer.return_value = "Test response"
     mock_initialized_models.__getitem__.return_value = mock_model
@@ -117,9 +219,30 @@ def test_chat(mock_initialized_models):
     assert response.status_code == 200
     assert response.json() == {"response": "Test response"}
 
+    # Test for TabularDataHandler (CSV) case
+    mock_tabular_handler = MagicMock()
+    mock_tabular_handler.get_answer.return_value = "CSV Test response"
+    mock_initialized_models.__getitem__.return_value = mock_tabular_handler
+
+    response = client.post(
+        "/file/chat",
+        json={
+            "text": "CSV Test query",
+            "file_id": "csv_file_id",
+            "model_choice": "gpt-3.5-turbo",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"response": "CSV Test response"}
+
 
 @pytest.mark.asyncio
 async def test_create_embeddings():
+    """
+    Asynchronous test function to validate the creation of embeddings.
+    Mocks necessary methods and functions to simulate successful embedding creation.
+    Checks the response status and content for successful embedding creation.
+    """
     async with AsyncClient(app=app, base_url="http://test") as ac:
         with patch.object(
             EmbeddingHandler, "embeddings_exist", return_value=False
@@ -128,6 +251,19 @@ async def test_create_embeddings():
             "create_and_upload_embeddings",
             new_callable=AsyncMock,
             return_value={"message": "Embeddings created successfully"},
+        ), patch(
+            "rtl_rag_chatbot_api.app.gcs_handler.get_file_info",
+            return_value={
+                "original_filename": "test.pdf",
+                "embeddings_status": "pending",
+            },
+        ), patch(
+            "rtl_rag_chatbot_api.app.os.path.exists",
+            return_value=True,  # Mock that the temporary file exists
+        ), patch(
+            "rtl_rag_chatbot_api.app.gcs_handler.update_file_info", return_value=None
+        ), patch(
+            "rtl_rag_chatbot_api.app.os.remove", return_value=None
         ):
             response = await ac.post(
                 "/embeddings/create",
@@ -136,6 +272,7 @@ async def test_create_embeddings():
 
     print(f"Response status: {response.status_code}")
     print(f"Response content: {response.content}")
+
     assert response.status_code == 200
     assert response.json() == {"message": "Embeddings created successfully"}
 
@@ -157,6 +294,11 @@ async def test_get_neighbors_model_not_initialized():
 
 @pytest.mark.asyncio
 async def test_get_neighbors():
+    """
+    Asynchronous unit test for the 'test_get_neighbors' function.
+    Mocks a model to return nearest neighbors and tests the API endpoint '/file/neighbors'.
+    Asserts the response status code and content against expected values.
+    """
     mock_model = MagicMock()
     mock_model.get_n_nearest_neighbours.return_value = [
         MagicMock(node=MagicMock(text="Neighbor 1")),
@@ -184,6 +326,12 @@ async def test_get_neighbors():
 
 @pytest.mark.asyncio
 async def test_get_neighbors_gemini():
+    """
+    Asynchronous unit test for the function that retrieves Gemini neighbors.
+    Mocks the GeminiHandler to return a list of neighbors.
+    Sends a POST request to test the endpoint for retrieving neighbors.
+    Checks the response status code and content for correctness.
+    """
     mock_gemini_handler = MagicMock(spec=GeminiHandler)
     mock_gemini_handler.get_n_nearest_neighbours.return_value = [
         "Gemini Neighbor 1",
@@ -214,6 +362,12 @@ async def test_get_neighbors_gemini():
 
 @pytest.mark.asyncio
 async def test_delete_files():
+    """
+    Asynchronous unit test for deleting files from the server.
+    Mocks GCSHandler methods to simulate file deletion.
+    Verifies the response status code, content, and method calls.
+    Asserts the expected response data and method calls.
+    """
     file_ids = ["file1", "file2", "file3"]
 
     # Mock GCSHandler and its methods

@@ -2,14 +2,11 @@ import json
 import logging
 import os
 import shutil
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, Optional, Union
 
 import google.auth
 import google.oauth2.credentials
-from google.api_core import exceptions
 from google.cloud import storage
-
-from rtl_rag_chatbot_api.common.encryption_utils import decrypt_file
 
 
 class GCSHandler:
@@ -17,7 +14,7 @@ class GCSHandler:
     Handles interactions with Google Cloud Storage (GCS) for file operations.
 
     This class provides methods for downloading, uploading, and managing files in Google Cloud Storage.
-    It includes functionality for working with encrypted files, cleaning up local storage, and finding
+    It includes functionality  cleaning up local storage, and finding
     existing files based on name or hash.
 
     Attributes:
@@ -72,85 +69,13 @@ class GCSHandler:
         # and download the blob to a file
         blob.download_to_filename(destination_file_path)
 
-    def check_and_download_folder(
-        self,
-        bucket_name: str,
-        folder_path: str,
-        folder_name: str,
-        destination_path: str,
-    ) -> Tuple[bool, Optional[List[str]]]:
-        """
-        Check for the existence of a folder in a Google Cloud Storage bucket,
-        download its contents, and decrypt any encrypted files.
-
-        This method checks for the existence of a specified folder within a GCS bucket.
-        If the folder exists, it downloads all files within that folder to a local
-        destination. Any files with a '.encrypted' extension are automatically decrypted
-        after download, and the encrypted versions are deleted locally.
-
-        Args:
-            bucket_name (str): The name of the GCS bucket.
-            folder_path (str): The path within the bucket where the folder is located.
-            folder_name (str): The name of the folder to check and download.
-            destination_path (str): The local path where files should be downloaded.
-
-        Returns:
-            Tuple[bool, Optional[List[str]]]: A tuple containing:
-                - A boolean indicating whether any files were downloaded (True) or not (False).
-                - A list of paths to the downloaded (and potentially decrypted) files,
-                or None if no files were downloaded.
-        """
-        bucket = self._storage_client.bucket(bucket_name)
-        prefix = f"{folder_path}/{folder_name}/"
-        blobs = list(bucket.list_blobs(prefix=prefix))
-
-        if not blobs:
-            logging.info(f"Folder {folder_name} not found in {folder_path}")
-            return False, None
-
-        downloaded_files = []
-        for blob in blobs:
-            if blob.name.endswith("/"):  # Skip directory markers
-                continue
-            file_name = blob.name.split("/")[-1]
-            local_file_path = os.path.join(destination_path, file_name)
-            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-            blob.download_to_filename(local_file_path)
-            logging.info(f"Downloaded {blob.name} to {local_file_path}")
-
-            if file_name.endswith(".encrypted"):
-                try:
-                    decrypted_file_path = decrypt_file(local_file_path)
-                    downloaded_files.append(decrypted_file_path)
-                    os.remove(local_file_path)  # Remove the encrypted file
-                    logging.info(
-                        f"Decrypted {local_file_path} to {decrypted_file_path}"
-                    )
-                except Exception as e:
-                    logging.error(f"Failed to decrypt {local_file_path}: {str(e)}")
-                    # If decryption fails, don't add the file to downloaded_files
-            else:
-                downloaded_files.append(local_file_path)
-
-        return len(downloaded_files) > 0, downloaded_files
-
     def download_files_from_folder_by_id(self, file_id):
-        """
-        Download all files from a specific folder in GCS based on the folder ID.
-        If no folder is found, log a message and raise an exception.
-
-        Parameters:
-        file_id (str): The ID of the folder to download files from.
-
-        Raises:
-        FileNotFoundError: If no embeddings are found for the given file_id.
-        """
         prefix = f"file-embeddings/{file_id}/"
         blobs = list(self.bucket.list_blobs(prefix=prefix))
 
         if not blobs:
             logging.warning(f"No embeddings found for file ID: {file_id}")
-            return  # Return without raising an exception
+            return
 
         for blob in blobs:
             if blob.name.endswith("/"):  # Skip directory markers
@@ -166,13 +91,11 @@ class GCSHandler:
 
         logging.info(f"Finished downloading all files for folder ID: {file_id}")
 
-    def cleanup_local_files(self):
-        """
-        Clean up files inside chroma_db and local_data folders,
-        as well as __pycache__ directories.
-        """
+    def cleanup_local_files(self, exclude=[]):
         folders_to_clean = ["chroma_db", "local_data", "processed_data"]
         for folder in folders_to_clean:
+            if folder in exclude:
+                continue
             folder_path = os.path.join(os.getcwd(), folder)
             if os.path.exists(folder_path):
                 for item in os.listdir(folder_path):
@@ -199,20 +122,9 @@ class GCSHandler:
     def upload_to_gcs(
         self,
         bucket_name: str,
-        source: Union[str, dict, Dict[str, Tuple[Union[str, dict], str]]],
+        source: Union[str, dict, Dict[str, Union[str, dict, tuple]]],
         destination_blob_name: Optional[str] = None,
     ):
-        """
-        Upload a file, JSON data, or multiple items to the bucket.
-
-        Args:
-            bucket_name (str): The name of the GCS bucket.
-            source (Union[str, dict, Dict[str, Tuple[Union[str, dict], str]]]):
-                - A file path (str)
-                - A dictionary to be uploaded as JSON
-                - A dictionary of items to upload, where each value is a tuple of (source, destination_blob_name)
-            destination_blob_name (Optional[str]): The destination blob name in GCS. Not used for multiple uploads.
-        """
         bucket = self._storage_client.bucket(bucket_name)
 
         if isinstance(source, dict) and destination_blob_name is None:
@@ -237,66 +149,18 @@ class GCSHandler:
                 blob.upload_from_filename(source)
             print(f"Uploaded to {destination_blob_name}")
 
-    def download_and_decrypt_file(self, file_id: str, destination_path: str):
-        # Downloads an encrypted file from GCS and decrypts it locally.
-        bucket = self._storage_client.bucket(self.configs.gcp_resource.bucket_name)
-        prefix = f"files-raw/{file_id}/"
-        blobs = list(bucket.list_blobs(prefix=prefix))
-
-        encrypted_blob = next(
-            (blob for blob in blobs if blob.name.endswith(".encrypted")), None
-        )
-
-        if not encrypted_blob:
-            raise FileNotFoundError(f"No encrypted file found for file_id: {file_id}")
-
-        encrypted_file_path = os.path.join(
-            destination_path, os.path.basename(encrypted_blob.name)
-        )
-        os.makedirs(os.path.dirname(encrypted_file_path), exist_ok=True)
-
-        encrypted_blob.download_to_filename(encrypted_file_path)
-
-        decrypted_file_path = decrypt_file(encrypted_file_path)
-
-        # Clean up the encrypted file
-        os.remove(encrypted_file_path)
-
-        return decrypted_file_path
-
-    def find_existing_file(self, filename):
-        # Searches for an existing file in GCS by filename.
-        try:
-            logging.info(f"Searching for existing file: {filename}")
-            blobs = self._storage_client.list_blobs(
-                self.bucket_name, prefix="files-raw/"
-            )
-
-            for blob in blobs:
-                if blob.name.endswith(f"/{filename}.encrypted"):
-                    file_id = blob.name.split("/")[-2]
-                    logging.info(f"Found existing file: {filename} with ID: {file_id}")
-                    return file_id
-
-            logging.info(f"File {filename} not found in existing folders")
-            return None
-        except Exception as e:
-            logging.error(f"Error in find_existing_file: {str(e)}")
-            return None
-
     def find_existing_file_by_hash(self, file_hash):
-        # Searches for an existing file in GCS by file hash.
         try:
             logging.info(f"Searching for existing file with hash: {file_hash}")
             blobs = self._storage_client.list_blobs(
-                self.bucket_name, prefix="files-raw/"
+                self.bucket_name, prefix="file-embeddings/"
             )
 
             for blob in blobs:
-                if blob.name.endswith("/metadata.json"):
-                    metadata = json.loads(blob.download_as_string())
-                    if metadata.get("file_hash") == file_hash:
-                        file_id = blob.name.split("/")[-2]
+                if blob.name.endswith("/file_info.json"):
+                    file_info = json.loads(blob.download_as_string())
+                    if file_info.get("file_hash") == file_hash:
+                        file_id = file_info.get("file_id")
                         logging.info(
                             f"Found existing file with hash: {file_hash}, ID: {file_id}"
                         )
@@ -308,36 +172,21 @@ class GCSHandler:
             logging.error(f"Error in find_existing_file_by_hash: {str(e)}")
             return None
 
-    def delete_folder(self, folder_path: str):
-        """
-        Deletes a folder and all its contents from the bucket.
-
-        Args:
-            folder_path (str): The path of the folder to delete.
-        """
-        blobs = self.bucket.list_blobs(prefix=folder_path)
-        try:
-            for blob in blobs:
-                blob.delete()
-            logging.info(f"Deleted folder: {folder_path}")
-        except exceptions.NotFound:
-            logging.warning(f"Folder not found: {folder_path}")
-        except exceptions.GoogleAPIError as e:
-            logging.error(f"An error occurred while deleting folder {folder_path}: {e}")
-
-    def delete_file_and_embeddings(self, file_id: str):
-        """
-        Deletes a file and its associated embeddings from GCS.
-
-        Args:
-            file_id (str): The ID of the file to delete.
-        """
-        folders_to_delete = [f"files-raw/{file_id}/", f"file-embeddings/{file_id}/"]
-        for folder in folders_to_delete:
-            self.delete_folder(folder)
-
-    def get_file_metadata(self, file_id: str):
-        blob = self.bucket.blob(f"files-raw/{file_id}/metadata.json")
+    def get_file_info(self, file_id: str):
+        blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
         if blob.exists():
             return json.loads(blob.download_as_text())
         return {}
+
+    def update_file_info(self, file_id: str, new_info: dict):
+        blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
+        if blob.exists():
+            current_info = json.loads(blob.download_as_text())
+            current_info.update(new_info)
+            blob.upload_from_string(
+                json.dumps(current_info), content_type="application/json"
+            )
+        else:
+            blob.upload_from_string(
+                json.dumps(new_info), content_type="application/json"
+            )
