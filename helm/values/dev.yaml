@@ -7,6 +7,7 @@ global:
       - chatbot/chatbot-api
 universal-helm-chart:
   ingress:
+    iap: false
     domains:
       - rtl-rag-chatbot-api.itowe.gcp.dev.da-service.io
   deployment:
