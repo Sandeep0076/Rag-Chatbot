@@ -129,7 +129,7 @@ app.add_route("/metrics", handle_metrics)
 
 
 @app.get("/health")
-async def health(current_user=Depends(get_current_user)):
+async def health():
     """
     Shows application health information.
     In the future this could do some actual checks.
