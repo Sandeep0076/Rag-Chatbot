@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile  # , Depends,
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette_exporter import PrometheusMiddleware, handle_metrics
@@ -35,6 +35,7 @@ from rtl_rag_chatbot_api.common.models import (
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
+from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
 
 # from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
 
@@ -113,8 +114,12 @@ app.add_middleware(
 
 app.add_middleware(
     CORSMiddleware,
+    # todo - add variable for allowed origins per environment
+    allow_origins=[
+        "http://localhost:8501",
+        "http://localhost:3000",
+    ],  # Streamlit and NextJS localhost development
     # allow_origins=[os.getenv("ALLOWED_ORIGIN")],
-    allow_origins=["http://localhost:8501"],  # Streamlit default port
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -124,8 +129,7 @@ app.add_route("/metrics", handle_metrics)
 
 
 @app.get("/health")
-async def health():
-    # async def health(current_user=Depends(get_current_user)):
+async def health(current_user=Depends(get_current_user)):
     """
     Shows application health information.
     In the future this could do some actual checks.
@@ -152,7 +156,7 @@ async def upload_file(
     file: UploadFile = File(...),
     is_image: bool = Form(...),
     username: str = Form(...),
-    # current_user = Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
     """
     Handles the uploading of a file, processes it accordingly, and prepares a response with relevant details.
@@ -231,8 +235,9 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
 
 
 @app.post("/model/initialize")
-async def initialize_model(request: ModelInitRequest):
-    # async def initialize_model(request: ModelInitRequest, current_user = Depends(get_current_user)):
+async def initialize_model(
+    request: ModelInitRequest, current_user=Depends(get_current_user)
+):
     """
     Endpoint to initialize a model based on the specified model choice, file ID, and embedding type.
 
@@ -296,8 +301,7 @@ async def initialize_model(request: ModelInitRequest):
 
 
 @app.post("/file/chat")
-async def chat(query: Query):
-    # async def chat(query: Query, current_user = Depends(get_current_user)):
+async def chat(query: Query, current_user=Depends(get_current_user)):
     """
     Endpoint to interact with the chatbot using a specific file.
     Checks if the model is initialized for the given file, retrieves the model,
@@ -342,9 +346,9 @@ async def chat(query: Query):
 
 
 @app.post("/embeddings/create")
-async def create_embeddings(request: EmbeddingCreationRequest):
-    # async def create_embeddings(request: EmbeddingCreationRequest,
-    #  current_user = Depends(get_current_user)):
+async def create_embeddings(
+    request: EmbeddingCreationRequest, current_user=Depends(get_current_user)
+):
     """
     Endpoint to create embeddings for a file based on the provided request.
 
@@ -400,8 +404,7 @@ async def create_embeddings(request: EmbeddingCreationRequest):
 
 
 @app.get("/available-models")
-async def get_available_models():
-    # async def get_available_models(current_user = Depends(get_current_user)):
+async def get_available_models(current_user=Depends(get_current_user)):
     """
     Endpoint to retrieve a list of available models including Azure LLM models and Gemini models.
     """
@@ -412,8 +415,7 @@ async def get_available_models():
 
 
 @app.post("/file/cleanup")
-async def cleanup_files():
-    # async def cleanup_files(current_user = Depends(get_current_user)):
+async def cleanup_files(current_user=Depends(get_current_user)):
     """
     Endpoint to clean-up local files in chroma_db and local_data folders,
     as well as cache files in the project.
@@ -429,8 +431,6 @@ async def cleanup_files():
 
 
 async def initialize_chatbot(file_id: str, model_choice: str):
-    # async def initialize_chatbot(file_id: str, model_choice: str,
-    # current_user = Depends(get_current_user)):
     """
     Initialize a chatbot with the given file ID and model choice.
 
@@ -463,8 +463,7 @@ async def initialize_chatbot(file_id: str, model_choice: str):
 
 
 @app.post("/file/neighbors")
-async def get_neighbors(query: NeighborsQuery):
-    # async def get_neighbors(query: NeighborsQuery, current_user = Depends(get_current_user)):
+async def get_neighbors(query: NeighborsQuery, current_user=Depends(get_current_user)):
     """
     Endpoint to retrieve nearest neighbors for a given text query and file ID.
     Checks if the model is initialized for the specified file, then retrieves the nearest neighbors accordingly.
@@ -499,9 +498,9 @@ async def get_neighbors(query: NeighborsQuery):
 
 
 @app.post("/image/analyze")
-async def analyze_image_endpoint(file: UploadFile = File(...)):
-    # async def analyze_image_endpoint(file: UploadFile = File(...),
-    #  current_user = Depends(get_current_user)):
+async def analyze_image_endpoint(
+    file: UploadFile = File(...), current_user=Depends(get_current_user)
+):
     """
     Endpoint to analyze an uploaded image file.
     Saves the analysis result to a JSON file and returns the result details.
@@ -553,8 +552,9 @@ async def analyze_image_endpoint(file: UploadFile = File(...)):
 
 
 @app.delete("/files")
-async def delete_files(request: FileDeleteRequest):
-    # async def delete_files(request: FileDeleteRequest, current_user = Depends(get_current_user)):
+async def delete_files(
+    request: FileDeleteRequest, current_user=Depends(get_current_user)
+):
     """
     Delete files and their embeddings based on the provided file IDs.
 
@@ -603,9 +603,9 @@ async def delete_files(request: FileDeleteRequest):
 
 
 @app.post("/chat/gemini")
-async def get_gemini_response_stream(request: ChatRequest):
-    # async def get_gemini_response_stream(request: ChatRequest,
-    # current_user = Depends(get_current_user)):
+async def get_gemini_response_stream(
+    request: ChatRequest, current_user=Depends(get_current_user)
+):
     """
     Endpoint for chatting with Gemini models (Flash or Pro) without RAG or file context.
 

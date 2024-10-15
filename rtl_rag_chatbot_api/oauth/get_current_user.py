@@ -2,14 +2,13 @@ import os
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 
 from rtl_rag_chatbot_api.oauth.get_public_key import get_public_key
 
 # token_url
-# oauth2_scheme = OAuth2PasswordBearer(tokenUrl=os.getenv("TOKEN_URL"))
-
-oauth2_scheme = "test"
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=os.getenv("TOKEN_URL"))
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> Optional[str]:
