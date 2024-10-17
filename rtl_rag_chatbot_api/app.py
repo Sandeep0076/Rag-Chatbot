@@ -114,12 +114,8 @@ app.add_middleware(
 
 app.add_middleware(
     CORSMiddleware,
-    # todo - add variable for allowed origins per environment
-    allow_origins=[
-        "http://localhost:8501",
-        "http://localhost:3000",
-    ],  # Streamlit and NextJS localhost development
-    # allow_origins=[os.getenv("ALLOWED_ORIGIN")],
+    # Streamlit and NextJS localhost development
+    allow_origins=[os.getenv("ALLOWED_ORIGIN")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
