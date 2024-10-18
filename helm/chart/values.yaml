@@ -18,10 +18,10 @@ universal-helm-chart:
     resources:
       requests:
         cpu: 500m
-        memory: 256Mi
+        memory: 2Gi
       limits:
         cpu: 1000m
-        memory: 512Mi
+        memory: 4Gi
     livenessProbe:
       failureThreshold: 3
       initialDelaySeconds: 15
