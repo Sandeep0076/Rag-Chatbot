@@ -55,3 +55,7 @@ class FileDeleteRequest(BaseModel):
 class ChatRequest(BaseModel):
     model: str
     message: str
+
+
+class ChromaDeleteRequest(BaseModel):
+    file_id: str
