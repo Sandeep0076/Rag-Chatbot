@@ -19,7 +19,7 @@ def get_predefined_user():
     return OAuth2PasswordBearer(tokenUrl=os.getenv("TOKEN_URL"))
 
 
-oauth2_scheme = get_predefined_user
+oauth2_scheme = get_predefined_user()
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> Optional[str]:
