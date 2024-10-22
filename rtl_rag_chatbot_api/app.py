@@ -25,6 +25,7 @@ from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.common.models import (
     ChatRequest,
+    ChromaDeleteRequest,
     EmbeddingCreationRequest,
     FileDeleteRequest,
     FileUploadResponse,
@@ -552,7 +553,7 @@ async def delete_files(
     request: FileDeleteRequest, current_user=Depends(get_current_user)
 ):
     """
-    Delete files and their embeddings based on the provided file IDs.
+    Delete  embeddings based on the provided file IDs from GCP and local.
 
     Args:
         file_ids (List[str]): List of file IDs to delete.
@@ -565,17 +566,18 @@ async def delete_files(
     deleted_files = []
     errors = []
 
-    gcs_handler = GCSHandler(configs)
-
     for file_id in file_ids:
         try:
-            # Delete file and embeddings from GCS
-            gcs_handler.delete_file_and_embeddings(file_id)
-
             # Delete local Chroma DB files
             chroma_db_path = f"./chroma_db/{file_id}"
             if os.path.exists(chroma_db_path):
                 shutil.rmtree(chroma_db_path)
+
+            # Delete the entire folder from GCS
+            folder_prefix = f"file-embeddings/{file_id}/"
+            blobs = gcs_handler.bucket.list_blobs(prefix=folder_prefix)
+            for blob in blobs:
+                blob.delete()
 
             # Remove the file from initialized_models if it exists
             if file_id in initialized_models:
@@ -596,6 +598,44 @@ async def delete_files(
             "message": "All files and their embeddings have been deleted successfully",
             "deleted_files": deleted_files,
         }
+
+
+@app.delete("/chroma/delete")
+async def delete_chroma_embeddings(
+    request: ChromaDeleteRequest, current_user=Depends(get_current_user)
+):
+    """
+    Delete Chroma DB embeddings for a specific file ID.
+
+    This endpoint removes the local Chroma DB embeddings associated with the given file ID.
+    It deletes the entire folder containing the embeddings and removes the file from
+    initialized models if present.
+    """
+    file_id = request.file_id
+    chroma_db_path = f"./chroma_db/{file_id}"
+
+    try:
+        if os.path.exists(chroma_db_path):
+            shutil.rmtree(chroma_db_path)
+
+            # Remove the file from initialized_models if it exists
+            if file_id in initialized_models:
+                del initialized_models[file_id]
+
+            return {
+                "message": f"Chroma DB embeddings for file_id {file_id} have been deleted successfully",
+                "deleted_path": chroma_db_path,
+            }
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Chroma DB embeddings for file_id {file_id} not found",
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"An error occurred while deleting Chroma DB embeddings: {str(e)}",
+        )
 
 
 @app.post("/chat/gemini")
