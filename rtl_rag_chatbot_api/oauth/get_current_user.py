@@ -15,7 +15,7 @@ dev_env = os.getenv("DEV")
 
 def get_predefined_user():
     if dev_env == "true":
-        return "v.a.lubomirov@gmail.com"
+        return "rag-api-test@netrtl.com"
     return OAuth2PasswordBearer(tokenUrl=os.getenv("TOKEN_URL"))
 
 
@@ -32,16 +32,13 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> Optional[str]
         try:
             header = jwt.get_unverified_header(token)
             public_key = get_public_key(header["kid"])
-            # AUDIENCE = CLIENT_ID in single tenant apps
             payload = jwt.decode(
                 token, public_key, algorithms=["RS256"], audience=os.getenv("CLIENT_ID")
             )
-            print(payload)
             username: str = payload.get("sub")
             if username is None:
                 raise credentials_exception
             return username
-        except JWTError as error:
-            print(error)
+        except JWTError:
             raise credentials_exception
     return token
