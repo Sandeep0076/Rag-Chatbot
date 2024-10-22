@@ -23,7 +23,7 @@ oauth2_scheme = get_predefined_user
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> Optional[str]:
-    if dev_env == "false" or None:
+    if dev_env == "false" or dev_env is None:
         credentials_exception = HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
