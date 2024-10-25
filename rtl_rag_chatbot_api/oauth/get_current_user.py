@@ -15,8 +15,12 @@ dev_env = os.getenv("DEV")
 
 def get_predefined_user():
     if dev_env == "true":
-        return "rag-api-test@netrtl.com"
+        return return_fake_email
     return OAuth2PasswordBearer(tokenUrl=os.getenv("TOKEN_URL"))
+
+
+def return_fake_email():
+    return "rag-api-test@netrtl.com"
 
 
 oauth2_scheme = get_predefined_user()
