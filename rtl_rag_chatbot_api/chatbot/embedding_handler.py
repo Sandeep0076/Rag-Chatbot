@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -9,7 +10,6 @@ import chromadb
 from chromadb.config import Settings
 
 from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
-from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 
 
@@ -26,54 +26,113 @@ class EmbeddingHandler:
         self.configs = configs
         self.gcs_handler = gcs_handler
 
-    def embeddings_exist(self, file_id: str) -> bool:
-        # Check if embeddings exist for both Azure and Gemini
+    def embeddings_exist(self, file_id: str) -> tuple[bool, bool, bool]:
+        """
+        Check if embeddings exist and are valid both in GCS and locally.
+        Returns tuple of (gcs_status, local_status, all_valid)
+        """
+        # Check GCS embeddings status
+        file_info = self.gcs_handler.get_file_info(file_id)
+        gcs_status = file_info.get("embeddings_status") == "completed"
+
+        # Check local embeddings
         azure_path = f"./chroma_db/{file_id}/azure"
         gemini_path = f"./chroma_db/{file_id}/google"
-        return (os.path.exists(azure_path) and len(os.listdir(azure_path)) > 0) and (
-            os.path.exists(gemini_path) and len(os.listdir(gemini_path)) > 0
+
+        local_status = (
+            os.path.exists(azure_path)
+            and len(os.listdir(azure_path)) > 0
+            and os.path.exists(gemini_path)
+            and len(os.listdir(gemini_path)) > 0
         )
+
+        return gcs_status, local_status, (gcs_status and local_status)
+
+    async def ensure_embeddings_exist(self, file_id: str, temp_file_path: str = None):
+        """
+        Ensures embeddings exist and are valid, recreating them if necessary.
+        """
+        try:
+            file_info = self.gcs_handler.get_file_info(file_id)
+            if not file_info:
+                raise ValueError(f"No file info found for file_id: {file_id}")
+
+            original_filename = file_info.get("original_filename")
+            if not temp_file_path:
+                temp_file_path = f"local_data/{file_id}_{original_filename}"
+
+            if not os.path.exists(temp_file_path):
+                # Try to download the file from GCS if it exists
+                try:
+                    source_blob_name = f"file-embeddings/{file_id}/{original_filename}"
+                    self.gcs_handler.download_files_from_gcs(
+                        self.configs.gcp_resource.bucket_name,
+                        source_blob_name,
+                        temp_file_path,
+                    )
+                except Exception as e:
+                    raise FileNotFoundError(
+                        f"Source file not found at {temp_file_path} and could not download from GCS: {str(e)}"
+                    )
+
+            # Check embeddings status
+            gcs_status, local_status, all_valid = self.embeddings_exist(file_id)
+
+            if all_valid:
+                return {
+                    "message": "Embeddings already exist and are valid",
+                    "status": "existing",
+                }
+
+            # If there's an inconsistency between GCS and local, clean up
+            if gcs_status != local_status:
+                logging.info("Inconsistent embedding state detected. Cleaning up...")
+                azure_path = f"./chroma_db/{file_id}/azure"
+                gemini_path = f"./chroma_db/{file_id}/google"
+
+                # Clean up GCS embeddings
+                self.gcs_handler.delete_embeddings(file_id)
+
+                # Clean up local embeddings
+                if os.path.exists(azure_path):
+                    shutil.rmtree(azure_path)
+                if os.path.exists(gemini_path):
+                    shutil.rmtree(gemini_path)
+
+            # Create new embeddings
+            result = await self.create_and_upload_embeddings(
+                file_id, file_info.get("is_image", False), temp_file_path
+            )
+
+            return result
+
+        except Exception as e:
+            logging.error(f"Error in ensure_embeddings_exist: {str(e)}", exc_info=True)
+            raise
 
     async def create_and_upload_embeddings(
         self, file_id: str, is_image: bool, temp_file_path: str
     ):
+        """Create embeddings for both Azure and Gemini models and upload them to GCS"""
         try:
+            # Get username from file info
             file_info = self.gcs_handler.get_file_info(file_id)
-            if file_info.get("embeddings"):
-                logging.info(f"Embeddings already exist for file_id: {file_id}")
-                return {"message": "Embeddings already exist for this file"}
-
             username = file_info.get("username", "Unknown")
 
-            # Create necessary directories
-            chroma_db_path = f"./chroma_db/{file_id}"
-            os.makedirs(os.path.join(chroma_db_path, "azure"), exist_ok=True)
-            os.makedirs(os.path.join(chroma_db_path, "google"), exist_ok=True)
-
-            # Process image file if required
-            if is_image:
-                logging.info("Processing image file...")
-                image_analysis_result = analyze_images(temp_file_path)
-                analysis_json_path = os.path.join(
-                    os.path.dirname(temp_file_path), f"{file_id}_analysis.json"
-                )
-                with open(analysis_json_path, "w") as f:
-                    json.dump(image_analysis_result, f)
-                logging.info(f"Image analysis result saved to {analysis_json_path}")
-
-            # Create embeddings for both Azure and Gemini in parallel
+            # Create new embeddings for both Azure and Gemini
             with ThreadPoolExecutor(max_workers=2) as executor:
                 azure_future = executor.submit(
                     self._create_azure_embeddings,
                     file_id,
-                    temp_file_path if not is_image else analysis_json_path,
-                    username,
+                    temp_file_path,
+                    self.configs.azure_embedding.azure_embedding_api_key,
+                    username,  # Pass username here
                 )
                 gemini_future = executor.submit(
                     self._create_gemini_embeddings,
                     file_id,
-                    temp_file_path if not is_image else analysis_json_path,
-                    username,
+                    temp_file_path,
+                    username,  # Pass same username here
                 )
 
                 azure_result = azure_future.result()
@@ -85,11 +144,13 @@ class EmbeddingHandler:
             # Update file info with embedding status
             new_info = {
                 "embeddings": {"azure": azure_result, "google": gemini_result},
+                "embeddings_status": "completed",
             }
             self.gcs_handler.update_file_info(file_id, new_info)
 
             return {
-                "message": "Embeddings created and uploaded successfully for both Azure and Gemini"
+                "message": "Embeddings created and uploaded successfully",
+                "status": "completed",
             }
 
         except Exception as e:
@@ -98,32 +159,27 @@ class EmbeddingHandler:
             )
             raise
 
-        finally:
-            # Clean up analysis JSON if it exists
-            if is_image:
-                analysis_json_path = os.path.join(
-                    os.path.dirname(temp_file_path), f"{file_id}_analysis.json"
-                )
-                if os.path.exists(analysis_json_path):
-                    os.remove(analysis_json_path)
-
-    # Private method to create Azure embeddings
-    def _create_azure_embeddings(self, file_id, file_path, username):
+    def _create_azure_embeddings(
+        self, file_id: str, file_path: str, api_key: str, username: str
+    ):
         logging.info("Generating Azure embeddings...")
         try:
+            chroma_db_path = f"./chroma_db/{file_id}/azure"
+            os.makedirs(chroma_db_path, exist_ok=True)
+
             chroma_db = chromadb.PersistentClient(
-                path=f"./chroma_db/{file_id}/azure",
+                path=chroma_db_path,
                 settings=Settings(allow_reset=True, is_persistent=True),
             )
             run_preprocessor(
                 configs=self.configs,
                 text_data_folder_path=os.path.dirname(file_path),
                 file_id=file_id,
-                chroma_db_path=f"./chroma_db/{file_id}/azure",
+                chroma_db_path=chroma_db_path,
                 chroma_db=chroma_db,
                 is_image=False,
                 gcs_handler=self.gcs_handler,
-                username=username,
+                username=username,  # Pass username to run_preprocessor
             )
             logging.info("Azure embeddings generated successfully")
             return "completed"
@@ -131,10 +187,12 @@ class EmbeddingHandler:
             logging.error(f"Error creating Azure embeddings: {str(e)}", exc_info=True)
             raise
 
-    # Private method to create Gemini embeddings
-    def _create_gemini_embeddings(self, file_id, file_path, username):
+    def _create_gemini_embeddings(self, file_id: str, file_path: str, username: str):
         logging.info("Generating Gemini embeddings...")
         try:
+            chroma_db_path = f"./chroma_db/{file_id}/google"
+            os.makedirs(chroma_db_path, exist_ok=True)
+
             gemini_handler = GeminiHandler(self.configs, self.gcs_handler)
             gemini_handler.process_file(file_id, file_path, subfolder="google")
             logging.info("Gemini embeddings generated successfully")
@@ -143,8 +201,7 @@ class EmbeddingHandler:
             logging.error(f"Error creating Gemini embeddings: {str(e)}", exc_info=True)
             raise
 
-    # Private method to upload embeddings to GCS
-    def _upload_embeddings_to_gcs(self, file_id):
+    def _upload_embeddings_to_gcs(self, file_id: str):
         logging.info("Uploading embeddings to GCS...")
         try:
             for model in ["azure", "google"]:

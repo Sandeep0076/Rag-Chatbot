@@ -190,3 +190,30 @@ class GCSHandler:
             blob.upload_from_string(
                 json.dumps(new_info), content_type="application/json"
             )
+
+    def delete_embeddings(self, file_id: str):
+        """
+        Deletes all embeddings associated with a file_id from GCS.
+
+        Args:
+            file_id (str): The ID of the file whose embeddings should be deleted
+        """
+        try:
+            logging.info(f"Deleting embeddings for file_id: {file_id}")
+
+            # Delete embeddings folder from GCS
+            prefix = f"file-embeddings/{file_id}/"
+            blobs = self.bucket.list_blobs(prefix=prefix)
+
+            for blob in blobs:
+                try:
+                    blob.delete()
+                    logging.info(f"Deleted blob: {blob.name}")
+                except Exception as e:
+                    logging.error(f"Error deleting blob {blob.name}: {str(e)}")
+
+            logging.info(f"Successfully deleted all embeddings for file_id: {file_id}")
+
+        except Exception as e:
+            logging.error(f"Error in delete_embeddings: {str(e)}", exc_info=True)
+            raise

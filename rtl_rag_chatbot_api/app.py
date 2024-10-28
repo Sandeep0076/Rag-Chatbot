@@ -247,48 +247,42 @@ async def initialize_model(
         HTTPException: If embeddings are not found for the specified file or if an error occurs during initialization.
     """
     try:
-        file_info = embedding_handler.get_embeddings_info(request.file_id)
+        file_info = gcs_handler.get_file_info(request.file_id)
         if not file_info:
-            raise HTTPException(
-                status_code=404, detail="Embeddings not found for this file"
-            )
+            raise HTTPException(status_code=404, detail="File not found")
 
-            # Check if the file is a tabular data file
+        # Check if the file is a tabular data file
         db_path = f"./chroma_db/{request.file_id}/tabular_data.db"
         if os.path.exists(db_path):
-            # Initialize TabularDataHandler for CSV/Excel files
             model = TabularDataHandler(configs, request.file_id, request.model_choice)
-        else:
-            embedding_type = (
-                "google"
-                if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]
-                else "azure"
-            )
-            chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
+            initialized_models[request.file_id] = model
+            return {
+                "message": f"Model {request.model_choice} initialized successfully for tabular data"
+            }
 
-            logging.info(f"Initializing model for {embedding_type} embeddings")
-            logging.info(f"Chroma DB path: {chroma_db_path}")
-            logging.info(
-                f"Contents of chroma_db folder: {os.listdir(f'./chroma_db/{request.file_id}')}"
-            )
+        # Handle non-tabular files (PDFs/Images)
+        embedding_type = (
+            "google"
+            if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+            else "azure"
+        )
 
-            if not os.path.exists(chroma_db_path):
-                logging.warning(
-                    f"{embedding_type} embeddings not found locally. Downloading..."
-                )
-                gcs_handler.download_files_from_folder_by_id(request.file_id)
+        # Ensure embeddings exist and are valid
+        _embedding_handler = EmbeddingHandler(configs, gcs_handler)
+        await _embedding_handler.ensure_embeddings_exist(request.file_id)
 
-            logging.info(f"Contents of {chroma_db_path}: {os.listdir(chroma_db_path)}")
-            logging.info(
-                f"model choice: {request.model_choice} { request.file_id}, { embedding_type}"
-            )
-            model = model_handler.initialize_model(
-                request.model_choice, request.file_id, embedding_type
-            )
+        # Initialize the model
+        chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
+        if not os.path.exists(chroma_db_path):
+            gcs_handler.download_files_from_folder_by_id(request.file_id)
+
+        model = model_handler.initialize_model(
+            request.model_choice, request.file_id, embedding_type
+        )
+
         initialized_models[request.file_id] = model
         return {"message": f"Model {request.model_choice} initialized successfully"}
-    except HTTPException as http_ex:
-        raise http_ex
+
     except Exception as e:
         logging.error(f"Error in initialize_model: {str(e)}", exc_info=True)
         raise HTTPException(
@@ -364,29 +358,31 @@ async def create_embeddings(
                 "info": file_info.get("embeddings"),
             }
 
+        # Get original filename from file info
+        original_filename = file_info.get("original_filename")
+        if not original_filename:
+            raise HTTPException(
+                status_code=400, detail="Original filename not found in file info"
+            )
+
         # Construct the path to the temporary file
-        temp_file_path = (
-            f"local_data/{request.file_id}_{file_info.get('original_filename', '')}"
-        )
+        temp_file_path = f"local_data/{request.file_id}_{original_filename}"
 
         if not os.path.exists(temp_file_path):
-            raise HTTPException(status_code=404, detail="Temporary file not found")
-
-        try:
-            result = await embedding_handler.create_and_upload_embeddings(
-                request.file_id, file_info.get("is_image", False), temp_file_path
+            raise HTTPException(
+                status_code=404, detail=f"Temporary file not found at {temp_file_path}"
             )
 
-            # Update file info to indicate embeddings are completed
-            gcs_handler.update_file_info(
-                request.file_id, {"embeddings_status": "completed"}
-            )
+        result = await embedding_handler.create_and_upload_embeddings(
+            request.file_id, file_info.get("is_image", False), temp_file_path
+        )
 
-            return result
-        finally:
-            # Clean up the temporary file after successful embedding creation
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+        # Update file info to indicate embeddings are completed
+        gcs_handler.update_file_info(
+            request.file_id, {"embeddings_status": "completed"}
+        )
+
+        return result
 
     except Exception as e:
         logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
