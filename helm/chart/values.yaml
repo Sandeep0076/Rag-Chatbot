@@ -44,5 +44,10 @@ universal-helm-chart:
       - "rtl-rag-chatbot-api.ecina.test.da-service.io"
   serviceAccount:
     name: "chatbot-api"
+  cloudsql:
+    enabled: true
+    db:
+      name: main
+      user: chatbot_ui
 gcp:
   project_id: ""
