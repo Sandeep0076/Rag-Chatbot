@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 # base directory for chromadb files
 BASE_DIR = "./chroma_db"
 DELETE_ENDPOINT = "http://localhost:8080/chroma/delete"
-TIME_THRESHOLD = timedelta(hours=2)
+TIME_THRESHOLD = timedelta(hours=4)
 
 
 def is_stale_conversation(conversation: Conversation) -> bool:

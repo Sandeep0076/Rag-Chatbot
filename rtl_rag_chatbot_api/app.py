@@ -107,7 +107,7 @@ async def start_scheduler(app: FastAPI):
         func=offload_chromadb_embeddings,
         args=[SessionLocal],
         trigger="interval",
-        hours=4,
+        minutes=15,
     )
     scheduler.start()
     yield
