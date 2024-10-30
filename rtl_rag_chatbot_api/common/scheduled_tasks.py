@@ -42,6 +42,12 @@ def offload_chromadb_embeddings(session_factory: Session):
 
     # note: manually getting a session as we can't use `Depends` in background tasks
     with session_factory() as db_session:
+        if not os.path.exists(BASE_DIR):
+            log.warning(
+                f"Cannot check chromadb folder, folder does not exist: {BASE_DIR}"
+            )
+            return
+
         file_ids = os.listdir(BASE_DIR)
 
         conversations = get_conversations_by_file_ids(
