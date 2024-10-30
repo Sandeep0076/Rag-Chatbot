@@ -123,7 +123,7 @@ class VectorDbWrapper:
     def create_and_store_index(
         self,
         storage_folder: str = "./chroma_db",
-        collection_name: str = "RAG_CHATBOT",
+        collection_name: str = None,
         chunk_size: int = 400,
         chunk_overlap: int = 40,
     ) -> None:

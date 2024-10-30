@@ -38,12 +38,18 @@ class Chatbot:
     """
 
     def __init__(
-        self, configs, file_id, model_choice="gpt-3.5-turbo", embedding_type="azure"
+        self,
+        configs,
+        file_id,
+        model_choice="gpt-3.5-turbo",
+        embedding_type="azure",
+        collection_name=None,
     ):
         self.configs = configs
         self.file_id = file_id
         self.model_choice = model_choice
         self.embedding_type = embedding_type
+        self.collection_name = collection_name or f"rag_collection_{file_id}"
         self.model_config = self._get_model_config()
         self._vanilla_llm = self._create_llm_instance_only()
         self.chat_engine = self._create_chat_gpt_instance()
@@ -106,15 +112,10 @@ class Chatbot:
                 api_version=self.configs.azure_embedding.azure_embedding_api_version,
             )
             # Check if the collection already exists
-            try:
-                chroma_collection = db.get_collection(
-                    self.configs.chatbot.vector_db_collection_name
-                )
-            except ValueError:
-                # Collection doesn't exist, create a new one
-                chroma_collection = db.create_collection(
-                    self.configs.chatbot.vector_db_collection_name
-                )
+            # Get or create collection with unique name
+            chroma_collection = db.get_or_create_collection(
+                name=self.collection_name, metadata={"file_id": self.file_id}
+            )
 
             vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
             storage_context = StorageContext.from_defaults(vector_store=vector_store)
@@ -130,7 +131,7 @@ class Chatbot:
                 service_context=service_context,
                 storage_context=storage_context,
             )
-
+            logging.info(f"{chroma_collection} collection is being used")
             return index
         except (ChromaError, ValueError, sqlite3.OperationalError) as e:
             logging.error(f"Failed to initialize Chroma DB. Error: {str(e)}")

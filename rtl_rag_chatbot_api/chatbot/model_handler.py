@@ -36,7 +36,11 @@ class ModelHandler:
         chroma_db_path = f"./chroma_db/{file_id}/{embedding_type}"
 
         if not os.path.exists(chroma_db_path):
-            raise ValueError(f"Chroma DB not found for file_id: {file_id}")
+            os.makedirs(chroma_db_path)
+            self.gcs_handler.download_files_from_folder_by_id(file_id)
+
+        # Create unique collection name for this file
+        collection_name = f"rag_collection_{file_id}"
 
         if model_choice.lower() in ["gemini-flash", "gemini-pro"]:
             gemini_model = (
@@ -46,7 +50,10 @@ class ModelHandler:
             )
             model = GeminiHandler(self.configs, self.gcs_handler)
             model.initialize(
-                model=gemini_model, file_id=file_id, embedding_type=embedding_type
+                model=gemini_model,
+                file_id=file_id,
+                embedding_type=embedding_type,
+                collection_name=collection_name,
             )
         else:
             model = Chatbot(
@@ -54,6 +61,7 @@ class ModelHandler:
                 file_id=file_id,
                 model_choice=model_choice,
                 embedding_type=embedding_type,
+                collection_name=collection_name,
             )
 
         return model

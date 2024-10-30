@@ -2,7 +2,6 @@
 import json
 import logging
 import os
-import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -50,30 +49,15 @@ class EmbeddingHandler:
 
     async def ensure_embeddings_exist(self, file_id: str, temp_file_path: str = None):
         """
-        Ensures embeddings exist and are valid, recreating them if necessary.
+        Ensures embeddings exist and are valid by:
+        1. Checking in chroma_db/{file_id}/ first
+        2. If not found but hash matches, download from GCP
+        3. If not in GCP, create and upload new embeddings
         """
         try:
             file_info = self.gcs_handler.get_file_info(file_id)
             if not file_info:
                 raise ValueError(f"No file info found for file_id: {file_id}")
-
-            original_filename = file_info.get("original_filename")
-            if not temp_file_path:
-                temp_file_path = f"local_data/{file_id}_{original_filename}"
-
-            if not os.path.exists(temp_file_path):
-                # Try to download the file from GCS if it exists
-                try:
-                    source_blob_name = f"file-embeddings/{file_id}/{original_filename}"
-                    self.gcs_handler.download_files_from_gcs(
-                        self.configs.gcp_resource.bucket_name,
-                        source_blob_name,
-                        temp_file_path,
-                    )
-                except Exception as e:
-                    raise FileNotFoundError(
-                        f"Source file not found at {temp_file_path} and could not download from GCS: {str(e)}"
-                    )
 
             # Check embeddings status
             gcs_status, local_status, all_valid = self.embeddings_exist(file_id)
@@ -84,20 +68,13 @@ class EmbeddingHandler:
                     "status": "existing",
                 }
 
-            # If there's an inconsistency between GCS and local, clean up
-            if gcs_status != local_status:
-                logging.info("Inconsistent embedding state detected. Cleaning up...")
-                azure_path = f"./chroma_db/{file_id}/azure"
-                gemini_path = f"./chroma_db/{file_id}/google"
-
-                # Clean up GCS embeddings
-                self.gcs_handler.delete_embeddings(file_id)
-
-                # Clean up local embeddings
-                if os.path.exists(azure_path):
-                    shutil.rmtree(azure_path)
-                if os.path.exists(gemini_path):
-                    shutil.rmtree(gemini_path)
+            # If embeddings don't exist locally but exist in GCS, download them
+            if gcs_status and not local_status:
+                self.gcs_handler.download_files_from_folder_by_id(file_id)
+                return {
+                    "message": "Embeddings downloaded successfully",
+                    "status": "downloaded",
+                }
 
             # Create new embeddings
             result = await self.create_and_upload_embeddings(
@@ -171,6 +148,10 @@ class EmbeddingHandler:
                 path=chroma_db_path,
                 settings=Settings(allow_reset=True, is_persistent=True),
             )
+            collection_name = f"rag_collection_{file_id}"
+            if collection_name in [col.name for col in chroma_db.list_collections()]:
+                chroma_db.delete_collection(collection_name)
+
             run_preprocessor(
                 configs=self.configs,
                 text_data_folder_path=os.path.dirname(file_path),
@@ -179,9 +160,11 @@ class EmbeddingHandler:
                 chroma_db=chroma_db,
                 is_image=False,
                 gcs_handler=self.gcs_handler,
-                username=username,  # Pass username to run_preprocessor
+                username=username,
+                collection_name=collection_name,
             )
             logging.info("Azure embeddings generated successfully")
+            logging.info(f"{collection_name} collection is being used")
             return "completed"
         except Exception as e:
             logging.error(f"Error creating Azure embeddings: {str(e)}", exc_info=True)
@@ -192,10 +175,13 @@ class EmbeddingHandler:
         try:
             chroma_db_path = f"./chroma_db/{file_id}/google"
             os.makedirs(chroma_db_path, exist_ok=True)
-
+            collection_name = f"rag_collection_{file_id}"
             gemini_handler = GeminiHandler(self.configs, self.gcs_handler)
-            gemini_handler.process_file(file_id, file_path, subfolder="google")
+            gemini_handler.process_file(
+                file_id, file_path, subfolder="google", collection_name=collection_name
+            )
             logging.info("Gemini embeddings generated successfully")
+            logging.info(f"{collection_name} collection is being used")
             return "completed"
         except Exception as e:
             logging.error(f"Error creating Gemini embeddings: {str(e)}", exc_info=True)

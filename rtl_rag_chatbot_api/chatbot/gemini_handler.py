@@ -61,8 +61,15 @@ class GeminiHandler:
         self.max_tokens = 2000
         self.file_id = None
         self.embedding_type = None
+        self.collection_name = None
 
-    def initialize(self, model: str, file_id: str = None, embedding_type: str = None):
+    def initialize(
+        self,
+        model: str,
+        file_id: str = None,
+        embedding_type: str = None,
+        collection_name: str = None,
+    ):
         # Initializes the Gemini model with specific configurations.
         generation_config = GenerationConfig(
             temperature=0.9,
@@ -84,6 +91,7 @@ class GeminiHandler:
         )
         self.file_id = file_id
         self.embedding_type = embedding_type
+        self.collection_name = collection_name or f"rag_collection_{file_id}"
 
     def get_answer(self, query: str) -> str:
         # Generates an answer to a given query using relevant context.
@@ -111,7 +119,11 @@ class GeminiHandler:
             return "I'm sorry, but I encountered an error while trying to answer your question. Please try again."
 
     def process_file(
-        self, file_id: str, decrypted_file_path: str, subfolder: str = "google"
+        self,
+        file_id: str,
+        decrypted_file_path: str,
+        subfolder: str = "google",
+        collection_name: str = None,
     ):
         """
         Processes a file by extracting text, splitting it into chunks, and creating/storing embeddings.
@@ -122,8 +134,10 @@ class GeminiHandler:
             subfolder (str, optional): Subfolder for storing embeddings. Defaults to "google".
         """
         text = self.extract_text_from_file(decrypted_file_path)
+        self.collection_name = collection_name or f"rag_collection_{file_id}"
         chunks = self.split_text(text)
         self.create_and_store_embeddings(chunks, file_id, subfolder)
+        logging.info(f"{self.collection_name} collection is being used")
 
     def extract_text_from_file(self, file_path: str) -> str:
         #  Extracts text content from various file types.
@@ -292,14 +306,6 @@ class GeminiHandler:
     ) -> List[str]:
         return self.query_chroma(query, file_id, n_results=n_neighbors)
 
-    # Generates a response using the Google model.
-    # Deprecated
-    # def get_gemini_response(self, prompt: str) -> str:
-    #     model = GenerativeModel(self.configs.gemini.model_pro)
-    #     response = model.generate_content(prompt)
-    #     return response.text
-
-    #  Generates embeddings for given texts.
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         try:
             embeddings = self.embedding_model.get_embeddings(texts)
@@ -339,9 +345,9 @@ class GeminiHandler:
             path=chroma_db_path, settings=Settings(allow_reset=True, is_persistent=True)
         )
         collection = client.get_or_create_collection(
-            name=self.configs.chatbot.vector_db_collection_name
+            name=self.collection_name, metadata={"file_id": file_id}
         )
-
+        logging.info(f"{self.collection_name} collection is being used")
         max_tokens_per_request = (
             15000  # Set a safe limit below the 20,000 token maximum
         )
