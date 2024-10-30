@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 BASE_DIR = "./chroma_db"
 DELETE_ENDPOINT = "http://localhost:8080/chroma/delete"
 TIME_THRESHOLD = timedelta(hours=4)
+DEV = os.getenv("DEV")
 
 
 def is_stale_conversation(conversation: Conversation) -> bool:
@@ -32,6 +33,13 @@ def is_stale_conversation(conversation: Conversation) -> bool:
 def offload_chromadb_embeddings(session_factory: Session):
     """"""
     log.info("Running scheduled job `offload_chromadb_embeddings`")
+
+    if not session_factory:
+        log.info(
+            "No db connection, session_factory is None. Could not offload embeddings. Are you running in DEV?"
+        )
+        return
+
     # note: manually getting a session as we can't use `Depends` in background tasks
     with session_factory() as db_session:
         file_ids = os.listdir(BASE_DIR)
