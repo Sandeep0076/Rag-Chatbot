@@ -68,10 +68,15 @@ model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
 # database connection
-if os.getenv("DATABASE_URL"):
-    engine = create_engine(os.getenv("DATABASE_URL", ""))
+if os.getenv("DB_INSTANCE"):
+    logging.info("Using DB_INSTANCE env variable to connect to database")
+    DATABASE_URL = f"postgresql://{os.getenv('DB_USERNAME')}:{os.getenv('DB_PASSWORD')}@127.0.0.1:5432/chatbot_ui"
+    engine = create_engine(DATABASE_URL)
     SessionLocal = sessionmaker(bind=engine)
 else:
+    logging.warning(
+        "No DB_INSTANCE env variable present. Not able to connect to database."
+    )
     SessionLocal = None
 
 title = "RAG PDF API"
