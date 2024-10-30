@@ -68,8 +68,11 @@ model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
 # database connection
-engine = create_engine(os.getenv("DATABASE_URL", ""))
-SessionLocal = sessionmaker(bind=engine)
+if os.getenv("DATABASE_URL"):
+    engine = create_engine(os.getenv("DATABASE_URL", ""))
+    SessionLocal = sessionmaker(bind=engine)
+else:
+    SessionLocal = None
 
 title = "RAG PDF API"
 description = """
