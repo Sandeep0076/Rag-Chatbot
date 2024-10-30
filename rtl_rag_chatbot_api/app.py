@@ -1,17 +1,23 @@
 """
 Main FastAPI application for the RAG PDF API.
 """
+
+import gc
 import json
 import logging
 import os
 import shutil
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
@@ -36,6 +42,7 @@ from rtl_rag_chatbot_api.common.models import (
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
+from rtl_rag_chatbot_api.common.scheduled_tasks import offload_chromadb_embeddings
 from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
 
 # from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
@@ -46,7 +53,13 @@ os.environ["GLOG_minloglevel"] = "2"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+# disable logger for apscheduler because they are not nice. use own.
+apscheduler_log = logging.getLogger("apscheduler")
+apscheduler_log.setLevel(logging.ERROR)
 
 configs = Config()
 gcs_handler = GCSHandler(configs)
@@ -54,6 +67,9 @@ file_handler = FileHandler(configs, gcs_handler)
 model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
+# database connection
+engine = create_engine(os.getenv("DATABASE_URL", ""))
+SessionLocal = sessionmaker(bind=engine)
 
 title = "RAG PDF API"
 description = """
@@ -81,10 +97,24 @@ Additional features:
 Note: File storage in GCP has been removed from this version.
 """
 
+
+@asynccontextmanager
+async def start_scheduler(app: FastAPI):
+    scheduler = BackgroundScheduler()
+    scheduler.configure(logger=logging.getLogger("apscheduler"))
+    scheduler.add_job(
+        id="job1",
+        func=offload_chromadb_embeddings,
+        args=[SessionLocal],
+        trigger="interval",
+        minutes=15,
+    )
+    scheduler.start()
+    yield
+
+
 app = FastAPI(
-    title=title,
-    description=description,
-    version="3.1.0",
+    title=title, description=description, version="3.1.0", lifespan=start_scheduler
 )
 
 global gemini_handler
@@ -589,6 +619,29 @@ async def delete_files(
         }
 
 
+# Function to offload the ChromaDB instance for a given file_id
+def offload_chromadb_instance(file_id: str) -> None:
+    """
+    Dereferences the Chroma DB instance associated with the given `file_id`
+    from the dictionary of Chroma DB instances, `initialized_models`. Invokes
+    garbage collection manually after dereferencing.
+    """
+    if file_id in initialized_models:
+        # dereference the ChromaDB instance
+        initialized_models[file_id] = None
+        logging.info(f"ChromaDB instance for {file_id} offloaded.")
+
+        # force garbage collection
+        gc.collect()
+        logging.info(f"Memory cleanup attempted for {file_id}.")
+    else:
+        logging.warning(
+            f"Offloading ChromaDB instance for {file_id} requested, but model is not initialized. "
+            "This method might have been called from the scheduler and the model is not initialized "
+            "due to a re-deployment, e.g."
+        )
+
+
 @app.delete("/chroma/delete")
 async def delete_chroma_embeddings(
     request: ChromaDeleteRequest, current_user=Depends(get_current_user)
@@ -608,8 +661,7 @@ async def delete_chroma_embeddings(
             shutil.rmtree(chroma_db_path)
 
             # Remove the file from initialized_models if it exists
-            if file_id in initialized_models:
-                del initialized_models[file_id]
+            offload_chromadb_instance(file_id=file_id)
 
             return {
                 "message": f"Chroma DB embeddings for file_id {file_id} have been deleted successfully",
@@ -670,4 +722,9 @@ def start():
     Launched with `poetry run start` at root level
     Streamlit : streamlit run streamlit_app.py
     """
-    uvicorn.run("rtl_rag_chatbot_api.app:app", host="0.0.0.0", port=8080, reload=False)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8080,
+        reload=False,
+    )
