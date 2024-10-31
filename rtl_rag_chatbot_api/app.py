@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,6 +20,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from starlette_exporter import PrometheusMiddleware, handle_metrics
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
@@ -324,6 +326,11 @@ async def initialize_model(
         )
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=sqlite3.OperationalError,
+)
 @app.post("/file/chat")
 async def chat(query: Query, current_user=Depends(get_current_user)):
     """
@@ -341,7 +348,20 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             )
 
         model = initialized_models[query.file_id]
-        response = model.get_answer(query.text)
+        try:
+            response = model.get_answer(query.text)
+        except sqlite3.OperationalError as e:
+            logging.error(f"ChromaDB disk I/O error: {str(e)}")
+            # Attempt to recover the connection
+            if hasattr(model, "_index"):
+                model._index = model._create_index()
+            raise HTTPException(
+                status_code=503,
+                detail="Database is temporarily unavailable. Please try again.",
+            )
+        except Exception as e:
+            logging.error(f"Error in chat endpoint: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
 
         # Format response
         if isinstance(response, list) and len(response) > 1:

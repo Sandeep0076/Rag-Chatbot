@@ -64,9 +64,11 @@ class FileHandler:
 
             existing_file_id = self.gcs_handler.find_existing_file_by_hash(file_hash)
 
+            # Create local_data directory if it doesn't exist
+            os.makedirs("local_data", exist_ok=True)
+
             # Always save the uploaded file first
             temp_file_path = f"local_data/{file_id}_{original_filename}"
-            os.makedirs(os.path.dirname(temp_file_path), exist_ok=True)
             with open(temp_file_path, "wb") as buffer:
                 buffer.write(file_content)
             del file_content
@@ -89,6 +91,12 @@ class FileHandler:
                     # Prepare SQLite database
                     data_preparer = PrepareSQLFromTabularData(temp_file_path, data_dir)
                     data_preparer.run_pipeline()
+                    # Update temp_file_path to use existing_file_id
+                    existing_temp_path = (
+                        f"local_data/{existing_file_id}_{original_filename}"
+                    )
+                    shutil.copy2(temp_file_path, existing_temp_path)
+                    temp_file_path = existing_temp_path
                 else:
                     # For non-tabular files, download existing embeddings
                     self.gcs_handler.download_files_from_folder_by_id(existing_file_id)

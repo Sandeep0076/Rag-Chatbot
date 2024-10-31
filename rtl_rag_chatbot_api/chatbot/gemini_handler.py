@@ -284,9 +284,7 @@ class GeminiHandler:
         client = chromadb.PersistentClient(
             path=chroma_db_path, settings=Settings(allow_reset=True, is_persistent=True)
         )
-        collection = client.get_collection(
-            name=self.configs.chatbot.vector_db_collection_name
-        )
+        collection = client.get_collection(name=self.collection_name)
 
         # Get the embedding for the query
         query_embedding = self.embedding_model.get_embeddings([query])[0].values
