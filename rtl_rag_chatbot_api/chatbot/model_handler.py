@@ -1,6 +1,6 @@
 import os
 
-from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
+from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot
 from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 
 
@@ -23,7 +23,7 @@ class ModelHandler:
 
     def initialize_model(self, model_choice: str, file_id: str, embedding_type: str):
         """
-        Initializes and returns a model based on the specified model choice, file ID, and embedding type.
+        Initializes and returns a model based on the specified model choice.
 
         Args:
             model_choice (str): The choice of the model to initialize.
@@ -31,7 +31,7 @@ class ModelHandler:
             embedding_type (str): Type of embedding to use.
 
         Returns:
-            GeminiHandler or Chatbot: An instance of GeminiHandler or Chatbot based on the embedding type.
+            BaseRAGHandler: An instance of either GeminiHandler or AzureChatbot.
         """
         chroma_db_path = f"./chroma_db/{file_id}/{embedding_type}"
 
@@ -56,10 +56,10 @@ class ModelHandler:
                 collection_name=collection_name,
             )
         else:
-            model = Chatbot(
-                self.configs,
-                file_id=file_id,
+            model = AzureChatbot(self.configs, self.gcs_handler)
+            model.initialize(
                 model_choice=model_choice,
+                file_id=file_id,
                 embedding_type=embedding_type,
                 collection_name=collection_name,
             )

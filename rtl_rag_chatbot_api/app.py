@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import shutil
-import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,15 +19,15 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from starlette_exporter import PrometheusMiddleware, handle_metrics
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from configs.app_config import Config
-from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
+from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot as Chatbot
+
+# from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
 from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.file_handler import FileHandler
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
-from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.common.models import (
@@ -307,10 +306,6 @@ async def initialize_model(
         await _embedding_handler.ensure_embeddings_exist(request.file_id)
 
         # Initialize the model
-        chroma_db_path = f"./chroma_db/{request.file_id}/{embedding_type}"
-        if not os.path.exists(chroma_db_path):
-            gcs_handler.download_files_from_folder_by_id(request.file_id)
-
         model = model_handler.initialize_model(
             request.model_choice, request.file_id, embedding_type
         )
@@ -326,44 +321,26 @@ async def initialize_model(
         )
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
-    retry=sqlite3.OperationalError,
-)
 @app.post("/file/chat")
 async def chat(query: Query, current_user=Depends(get_current_user)):
     """
     Endpoint to interact with the chatbot using a specific file.
-    Checks if the model is initialized for the given file, retrieves the model,
-    and calls get_answer on the model with the provided text.
-    Returns the response from the model. Handles exceptions and logs errors appropriately.
+    Includes robust error handling for ChromaDB operations.
     """
     try:
-        # First check if model is already initialized and valid
+        # Check if model is already initialized and valid
         if query.file_id not in initialized_models:
-            # Reuse model initialize endpoint logic
+            # Initialize the model if not already done
             await initialize_model(
                 ModelInitRequest(model_choice=query.model_choice, file_id=query.file_id)
             )
 
         model = initialized_models[query.file_id]
-        try:
-            response = model.get_answer(query.text)
-        except sqlite3.OperationalError as e:
-            logging.error(f"ChromaDB disk I/O error: {str(e)}")
-            # Attempt to recover the connection
-            if hasattr(model, "_index"):
-                model._index = model._create_index()
-            raise HTTPException(
-                status_code=503,
-                detail="Database is temporarily unavailable. Please try again.",
-            )
-        except Exception as e:
-            logging.error(f"Error in chat endpoint: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
 
-        # Format response
+        # Get response from the model
+        response = model.get_answer(query.text)
+
+        # Format response for tabular data
         if isinstance(response, list) and len(response) > 1:
             headers = response[0]
             rows = response[1:]
@@ -377,9 +354,9 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
     except Exception as e:
         logging.error(f"Error in chat endpoint: {str(e)}")
-        if query.file_id in initialized_models:
-            del initialized_models[query.file_id]  # Clear invalid model
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500, detail=f"An error occurred during chat: {str(e)}"
+        )
 
 
 @app.post("/embeddings/create")
@@ -516,18 +493,16 @@ async def get_neighbors(query: NeighborsQuery, current_user=Depends(get_current_
 
     try:
         model = initialized_models[query.file_id]
+        # Simplified call that works for both model types
+        neighbors = model.get_n_nearest_neighbours(
+            query.text, n_neighbours=query.n_neighbors
+        )
 
-        if isinstance(model, GeminiHandler):
-            neighbors = model.get_n_nearest_neighbours(
-                query.text, query.file_id, query.n_neighbors
-            )
-        else:  # Assuming it's a Chatbot instance for Azure models
-            neighbors_with_metadata = model.get_n_nearest_neighbours(
-                query.text, n_neighbours=query.n_neighbors
-            )
+        # Process results if they're from Azure model
+        if isinstance(model, Chatbot):
             neighbors = [
                 neighbor.node.text if hasattr(neighbor, "node") else neighbor
-                for neighbor in neighbors_with_metadata
+                for neighbor in neighbors
             ]
 
         return {"neighbors": neighbors}

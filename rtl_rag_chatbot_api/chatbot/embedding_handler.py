@@ -45,6 +45,23 @@ class EmbeddingHandler:
             and len(os.listdir(gemini_path)) > 0
         )
 
+        # Check GCS folder structure
+        azure_gcs_prefix = f"file-embeddings/{file_id}/azure/"
+        gemini_gcs_prefix = f"file-embeddings/{file_id}/google/"
+
+        azure_blobs = list(self.gcs_handler.bucket.list_blobs(prefix=azure_gcs_prefix))
+        gemini_blobs = list(
+            self.gcs_handler.bucket.list_blobs(prefix=gemini_gcs_prefix)
+        )
+
+        gcs_structure_valid = (
+            len(azure_blobs) > 0
+            and len(gemini_blobs) > 0
+            and any(blob.name.endswith(".bin") for blob in azure_blobs)
+            and any(blob.name.endswith(".sqlite3") for blob in gemini_blobs)
+        )
+        gcs_status = gcs_status and gcs_structure_valid
+
         return gcs_status, local_status, (gcs_status and local_status)
 
     async def ensure_embeddings_exist(self, file_id: str, temp_file_path: str = None):
@@ -74,14 +91,19 @@ class EmbeddingHandler:
                 return {
                     "message": "Embeddings downloaded successfully",
                     "status": "downloaded",
+                    "info": file_info.get("embeddings"),
                 }
 
             # Create new embeddings
-            result = await self.create_and_upload_embeddings(
-                file_id, file_info.get("is_image", False), temp_file_path
-            )
-
-            return result
+            if not gcs_status:
+                result = await self.create_and_upload_embeddings(
+                    file_id, file_info.get("is_image", False), temp_file_path
+                )
+                return result
+            return {
+                "message": "Embeddings already exist and are valid",
+                "status": "existing",
+            }
 
         except Exception as e:
             logging.error(f"Error in ensure_embeddings_exist: {str(e)}", exc_info=True)
