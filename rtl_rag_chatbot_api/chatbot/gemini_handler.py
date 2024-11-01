@@ -40,6 +40,16 @@ class GeminiHandler(BaseRAGHandler):
         collection_name: str = None,
     ):
         """Initialize the Gemini model with specific configurations."""
+        # Map model choice to actual model name
+        model_mapping = {
+            "gemini-flash": self.configs.gemini.model_flash,
+            "gemini-pro": self.configs.gemini.model_pro,
+        }
+
+        actual_model = model_mapping.get(model)
+        if not actual_model:
+            raise ValueError(f"Invalid model choice: {model}")
+
         generation_config = GenerationConfig(
             temperature=0.9,
             top_p=1,
@@ -55,7 +65,7 @@ class GeminiHandler(BaseRAGHandler):
         }
 
         self.generative_model = GenerativeModel(
-            model_name=model,
+            model_name=actual_model,
             generation_config=generation_config,
             safety_settings=safety_settings,
         )

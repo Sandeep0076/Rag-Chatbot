@@ -31,92 +31,118 @@ class EmbeddingHandler:
         Check if embeddings exist and are valid both in GCS and locally.
         Returns tuple of (gcs_status, local_status, all_valid)
         """
-        # Check GCS embeddings status
-        file_info = self.gcs_handler.get_file_info(file_id)
-        gcs_status = file_info.get("embeddings_status") == "completed"
+        try:
+            # Check GCS embeddings status from metadata
+            file_info = self.gcs_handler.get_file_info(file_id)
+            gcs_metadata_status = file_info.get("embeddings_status") == "completed"
 
-        # Check local embeddings
-        azure_path = f"./chroma_db/{file_id}/azure"
-        gemini_path = f"./chroma_db/{file_id}/google"
+            # Check local embeddings directories and collection existence
+            azure_path = f"./chroma_db/{file_id}/azure"
+            gemini_path = f"./chroma_db/{file_id}/google"
 
-        local_status = (
-            os.path.exists(azure_path)
-            and len(os.listdir(azure_path)) > 0
-            and os.path.exists(gemini_path)
-            and len(os.listdir(gemini_path)) > 0
-        )
+            local_files_exist = (
+                os.path.exists(azure_path)
+                and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
+                and os.path.exists(gemini_path)
+                and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
+            )
 
-        # Check GCS folder structure
-        azure_gcs_prefix = f"file-embeddings/{file_id}/azure/"
-        gemini_gcs_prefix = f"file-embeddings/{file_id}/google/"
+            # Check ChromaDB collections
+            azure_collection_name = f"rag_collection_{file_id}"
+            gemini_collection_name = f"rag_collection_{file_id}"
 
-        azure_blobs = list(self.gcs_handler.bucket.list_blobs(prefix=azure_gcs_prefix))
-        gemini_blobs = list(
-            self.gcs_handler.bucket.list_blobs(prefix=gemini_gcs_prefix)
-        )
+            try:
+                azure_collection = self.chroma_manager.get_collection(
+                    file_id, "azure", azure_collection_name
+                )
+                gemini_collection = self.chroma_manager.get_collection(
+                    file_id, "google", gemini_collection_name
+                )
+                collections_valid = (
+                    azure_collection.count() > 0 and gemini_collection.count() > 0
+                )
+            except Exception:
+                collections_valid = False
 
-        gcs_structure_valid = (
-            len(azure_blobs) > 0
-            and len(gemini_blobs) > 0
-            and any(blob.name.endswith(".bin") for blob in azure_blobs)
-            and any(blob.name.endswith(".sqlite3") for blob in gemini_blobs)
-        )
-        gcs_status = gcs_status and gcs_structure_valid
+            # Check GCS folder structure
+            azure_gcs_prefix = f"file-embeddings/{file_id}/azure/"
+            gemini_gcs_prefix = f"file-embeddings/{file_id}/google/"
 
-        return gcs_status, local_status, (gcs_status and local_status)
+            azure_blobs = list(
+                self.gcs_handler.bucket.list_blobs(prefix=azure_gcs_prefix)
+            )
+            gemini_blobs = list(
+                self.gcs_handler.bucket.list_blobs(prefix=gemini_gcs_prefix)
+            )
+
+            gcs_files_exist = (
+                len(azure_blobs) > 0
+                and len(gemini_blobs) > 0
+                and any(blob.name.endswith("chroma.sqlite3") for blob in azure_blobs)
+                and any(blob.name.endswith("chroma.sqlite3") for blob in gemini_blobs)
+            )
+
+            gcs_status = gcs_metadata_status and gcs_files_exist
+            local_status = local_files_exist and collections_valid
+
+            return gcs_status, local_status, (gcs_status and local_status)
+
+        except Exception as e:
+            logging.error(f"Error checking embeddings existence: {str(e)}")
+            return False, False, False
 
     async def ensure_embeddings_exist(self, file_id: str, temp_file_path: str = None):
         """
-        Ensures embeddings exist and are valid by:
-        1. Checking in chroma_db/{file_id}/ first
-        2. If not found but hash matches, download from GCP
-        3. If not in GCP, create and upload new embeddings
+        Ensures embeddings exist and are valid, creates only if necessary.
         """
         try:
             file_info = self.gcs_handler.get_file_info(file_id)
             if not file_info:
                 raise ValueError(f"No file info found for file_id: {file_id}")
 
-            # Check embeddings status
+            # Check embeddings status using the existing embeddings_exist function
             gcs_status, local_status, all_valid = self.embeddings_exist(file_id)
 
+            # If everything is valid, return immediately
             if all_valid:
+                logging.info(f"Valid embeddings exist for file_id: {file_id}")
                 return {
                     "message": "Embeddings already exist and are valid",
                     "status": "existing",
                 }
 
-            # If embeddings don't exist locally but exist in GCS, download them
+            # If embeddings exist in GCS but not locally, just download
             if gcs_status and not local_status:
+                logging.info(f"Downloading existing embeddings for file_id: {file_id}")
                 self.gcs_handler.download_files_from_folder_by_id(file_id)
                 return {
                     "message": "Embeddings downloaded successfully",
                     "status": "downloaded",
-                    "info": file_info.get("embeddings"),
                 }
-            # If no temp_file_path provided, construct it from file info
-            if not temp_file_path:
-                original_filename = file_info.get("original_filename")
-                if not original_filename:
-                    raise ValueError("Original filename not found in file info")
-                temp_file_path = f"local_data/{file_id}_{original_filename}"
 
-            if not os.path.exists(temp_file_path):
-                raise FileNotFoundError(f"Temporary file not found at {temp_file_path}")
-
-            # Create new embeddings
+            # Only create new embeddings if they don't exist anywhere
             if not gcs_status:
-                result = await self.create_and_upload_embeddings(
+                if not temp_file_path:
+                    original_filename = file_info.get("original_filename")
+                    temp_file_path = f"local_data/{file_id}_{original_filename}"
+
+                if not os.path.exists(temp_file_path):
+                    raise FileNotFoundError(
+                        f"Source file not found at {temp_file_path}"
+                    )
+
+                logging.info(f"Creating new embeddings for file_id: {file_id}")
+                return await self.create_and_upload_embeddings(
                     file_id, file_info.get("is_image", False), temp_file_path
                 )
-                return result
+
             return {
-                "message": "Embeddings already exist and are valid",
-                "status": "existing",
+                "message": "Embeddings exist but may be invalid",
+                "status": "warning",
             }
 
         except Exception as e:
-            logging.error(f"Error in ensure_embeddings_exist: {str(e)}", exc_info=True)
+            logging.error(f"Error in ensure_embeddings_exist: {str(e)}")
             raise
 
     async def create_and_upload_embeddings(
