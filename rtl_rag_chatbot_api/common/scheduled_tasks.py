@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import httpx
 from sqlalchemy.orm import Session
 
+from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.db import Conversation, get_conversations_by_file_ids
 
 # TODO centralize logging instance, e.g. in __init__
@@ -30,8 +31,19 @@ def is_stale_conversation(conversation: Conversation) -> bool:
         return True
 
 
+def cleanup_chromadb_instances():
+    """Cleanup old ChromaDB instances."""
+    try:
+        chroma_manager = ChromaDBManager()
+        chroma_manager.cleanup_old_instances()
+        logging.info("ChromaDB instance cleanup completed successfully")
+    except Exception as e:
+        logging.error(f"Error during ChromaDB instance cleanup: {str(e)}")
+
+
 def offload_chromadb_embeddings(session_factory: Session):
-    """"""
+    """Combined function for cleaning up conversations and ChromaDB instances."""
+
     log.info("Running scheduled job `offload_chromadb_embeddings`")
 
     if not session_factory:
@@ -86,5 +98,6 @@ def offload_chromadb_embeddings(session_factory: Session):
                     log.error(
                         f"Failed to delete {conversation}: {response.status_code}, {response.text}"
                     )
+                cleanup_chromadb_instances()
         except Exception as e:
             log.error(f"Error while calling delete endpoint for {conversation}: {e}")

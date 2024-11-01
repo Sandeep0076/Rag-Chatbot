@@ -5,9 +5,11 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot
 from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
-from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
+
+logging.basicConfig(level=logging.INFO)
 
 
 class EmbeddingHandler:
@@ -92,6 +94,15 @@ class EmbeddingHandler:
                     "status": "downloaded",
                     "info": file_info.get("embeddings"),
                 }
+            # If no temp_file_path provided, construct it from file info
+            if not temp_file_path:
+                original_filename = file_info.get("original_filename")
+                if not original_filename:
+                    raise ValueError("Original filename not found in file info")
+                temp_file_path = f"local_data/{file_id}_{original_filename}"
+
+            if not os.path.exists(temp_file_path):
+                raise FileNotFoundError(f"Temporary file not found at {temp_file_path}")
 
             # Create new embeddings
             if not gcs_status:
@@ -160,26 +171,28 @@ class EmbeddingHandler:
     def _create_azure_embeddings(
         self, file_id: str, file_path: str, api_key: str, username: str
     ):
+        """Creates embeddings using Azure OpenAI."""
         logging.info("Generating Azure embeddings...")
         try:
             collection_name = f"rag_collection_{file_id}"
 
-            # Get collection through manager instead of direct creation
-            collection = self.chroma_manager.get_collection(
-                file_id=file_id, embedding_type="azure", collection_name=collection_name
-            )
-
-            run_preprocessor(
-                configs=self.configs,
-                text_data_folder_path=os.path.dirname(file_path),
+            # Initialize Azure handler
+            azure_handler = AzureChatbot(self.configs, self.gcs_handler)
+            azure_handler.initialize(
+                model_choice="gpt_4o_mini",  # Default model for embeddings
                 file_id=file_id,
-                chroma_db_path=f"./chroma_db/{file_id}/azure",
-                chroma_collection=collection,  # Pass collection instead of db
-                is_image=False,
-                gcs_handler=self.gcs_handler,
-                username=username,
+                embedding_type="azure",
                 collection_name=collection_name,
             )
+
+            # Use BaseRAGHandler's methods for processing
+            azure_handler.process_file(
+                file_id=file_id,
+                decrypted_file_path=file_path,
+                subfolder="azure",
+                collection_name=collection_name,
+            )
+
             logging.info("Azure embeddings generated successfully")
             return "completed"
         except Exception as e:
@@ -187,13 +200,28 @@ class EmbeddingHandler:
             raise
 
     def _create_gemini_embeddings(self, file_id: str, file_path: str, username: str):
+        """Creates embeddings using Gemini model."""
         logging.info("Generating Gemini embeddings...")
         try:
             collection_name = f"rag_collection_{file_id}"
+
+            # Initialize Gemini handler
             gemini_handler = GeminiHandler(self.configs, self.gcs_handler)
-            gemini_handler.process_file(
-                file_id, file_path, subfolder="google", collection_name=collection_name
+            gemini_handler.initialize(
+                model="gemini-pro",
+                file_id=file_id,
+                embedding_type="google",
+                collection_name=collection_name,
             )
+
+            # Use BaseRAGHandler's methods for processing
+            gemini_handler.process_file(
+                file_id=file_id,
+                decrypted_file_path=file_path,
+                subfolder="google",
+                collection_name=collection_name,
+            )
+
             logging.info("Gemini embeddings generated successfully")
             return "completed"
         except Exception as e:
