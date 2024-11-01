@@ -1,6 +1,5 @@
 import logging
-
-import chromadb
+from typing import Any
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.common.vector_db_creator import VectorDbWrapper
@@ -11,7 +10,7 @@ def run_preprocessor(
     text_data_folder_path: str,
     file_id: str,
     chroma_db_path: str,
-    chroma_db: chromadb.PersistentClient,
+    chroma_collection: Any,
     is_image: bool,
     gcs_handler,
     username: str,
@@ -43,7 +42,7 @@ def run_preprocessor(
         bucket_name=configs.gcp_resource.bucket_name,
         gcs_subfolder="file-embeddings",
         file_id=file_id,
-        chroma_db=chroma_db,  # Pass the initialized Chroma DB
+        chroma_collection=chroma_collection,
         is_image=is_image,
         gcs_handler=gcs_handler,
         username=username,

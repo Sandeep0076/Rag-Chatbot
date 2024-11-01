@@ -5,10 +5,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import chromadb
-from chromadb.config import Settings
-
 from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
+from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.embeddings import run_preprocessor
 
 
@@ -24,6 +22,7 @@ class EmbeddingHandler:
     def __init__(self, configs, gcs_handler):
         self.configs = configs
         self.gcs_handler = gcs_handler
+        self.chroma_manager = ChromaDBManager()
 
     def embeddings_exist(self, file_id: str) -> tuple[bool, bool, bool]:
         """
@@ -163,30 +162,25 @@ class EmbeddingHandler:
     ):
         logging.info("Generating Azure embeddings...")
         try:
-            chroma_db_path = f"./chroma_db/{file_id}/azure"
-            os.makedirs(chroma_db_path, exist_ok=True)
-
-            chroma_db = chromadb.PersistentClient(
-                path=chroma_db_path,
-                settings=Settings(allow_reset=True, is_persistent=True),
-            )
             collection_name = f"rag_collection_{file_id}"
-            if collection_name in [col.name for col in chroma_db.list_collections()]:
-                chroma_db.delete_collection(collection_name)
+
+            # Get collection through manager instead of direct creation
+            collection = self.chroma_manager.get_collection(
+                file_id=file_id, embedding_type="azure", collection_name=collection_name
+            )
 
             run_preprocessor(
                 configs=self.configs,
                 text_data_folder_path=os.path.dirname(file_path),
                 file_id=file_id,
-                chroma_db_path=chroma_db_path,
-                chroma_db=chroma_db,
+                chroma_db_path=f"./chroma_db/{file_id}/azure",
+                chroma_collection=collection,  # Pass collection instead of db
                 is_image=False,
                 gcs_handler=self.gcs_handler,
                 username=username,
                 collection_name=collection_name,
             )
             logging.info("Azure embeddings generated successfully")
-            logging.info(f"{collection_name} collection is being used")
             return "completed"
         except Exception as e:
             logging.error(f"Error creating Azure embeddings: {str(e)}", exc_info=True)
@@ -195,15 +189,12 @@ class EmbeddingHandler:
     def _create_gemini_embeddings(self, file_id: str, file_path: str, username: str):
         logging.info("Generating Gemini embeddings...")
         try:
-            chroma_db_path = f"./chroma_db/{file_id}/google"
-            os.makedirs(chroma_db_path, exist_ok=True)
             collection_name = f"rag_collection_{file_id}"
             gemini_handler = GeminiHandler(self.configs, self.gcs_handler)
             gemini_handler.process_file(
                 file_id, file_path, subfolder="google", collection_name=collection_name
             )
             logging.info("Gemini embeddings generated successfully")
-            logging.info(f"{collection_name} collection is being used")
             return "completed"
         except Exception as e:
             logging.error(f"Error creating Gemini embeddings: {str(e)}", exc_info=True)

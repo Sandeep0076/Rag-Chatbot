@@ -6,11 +6,11 @@ import re
 from pathlib import Path
 from typing import List
 
-import chromadb
 import pytesseract
-from chromadb.config import Settings
 from pdf2image import convert_from_path
 from pdfminer.high_level import extract_text
+
+from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 
 logging.basicConfig(level=logging.INFO)
 
@@ -26,6 +26,7 @@ class BaseRAGHandler:
         self.embedding_type = None
         self.collection_name = None
         self.embedding_model = None
+        self.chroma_manager = ChromaDBManager()
 
     def query_chroma(self, query: str, file_id: str, n_results: int = 3) -> List[str]:
         """Query the Chroma vector database for similar documents."""
@@ -41,15 +42,13 @@ class BaseRAGHandler:
             raise
 
     def _get_chroma_collection(self):
-        """Helper method to get or create ChromaDB collection."""
-        chroma_db_path = f"./chroma_db/{self.file_id}/{self.embedding_type}"
-        client = chromadb.PersistentClient(
-            path=chroma_db_path,
-            settings=Settings(
-                allow_reset=True, is_persistent=True, anonymized_telemetry=False
-            ),
+        """Helper method to get or create ChromaDB collection using the manager."""
+        if not all([self.file_id, self.embedding_type, self.collection_name]):
+            raise ValueError("file_id, embedding_type, and collection_name must be set")
+
+        return self.chroma_manager.get_collection(
+            self.file_id, self.embedding_type, self.collection_name
         )
-        return client.get_collection(name=self.collection_name)
 
     def get_n_nearest_neighbours(self, query: str, n_neighbours: int = 3) -> List[str]:
         """Get nearest neighbors for a query."""
@@ -66,38 +65,27 @@ class BaseRAGHandler:
     def create_and_store_embeddings(
         self, chunks: List[str], file_id: str, subfolder: str
     ):
-        """Create embeddings and store them in Chroma DB with token limit handling."""
+        """Create embeddings and store them in Chroma DB."""
         try:
-            chroma_db_path = f"./chroma_db/{file_id}/{subfolder}"
-            os.makedirs(chroma_db_path, exist_ok=True)
-
-            client = chromadb.PersistentClient(
-                path=chroma_db_path,
-                settings=Settings(allow_reset=True, is_persistent=True),
+            collection = self.chroma_manager.get_collection(
+                file_id, subfolder, self.collection_name
             )
 
-            collection = client.get_or_create_collection(
-                name=self.collection_name, metadata={"file_id": file_id}
-            )
-
-            # Constants for token management
-            MAX_TOKENS_PER_REQUEST = 15000  # Safe limit below Gemini's 20k limit
-            BATCH_SIZE = 5  # Process chunks in small batches
+            # Process chunks in batches
+            MAX_TOKENS_PER_REQUEST = 15000
+            BATCH_SIZE = 5
             processed_count = 0
             total_chunks = len(chunks)
 
-            # Process chunks in batches
             for i in range(0, total_chunks, BATCH_SIZE):
                 batch_chunks = chunks[i : i + BATCH_SIZE]
                 batch_to_process = []
                 batch_ids = []
 
-                # Prepare batch with token checking
                 for chunk_idx, chunk in enumerate(batch_chunks):
                     chunk_tokens = len(self.simple_tokenize(chunk))
 
                     if chunk_tokens > MAX_TOKENS_PER_REQUEST:
-                        # Split large chunks and process individually
                         sub_chunks = self.split_large_chunk(
                             chunk, MAX_TOKENS_PER_REQUEST
                         )
@@ -110,32 +98,24 @@ class BaseRAGHandler:
 
                 if batch_to_process:
                     try:
-                        # Get embeddings for the batch
                         embeddings = self.get_embeddings(batch_to_process)
-
-                        # Add to collection
                         collection.add(
                             documents=batch_to_process,
                             embeddings=embeddings,
                             metadatas=[{"source": file_id} for _ in batch_to_process],
                             ids=batch_ids,
                         )
-
                         processed_count += len(batch_to_process)
                         logging.info(
                             f"Processed {processed_count}/{total_chunks} chunks"
                         )
-
                     except Exception as e:
                         logging.error(
                             f"Error processing batch starting at chunk {i}: {str(e)}"
                         )
-                        # Continue with next batch instead of failing completely
                         continue
 
-            logging.info(f"Successfully created and stored embeddings for {file_id}")
             return "completed"
-
         except Exception as e:
             logging.error(f"Error in create_and_store_embeddings: {str(e)}")
             raise

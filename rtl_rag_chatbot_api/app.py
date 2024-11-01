@@ -30,6 +30,7 @@ from rtl_rag_chatbot_api.chatbot.file_handler import FileHandler
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
+from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.models import (
     ChatRequest,
     ChromaDeleteRequest,
@@ -124,10 +125,12 @@ app = FastAPI(
 global gemini_handler
 gemini_handler = None
 # Global dictionary to store initialized chatbots
-# depreacted
-initialized_chatbots = {}
+
+# Initialize ChromaDBManager at app level
+chroma_manager = ChromaDBManager()
 
 initialized_models = {}
+initialized_chatbots = {}
 # Global dictionary to store initialized handlers
 initialized_handlers = {}
 
@@ -265,115 +268,13 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
         raise
 
 
-@app.post("/model/initialize")
-async def initialize_model(
-    request: ModelInitRequest, current_user=Depends(get_current_user)
-):
-    """
-    Endpoint to initialize a model based on the specified model choice, file ID, and embedding type.
-
-    Args:
-        request (ModelInitRequest): Request object containing model choice and file ID.
-
-    Returns:
-        dict: A message indicating the successful initialization of the specified model.
-    Raises:
-        HTTPException: If embeddings are not found for the specified file or if an error occurs during initialization.
-    """
-    try:
-        file_info = gcs_handler.get_file_info(request.file_id)
-        if not file_info:
-            raise HTTPException(status_code=404, detail="File not found")
-
-        # Check if the file is a tabular data file
-        db_path = f"./chroma_db/{request.file_id}/tabular_data.db"
-        if os.path.exists(db_path):
-            model = TabularDataHandler(configs, request.file_id, request.model_choice)
-            initialized_models[request.file_id] = model
-            return {
-                "message": f"Model {request.model_choice} initialized successfully for tabular data"
-            }
-
-        # Handle non-tabular files (PDFs/Images)
-        embedding_type = (
-            "google"
-            if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]
-            else "azure"
-        )
-
-        # Ensure embeddings exist and are valid
-        _embedding_handler = EmbeddingHandler(configs, gcs_handler)
-        await _embedding_handler.ensure_embeddings_exist(request.file_id)
-
-        # Initialize the model
-        model = model_handler.initialize_model(
-            request.model_choice, request.file_id, embedding_type
-        )
-
-        initialized_models[request.file_id] = model
-        return {"message": f"Model {request.model_choice} initialized successfully"}
-
-    except Exception as e:
-        logging.error(f"Error in initialize_model: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"An error occurred while initializing the model: {str(e)}",
-        )
-
-
-@app.post("/file/chat")
-async def chat(query: Query, current_user=Depends(get_current_user)):
-    """
-    Endpoint to interact with the chatbot using a specific file.
-    Includes robust error handling for ChromaDB operations.
-    """
-    try:
-        # Check if model is already initialized and valid
-        if query.file_id not in initialized_models:
-            # Initialize the model if not already done
-            await initialize_model(
-                ModelInitRequest(model_choice=query.model_choice, file_id=query.file_id)
-            )
-
-        model = initialized_models[query.file_id]
-
-        # Get response from the model
-        response = model.get_answer(query.text)
-
-        # Format response for tabular data
-        if isinstance(response, list) and len(response) > 1:
-            headers = response[0]
-            rows = response[1:]
-            table_str = "| " + " | ".join(str(h) for h in headers) + " |\n"
-            table_str += "|" + "|".join(["---" for _ in headers]) + "|\n"
-            for row in rows:
-                table_str += "| " + " | ".join(str(cell) for cell in row) + " |\n"
-            return {"response": table_str}
-        else:
-            return {"response": str(response)}
-
-    except Exception as e:
-        logging.error(f"Error in chat endpoint: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"An error occurred during chat: {str(e)}"
-        )
+# app.py
 
 
 @app.post("/embeddings/create")
 async def create_embeddings(
     request: EmbeddingCreationRequest, current_user=Depends(get_current_user)
 ):
-    """
-    Endpoint to create embeddings for a file based on the provided request.
-
-    Parameters:
-        request (EmbeddingCreationRequest): Request object containing file_id and is_image flag.
-
-    Returns:
-        dict: A dictionary with a message indicating the status of the embeddings creation process.
-            If embeddings already exist, returns info if available; otherwise, returns appropriate messages.
-            Raises HTTPException with status code 500 in case of errors.
-    """
     try:
         embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
@@ -388,34 +289,102 @@ async def create_embeddings(
                 "info": file_info.get("embeddings"),
             }
 
-        # Get original filename from file info
+        # Get original filename
         original_filename = file_info.get("original_filename")
         if not original_filename:
-            raise HTTPException(
-                status_code=400, detail="Original filename not found in file info"
-            )
+            raise HTTPException(status_code=400, detail="Original filename not found")
 
-        # Construct the path to the temporary file
         temp_file_path = f"local_data/{request.file_id}_{original_filename}"
-
         if not os.path.exists(temp_file_path):
             raise HTTPException(
-                status_code=404, detail=f"Temporary file not found at {temp_file_path}"
+                status_code=404, detail=f"File not found at {temp_file_path}"
             )
 
+        # Create embeddings using the ChromaDBManager
         result = await embedding_handler.create_and_upload_embeddings(
             request.file_id, file_info.get("is_image", False), temp_file_path
         )
 
-        # Update file info to indicate embeddings are completed
+        # Update file info
         gcs_handler.update_file_info(
             request.file_id, {"embeddings_status": "completed"}
         )
-
         return result
 
     except Exception as e:
         logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/model/initialize")
+async def initialize_model(
+    request: ModelInitRequest, current_user=Depends(get_current_user)
+):
+    try:
+        file_info = gcs_handler.get_file_info(request.file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Check for tabular data
+        db_path = f"./chroma_db/{request.file_id}/tabular_data.db"
+        if os.path.exists(db_path):
+            model = TabularDataHandler(configs, request.file_id, request.model_choice)
+            initialized_models[request.file_id] = model
+            return {
+                "message": f"Model {request.model_choice} initialized for tabular data"
+            }
+
+        # Handle non-tabular files
+        embedding_type = (
+            "google"
+            if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+            else "azure"
+        )
+
+        # Ensure embeddings exist
+        _embedding_handler = EmbeddingHandler(configs, gcs_handler)
+        await _embedding_handler.ensure_embeddings_exist(request.file_id)
+
+        # Initialize model with ChromaDBManager
+        model = model_handler.initialize_model(
+            request.model_choice, request.file_id, embedding_type
+        )
+
+        initialized_models[request.file_id] = model
+        return {"message": f"Model {request.model_choice} initialized successfully"}
+
+    except Exception as e:
+        logging.error(f"Error initializing model: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/file/chat")
+async def chat(query: Query, current_user=Depends(get_current_user)):
+    try:
+        if query.file_id not in initialized_models:
+            await initialize_model(
+                ModelInitRequest(model_choice=query.model_choice, file_id=query.file_id)
+            )
+
+        model = initialized_models[query.file_id]
+
+        # Get response using the initialized model
+        response = model.get_answer(query.text)
+
+        # Format response for tabular data if needed
+        if isinstance(response, list) and len(response) > 1:
+            headers = response[0]
+            rows = response[1:]
+            table_str = "| " + " | ".join(str(h) for h in headers) + " |\n"
+            table_str += "|" + "|".join(["---" for _ in headers]) + "|\n"
+            for row in rows:
+                table_str += "| " + " | ".join(str(cell) for cell in row) + " |\n"
+            return {"response": table_str}
+
+        return {"response": str(response)}
+
+    except Exception as e:
+        logging.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -565,58 +534,6 @@ async def analyze_image_endpoint(
         )
 
 
-@app.delete("/files")
-async def delete_files(
-    request: FileDeleteRequest, current_user=Depends(get_current_user)
-):
-    """
-    Delete  embeddings based on the provided file IDs from GCP and local.
-
-    Args:
-        file_ids (List[str]): List of file IDs to delete.
-
-    Returns:
-        dict: A message indicating the status of the deletion process,
-        along with the list of deleted files and any errors encountered.
-    """
-    file_ids = request.file_ids
-    deleted_files = []
-    errors = []
-
-    for file_id in file_ids:
-        try:
-            # Delete local Chroma DB files
-            chroma_db_path = f"./chroma_db/{file_id}"
-            if os.path.exists(chroma_db_path):
-                shutil.rmtree(chroma_db_path)
-
-            # Delete the entire folder from GCS
-            folder_prefix = f"file-embeddings/{file_id}/"
-            blobs = gcs_handler.bucket.list_blobs(prefix=folder_prefix)
-            for blob in blobs:
-                blob.delete()
-
-            # Remove the file from initialized_models if it exists
-            if file_id in initialized_models:
-                del initialized_models[file_id]
-
-            deleted_files.append(file_id)
-        except Exception as e:
-            errors.append({"file_id": file_id, "error": str(e)})
-
-    if errors:
-        return {
-            "message": "Some files could not be deleted",
-            "deleted_files": deleted_files,
-            "errors": errors,
-        }
-    else:
-        return {
-            "message": "All files and their embeddings have been deleted successfully",
-            "deleted_files": deleted_files,
-        }
-
-
 # Function to offload the ChromaDB instance for a given file_id
 def offload_chromadb_instance(file_id: str) -> None:
     """
@@ -644,37 +561,77 @@ def offload_chromadb_instance(file_id: str) -> None:
 async def delete_chroma_embeddings(
     request: ChromaDeleteRequest, current_user=Depends(get_current_user)
 ):
-    """
-    Delete Chroma DB embeddings for a specific file ID.
-
-    This endpoint removes the local Chroma DB embeddings associated with the given file ID.
-    It deletes the entire folder containing the embeddings and removes the file from
-    initialized models if present.
-    """
+    """Delete Chroma DB embeddings for a specific file ID."""
     file_id = request.file_id
-    chroma_db_path = f"./chroma_db/{file_id}"
-
     try:
-        if os.path.exists(chroma_db_path):
-            shutil.rmtree(chroma_db_path)
-
+        # Remove from initialized models
+        if file_id in initialized_models:
+            del initialized_models[file_id]
             # Remove the file from initialized_models if it exists
             offload_chromadb_instance(file_id=file_id)
 
-            return {
-                "message": f"Chroma DB embeddings for file_id {file_id} have been deleted successfully",
-                "deleted_path": chroma_db_path,
-            }
-        else:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Chroma DB embeddings for file_id {file_id} not found",
-            )
+        # Clean up local files
+        chroma_db_path = f"./chroma_db/{file_id}"
+        if os.path.exists(chroma_db_path):
+            shutil.rmtree(chroma_db_path)
+
+        # Cleanup from ChromaDBManager
+        chroma_manager.cleanup_instance(file_id)
+
+        return {
+            "message": f"Chroma DB embeddings for file_id {file_id} have been deleted successfully",
+            "deleted_path": chroma_db_path,
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"An error occurred while deleting Chroma DB embeddings: {str(e)}",
         )
+
+
+@app.delete("/files")
+async def delete_files(
+    request: FileDeleteRequest, current_user=Depends(get_current_user)
+):
+    """Delete embeddings and files."""
+    file_ids = request.file_ids
+    deleted_files = []
+    errors = []
+
+    for file_id in file_ids:
+        try:
+            # Clean up ChromaDB instances
+            chroma_manager.cleanup_instance(file_id)
+
+            # Delete local files
+            chroma_db_path = f"./chroma_db/{file_id}"
+            if os.path.exists(chroma_db_path):
+                shutil.rmtree(chroma_db_path)
+
+            # Delete from GCS
+            folder_prefix = f"file-embeddings/{file_id}/"
+            blobs = gcs_handler.bucket.list_blobs(prefix=folder_prefix)
+            for blob in blobs:
+                blob.delete()
+
+            # Remove from initialized_models
+            if file_id in initialized_models:
+                del initialized_models[file_id]
+
+            deleted_files.append(file_id)
+        except Exception as e:
+            errors.append({"file_id": file_id, "error": str(e)})
+
+    if errors:
+        return {
+            "message": "Some files could not be deleted",
+            "deleted_files": deleted_files,
+            "errors": errors,
+        }
+    return {
+        "message": "All files and their embeddings have been deleted successfully",
+        "deleted_files": deleted_files,
+    }
 
 
 @app.post("/chat/gemini")
