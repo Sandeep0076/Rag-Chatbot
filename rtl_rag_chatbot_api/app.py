@@ -28,6 +28,7 @@ from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.file_handler import FileHandler
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
+from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
@@ -37,7 +38,6 @@ from rtl_rag_chatbot_api.common.models import (
     EmbeddingCreationRequest,
     FileDeleteRequest,
     FileUploadResponse,
-    ModelInitRequest,
     NeighborsQuery,
     Query,
 )
@@ -268,9 +268,6 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
         raise
 
 
-# app.py
-
-
 @app.post("/embeddings/create")
 async def create_embeddings(
     request: EmbeddingCreationRequest, current_user=Depends(get_current_user)
@@ -316,59 +313,70 @@ async def create_embeddings(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/model/initialize")
-async def initialize_model(
-    request: ModelInitRequest, current_user=Depends(get_current_user)
-):
-    try:
-        file_info = gcs_handler.get_file_info(request.file_id)
-        if not file_info:
-            raise HTTPException(status_code=404, detail="File not found")
-
-        # Check for tabular data
-        db_path = f"./chroma_db/{request.file_id}/tabular_data.db"
-        if os.path.exists(db_path):
-            model = TabularDataHandler(configs, request.file_id, request.model_choice)
-            initialized_models[request.file_id] = model
-            return {
-                "message": f"Model {request.model_choice} initialized for tabular data"
-            }
-
-        # Handle non-tabular files
-        embedding_type = (
-            "google"
-            if request.model_choice.lower() in ["gemini-flash", "gemini-pro"]
-            else "azure"
-        )
-
-        # Ensure embeddings exist
-        _embedding_handler = EmbeddingHandler(configs, gcs_handler)
-        await _embedding_handler.ensure_embeddings_exist(request.file_id)
-
-        # Initialize model with ChromaDBManager
-        model = model_handler.initialize_model(
-            request.model_choice, request.file_id, embedding_type
-        )
-
-        initialized_models[request.file_id] = model
-        return {"message": f"Model {request.model_choice} initialized successfully"}
-
-    except Exception as e:
-        logging.error(f"Error initializing model: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.post("/file/chat")
 async def chat(query: Query, current_user=Depends(get_current_user)):
     try:
-        if query.file_id not in initialized_models:
-            await initialize_model(
-                ModelInitRequest(model_choice=query.model_choice, file_id=query.file_id)
+        model = initialized_models.get(query.file_id)
+        is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+        needs_initialization = False
+
+        # Case 1: No model exists at all
+        if not model:
+            needs_initialization = True
+            logging.info(f"No model found for file_id: {query.file_id}")
+        else:
+            # Case 2: Model type mismatch (switching between Gemini and Azure)
+            current_model_type = (
+                "gemini" if isinstance(model, GeminiHandler) else "azure"
+            )
+            requested_model_type = "gemini" if is_gemini else "azure"
+            if current_model_type != requested_model_type:
+                needs_initialization = True
+                logging.info(
+                    f"Model type mismatch. Switching from {current_model_type} to {requested_model_type}"
+                )
+
+        # Only initialize if needed
+        if needs_initialization:
+            file_info = gcs_handler.get_file_info(query.file_id)
+            if not file_info:
+                raise HTTPException(status_code=404, detail="File not found")
+
+            # Check for tabular data
+            db_path = f"./chroma_db/{query.file_id}/tabular_data.db"
+            if os.path.exists(db_path):
+                model = TabularDataHandler(configs, query.file_id, query.model_choice)
+            else:
+                # Ensure ChromaDB files are present
+                chroma_path = f"./chroma_db/{query.file_id}"
+                if not os.path.exists(chroma_path):
+                    logging.info(f"Downloading ChromaDB files for {query.file_id}")
+                    gcs_handler.download_files_from_folder_by_id(query.file_id)
+
+                embedding_type = "google" if is_gemini else "azure"
+                if is_gemini:
+                    model = GeminiHandler(configs, gcs_handler)
+                    model.initialize(
+                        model=query.model_choice,
+                        file_id=query.file_id,
+                        embedding_type=embedding_type,
+                        collection_name=f"rag_collection_{query.file_id}",
+                    )
+                else:
+                    model = Chatbot(configs, gcs_handler)
+                    model.initialize(
+                        model_choice=query.model_choice,
+                        file_id=query.file_id,
+                        embedding_type=embedding_type,
+                        collection_name=f"rag_collection_{query.file_id}",
+                    )
+
+            initialized_models[query.file_id] = model
+            logging.info(
+                f"Model initialized for file_id: {query.file_id} using {query.model_choice}"
             )
 
-        model = initialized_models[query.file_id]
-
-        # Get response using the initialized model
+        # Get response using the model
         response = model.get_answer(query.text)
 
         # Format response for tabular data if needed
@@ -412,38 +420,6 @@ async def cleanup_files(current_user=Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"An error occurred during cleanup: {str(e)}"
-        )
-
-
-async def initialize_chatbot(file_id: str, model_choice: str):
-    """
-    Initialize a chatbot with the given file ID and model choice.
-
-    Parameters:
-    - file_id (str): The ID of the file to initialize the chatbot with.
-    - model_choice (str): The choice of model for the chatbot.
-
-    Raises:
-    - HTTPException: If there is an error during chatbot setup, such as missing files or invalid model choice.
-    """
-    chroma_db_path = f"./chroma_db/{file_id}"
-    if not os.path.exists(chroma_db_path):
-        logging.error(f"Chroma DB path not found: {chroma_db_path}")
-        try:
-            gcs_handler.download_files_from_folder_by_id(file_id)
-        except FileNotFoundError as e:
-            raise HTTPException(status_code=404, detail=str(e))
-
-    try:
-        chatbot = Chatbot(configs, file_id, model_choice=model_choice)
-        logging.info(f"Chatbot setup successful for file_id: {file_id}")
-        initialized_chatbots[file_id] = chatbot
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.error(f"Error setting up chatbot: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Error setting up chatbot: {str(e)}"
         )
 
 

@@ -14,6 +14,7 @@ from vertexai.preview.language_models import TextEmbeddingModel
 from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class GeminiHandler(BaseRAGHandler):
@@ -23,14 +24,16 @@ class GeminiHandler(BaseRAGHandler):
     """
 
     def __init__(self, configs, gcs_handler):
-        super().__init__(configs, gcs_handler)  # Initialize parent class
-        self.configs = configs
-        self.gcs_handler = gcs_handler
+        super().__init__(configs, gcs_handler)
         vertexai.init(project=configs.gemini.project, location=configs.gemini.location)
+        logger.info(
+            f"Initialized Gemini with project: {configs.gemini.project}, location: {configs.gemini.location}"
+        )
         self.embedding_model = TextEmbeddingModel.from_pretrained(
             "textembedding-gecko@latest"
         )
         self.generative_model = None
+        self.MAX_TOKENS_PER_REQUEST = 15000
 
     def initialize(
         self,
@@ -74,12 +77,20 @@ class GeminiHandler(BaseRAGHandler):
         self.collection_name = collection_name or f"rag_collection_{file_id}"
 
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Get embeddings using Gemini's embedding model."""
         try:
-            embeddings = self.embedding_model.get_embeddings(texts)
-            return [embedding.values for embedding in embeddings]
+            logger.info(f"Getting Gemini embeddings for {len(texts)} texts")
+            # Process in smaller batches if needed
+            all_embeddings = []
+            batch_size = min(len(texts), self.BATCH_SIZE)
+
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i : i + batch_size]
+                embeddings = self.embedding_model.get_embeddings(batch)
+                all_embeddings.extend([embedding.values for embedding in embeddings])
+
+            return all_embeddings
         except Exception as e:
-            logging.error(f"Error getting embeddings: {str(e)}")
+            logging.error(f"Error getting Gemini embeddings: {str(e)}")
             raise
 
     async def get_gemini_response_stream(self, prompt: str):
@@ -106,7 +117,7 @@ class GeminiHandler(BaseRAGHandler):
             context = "\n".join(relevant_chunks)
             prompt = f"""Based on the following context, please answer the question.
             If the answer is not in the context, say 'I don't have enough information
-            to answer that question from the uploaded document. Please rephrase or ask another question.'
+            to answer that question from the uploaded document. Please rephrase or ask another question.
 
             Context: {context}
 
@@ -115,6 +126,7 @@ class GeminiHandler(BaseRAGHandler):
             Answer:"""
 
             response = self.generative_model.generate_content(prompt)
+            logger.info("Response from Google")
             return response.text
         except Exception as e:
             logging.error(f"Error in get_answer: {str(e)}")

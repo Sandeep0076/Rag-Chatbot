@@ -4,9 +4,11 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import List
 
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot
 from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
+from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 
 logging.basicConfig(level=logging.INFO)
@@ -148,26 +150,34 @@ class EmbeddingHandler:
     async def create_and_upload_embeddings(
         self, file_id: str, is_image: bool, temp_file_path: str
     ):
-        """Create embeddings for both Azure and Gemini models and upload them to GCS"""
         try:
-            # Get username from file info
             file_info = self.gcs_handler.get_file_info(file_id)
             username = file_info.get("username", "Unknown")
 
-            # Create new embeddings for both Azure and Gemini
+            base_handler = BaseRAGHandler(self.configs, self.gcs_handler)
+            text = base_handler.extract_text_from_file(temp_file_path)
+            chunks = base_handler.split_text(text)
+
+            # Log the chunk sizes for debugging
+            for i, chunk in enumerate(chunks):
+                tokens = len(base_handler.simple_tokenize(chunk))
+                logging.info(f"Chunk {i}: {tokens} tokens")
+
+            logging.info(f"Text extracted and split into {len(chunks)} chunks")
+
             with ThreadPoolExecutor(max_workers=2) as executor:
                 azure_future = executor.submit(
                     self._create_azure_embeddings,
                     file_id,
-                    temp_file_path,
+                    chunks,
                     self.configs.azure_embedding.azure_embedding_api_key,
-                    username,  # Pass username here
+                    username,
                 )
                 gemini_future = executor.submit(
                     self._create_gemini_embeddings,
                     file_id,
-                    temp_file_path,
-                    username,  # Pass same username here
+                    chunks,
+                    username,
                 )
 
                 azure_result = azure_future.result()
@@ -195,7 +205,7 @@ class EmbeddingHandler:
             raise
 
     def _create_azure_embeddings(
-        self, file_id: str, file_path: str, api_key: str, username: str
+        self, file_id: str, chunks: List[str], api_key: str, username: str
     ):
         """Creates embeddings using Azure OpenAI."""
         logging.info("Generating Azure embeddings...")
@@ -205,19 +215,14 @@ class EmbeddingHandler:
             # Initialize Azure handler
             azure_handler = AzureChatbot(self.configs, self.gcs_handler)
             azure_handler.initialize(
-                model_choice="gpt_4o_mini",  # Default model for embeddings
+                model_choice="gpt_4o_mini",
                 file_id=file_id,
                 embedding_type="azure",
                 collection_name=collection_name,
             )
 
-            # Use BaseRAGHandler's methods for processing
-            azure_handler.process_file(
-                file_id=file_id,
-                decrypted_file_path=file_path,
-                subfolder="azure",
-                collection_name=collection_name,
-            )
+            # Create and store embeddings directly from chunks
+            azure_handler.create_and_store_embeddings(chunks, file_id, "azure")
 
             logging.info("Azure embeddings generated successfully")
             return "completed"
@@ -225,7 +230,7 @@ class EmbeddingHandler:
             logging.error(f"Error creating Azure embeddings: {str(e)}", exc_info=True)
             raise
 
-    def _create_gemini_embeddings(self, file_id: str, file_path: str, username: str):
+    def _create_gemini_embeddings(self, file_id: str, chunks: List[str], username: str):
         """Creates embeddings using Gemini model."""
         logging.info("Generating Gemini embeddings...")
         try:
@@ -240,13 +245,8 @@ class EmbeddingHandler:
                 collection_name=collection_name,
             )
 
-            # Use BaseRAGHandler's methods for processing
-            gemini_handler.process_file(
-                file_id=file_id,
-                decrypted_file_path=file_path,
-                subfolder="google",
-                collection_name=collection_name,
-            )
+            # Create and store embeddings directly from chunks
+            gemini_handler.create_and_store_embeddings(chunks, file_id, "google")
 
             logging.info("Gemini embeddings generated successfully")
             return "completed"

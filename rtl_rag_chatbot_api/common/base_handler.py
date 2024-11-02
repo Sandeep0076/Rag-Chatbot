@@ -21,12 +21,17 @@ class BaseRAGHandler:
     def __init__(self, configs, gcs_handler):
         self.configs = configs
         self.gcs_handler = gcs_handler
-        self.max_tokens = 2000
+        self.max_tokens = 2000  # Default chunk size
         self.file_id = None
         self.embedding_type = None
         self.collection_name = None
         self.embedding_model = None
         self.chroma_manager = ChromaDBManager()
+        self.AZURE_MAX_TOKENS = (
+            8000  # Azure's ada-002 limit is 8,191, using 8000 for safety
+        )
+        self.GEMINI_MAX_TOKENS = 15000
+        self.BATCH_SIZE = 5
 
     def query_chroma(self, query: str, file_id: str, n_results: int = 3) -> List[str]:
         """Query the Chroma vector database for similar documents."""
@@ -64,56 +69,68 @@ class BaseRAGHandler:
 
     def create_and_store_embeddings(
         self, chunks: List[str], file_id: str, subfolder: str
-    ):
-        """Create embeddings and store them in Chroma DB."""
+    ) -> str:
         try:
             collection = self.chroma_manager.get_collection(
                 file_id, subfolder, self.collection_name
             )
 
-            # Process chunks in batches
-            MAX_TOKENS_PER_REQUEST = 15000
-            BATCH_SIZE = 5
             processed_count = 0
             total_chunks = len(chunks)
+            batch_to_process = []
+            batch_ids = []
 
-            for i in range(0, total_chunks, BATCH_SIZE):
-                batch_chunks = chunks[i : i + BATCH_SIZE]
-                batch_to_process = []
-                batch_ids = []
+            # Set token limit based on model type
+            max_tokens = (
+                self.AZURE_MAX_TOKENS
+                if subfolder == "azure"
+                else self.GEMINI_MAX_TOKENS
+            )
 
-                for chunk_idx, chunk in enumerate(batch_chunks):
-                    chunk_tokens = len(self.simple_tokenize(chunk))
+            for i in range(0, total_chunks):
+                chunk = chunks[i]
+                chunk_tokens = len(self.simple_tokenize(chunk))
 
-                    if chunk_tokens > MAX_TOKENS_PER_REQUEST:
-                        sub_chunks = self.split_large_chunk(
-                            chunk, MAX_TOKENS_PER_REQUEST
-                        )
-                        for sub_idx, sub_chunk in enumerate(sub_chunks):
+                if chunk_tokens > max_tokens:
+                    # Split large chunks
+                    sub_chunks = self.split_large_chunk(chunk, max_tokens)
+                    for sub_idx, sub_chunk in enumerate(sub_chunks):
+                        # Verify sub_chunk size
+                        sub_chunk_tokens = len(self.simple_tokenize(sub_chunk))
+                        if sub_chunk_tokens <= max_tokens:
                             batch_to_process.append(sub_chunk)
-                            batch_ids.append(f"{file_id}_{i + chunk_idx}_sub{sub_idx}")
-                    else:
-                        batch_to_process.append(chunk)
-                        batch_ids.append(f"{file_id}_{i + chunk_idx}")
+                            batch_ids.append(f"{file_id}_{i}_sub{sub_idx}")
+                else:
+                    batch_to_process.append(chunk)
+                    batch_ids.append(f"{file_id}_{i}")
 
-                if batch_to_process:
-                    try:
-                        embeddings = self.get_embeddings(batch_to_process)
-                        collection.add(
-                            documents=batch_to_process,
-                            embeddings=embeddings,
-                            metadatas=[{"source": file_id} for _ in batch_to_process],
-                            ids=batch_ids,
-                        )
-                        processed_count += len(batch_to_process)
-                        logging.info(
-                            f"Processed {processed_count}/{total_chunks} chunks"
-                        )
-                    except Exception as e:
-                        logging.error(
-                            f"Error processing batch starting at chunk {i}: {str(e)}"
-                        )
-                        continue
+                # Process when batch is full or it's the last chunk
+                if len(batch_to_process) >= self.BATCH_SIZE or i == total_chunks - 1:
+                    if batch_to_process:  # Only process if there are chunks
+                        try:
+                            embeddings = self.get_embeddings(batch_to_process)
+                            collection.add(
+                                documents=batch_to_process,
+                                embeddings=embeddings,
+                                metadatas=[
+                                    {"source": file_id} for _ in batch_to_process
+                                ],
+                                ids=batch_ids,
+                            )
+                            processed_count += len(batch_to_process)
+                            logging.info(
+                                f"Processed {processed_count}/{total_chunks} chunks"
+                            )
+
+                        except Exception as e:
+                            logging.error(
+                                f"Error processing batch at chunk {i}: {str(e)}"
+                            )
+                            # Continue with next batch instead of failing completely
+                        finally:
+                            # Clear batches regardless of success/failure
+                            batch_to_process = []
+                            batch_ids = []
 
             return "completed"
         except Exception as e:
@@ -210,7 +227,7 @@ class BaseRAGHandler:
         return re.findall(r"\b\w+\b", text.lower())
 
     def split_large_chunk(self, chunk: str, max_tokens: int) -> List[str]:
-        """Split a large chunk into smaller pieces."""
+        """Split a large chunk into smaller pieces based on token limit."""
         sentences = re.split(r"(?<=[.!?])\s+", chunk)
         sub_chunks = []
         current_sub_chunk = []
@@ -218,8 +235,30 @@ class BaseRAGHandler:
 
         for sentence in sentences:
             sentence_tokens = len(self.simple_tokenize(sentence))
+
+            # If a single sentence exceeds max tokens, split it further
+            if sentence_tokens > max_tokens:
+                words = sentence.split()
+                temp_chunk = []
+                temp_tokens = 0
+
+                for word in words:
+                    word_tokens = len(self.simple_tokenize(word))
+                    if temp_tokens + word_tokens > max_tokens:
+                        sub_chunks.append(" ".join(temp_chunk))
+                        temp_chunk = [word]
+                        temp_tokens = word_tokens
+                    else:
+                        temp_chunk.append(word)
+                        temp_tokens += word_tokens
+
+                if temp_chunk:
+                    sub_chunks.append(" ".join(temp_chunk))
+                continue
+
             if current_tokens + sentence_tokens > max_tokens:
-                sub_chunks.append(" ".join(current_sub_chunk))
+                if current_sub_chunk:
+                    sub_chunks.append(" ".join(current_sub_chunk))
                 current_sub_chunk = [sentence]
                 current_tokens = sentence_tokens
             else:
