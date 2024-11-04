@@ -32,6 +32,7 @@ from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
+from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
 from rtl_rag_chatbot_api.common.models import (
     ChatRequest,
     ChromaDeleteRequest,
@@ -44,7 +45,6 @@ from rtl_rag_chatbot_api.common.models import (
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
-from rtl_rag_chatbot_api.common.scheduled_tasks import offload_chromadb_embeddings
 from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
 
 # from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
@@ -110,17 +110,21 @@ Note: File storage in GCP has been removed from this version.
 
 @asynccontextmanager
 async def start_scheduler(app: FastAPI):
+    cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
     scheduler = BackgroundScheduler()
     scheduler.configure(logger=logging.getLogger("apscheduler"))
+
+    # Use config value for interval
     scheduler.add_job(
-        id="job1",
-        func=offload_chromadb_embeddings,
-        args=[SessionLocal],
+        cleanup_coordinator.cleanup,
         trigger="interval",
-        minutes=15,
+        minutes=configs.cleanup.cleanup_interval_minutes,  # Use configured interval
+        id="cleanup_job",
     )
+
     scheduler.start()
     yield
+    scheduler.shutdown()
 
 
 app = FastAPI(
@@ -413,14 +417,11 @@ async def get_available_models(current_user=Depends(get_current_user)):
 
 
 @app.post("/file/cleanup")
-async def cleanup_files(current_user=Depends(get_current_user)):
-    """
-    Endpoint to clean-up local files in chroma_db and local_data folders,
-    as well as cache files in the project.
-    """
+async def manual_cleanup(current_user=Depends(get_current_user)):
+    """Endpoint to manually trigger cleanup."""
     try:
-        gcs_handler = GCSHandler(configs)
-        gcs_handler.cleanup_local_files()
+        cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
+        cleanup_coordinator.cleanup()
         return {"status": "Cleanup completed successfully"}
     except Exception as e:
         raise HTTPException(
