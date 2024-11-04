@@ -1,332 +1,109 @@
-import base64
-import io
 import logging
-import os
-import sqlite3
+from typing import List
 
-import chromadb
-import matplotlib.pyplot as plt
 import openai
-import seaborn as sns
-from chromadb.config import Settings
-from chromadb.errors import ChromaError
-from llama_index.core import ServiceContext, VectorStoreIndex
-from llama_index.core.storage.storage_context import StorageContext
-from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
-from llama_index.llms.azure_openai import AzureOpenAI
-from llama_index.vector_stores.chroma import ChromaVectorStore
 
-# Set up Azure OpenAI API keys and endpoints
-os.environ["AZURE_OPENAI_API_KEY"] = os.environ.get("AZURE_OPENAI_LLM_API_KEY", "")
-os.environ["AZURE_OPENAI_ENDPOINT"] = os.environ.get("AZURE_OPENAI_LLM_ENDPOINT", "")
+from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
 
 
-class Chatbot:
-    """
-    Class to set up an in-memory vector database for chatbot functionality.
+class AzureChatbot(BaseRAGHandler):
+    """Handles interactions with Azure OpenAI models for RAG applications."""
 
-    Attributes:
-    configs (Config): Configuration object containing necessary settings.
-    file_id (str): Unique identifier for the file being processed.
-    model_choice (str): The chosen language model.
-    model_config (dict): Configuration for the chosen model.
-    _index (VectorStoreIndex): Index object created from the vector store.
-    _vanilla_llm (AzureOpenAI): Plain LLM instance for generating answers.
-    retriever (Retriever): Retriever instance for fetching similar documents.
-    query_engine (QueryEngine): Query engine instance for processing queries.
-    chat_engine (AzureOpenAI): ChatGPT instance for generating chat responses.
-    """
-
-    def __init__(
-        self, configs, file_id, model_choice="gpt-3.5-turbo", embedding_type="azure"
-    ):
+    def __init__(self, configs, gcs_handler):
+        super().__init__(configs, gcs_handler)
         self.configs = configs
-        self.file_id = file_id
+        self.model_config = None
+        self.llm_client = None
+        self.embedding_client = None
+
+    def initialize(
+        self,
+        model_choice: str,
+        file_id: str = None,
+        embedding_type: str = None,
+        collection_name: str = None,
+    ):
+        """Initialize the Azure model with specific configurations."""
         self.model_choice = model_choice
+        self.file_id = file_id
         self.embedding_type = embedding_type
-        self.model_config = self._get_model_config()
-        self._vanilla_llm = self._create_llm_instance_only()
-        self.chat_engine = self._create_chat_gpt_instance()
-        self.chroma_db_path = f"./chroma_db/{file_id}/{embedding_type}"
+        self.collection_name = collection_name or f"rag_collection_{file_id}"
 
-        if file_id:
-            self._index = self._create_index()
-            self.retriever = self._create_retriever()
-            self.query_engine = self._create_query_engine()
+        # Get model configuration based on model_choice
+        self.model_config = self.configs.azure_llm.models.get(model_choice)
+        if not self.model_config:
+            raise ValueError(f"Configuration for model {model_choice} not found")
 
-    # Retrieves the configuration for the chosen model.
+        self.initialize_azure_clients()
 
-    def _get_model_config(self):
-        if self.model_choice.lower() in ["gemini-flash", "gemini-pro"]:
-            # Handle Gemini models
-            return self.configs.gemini
-        elif self.model_choice in self.configs.azure_llm.models:
-            # Handle Azure models
-            return self.configs.azure_llm.models[self.model_choice]
-        else:
-            valid_models = list(self.configs.azure_llm.models.keys()) + [
-                "gemini-flash",
-                "gemini-pro",
-            ]
-            raise ValueError(f"Invalid model choice. Choose from: {valid_models}")
+    def initialize_azure_clients(self):
+        """Initialize Azure OpenAI and embedding clients."""
+        # Initialize Azure OpenAI client for chat completions
+        self.llm_client = openai.AzureOpenAI(
+            api_key=self.model_config.api_key,
+            azure_endpoint=self.model_config.endpoint,
+            api_version=self.model_config.api_version,
+        )
 
-    def _create_index(self):
-        """
-        Creates a vector store index from stored documents.
+        # Initialize Azure Text Analytics client for embeddings
+        self.embedding_client = openai.AzureOpenAI(
+            api_key=self.configs.azure_embedding.azure_embedding_api_key,
+            azure_endpoint=self.configs.azure_embedding.azure_embedding_endpoint,
+            api_version=self.configs.azure_embedding.azure_embedding_api_version,
+        )
 
-        Parameters:
-        chroma_folder_path (str): Path to the folder containing the vector database files.
-
-        Returns:
-        VectorStoreIndex: Index object created from the vector store.
-        """
+    def get_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Get embeddings using Azure's embedding model."""
         try:
-            logging.info(
-                f"Attempting to create Chroma DB at path: {self.chroma_db_path}"
-            )
-            chromadb.api.client.SharedSystemClient.clear_system_cache()
-            db = chromadb.PersistentClient(
-                path=self.chroma_db_path,
-                settings=Settings(allow_reset=True, anonymized_telemetry=False),
-            )
-            llm_llama = AzureOpenAI(
-                api_key=self.model_config.api_key,
-                azure_endpoint=self.model_config.endpoint,
-                azure_deployment=self.model_config.deployment,
-                api_version=self.model_config.api_version,
-                model=self.model_config.model_name,
-                system_prompt=self.configs.chatbot.system_prompt_rag_llm,
-            )
-
-            embedding_function_llama = AzureOpenAIEmbedding(
-                api_key=self.configs.azure_embedding.azure_embedding_api_key,
-                azure_endpoint=self.configs.azure_embedding.azure_embedding_endpoint,
-                model=self.configs.azure_embedding.azure_embedding_model_name,
-                deployment_name=self.configs.azure_embedding.azure_embedding_deployment,
-                api_version=self.configs.azure_embedding.azure_embedding_api_version,
-            )
-            # Check if the collection already exists
-            try:
-                chroma_collection = db.get_collection(
-                    self.configs.chatbot.vector_db_collection_name
+            batch_embeddings = []
+            for text in texts:
+                response = self.embedding_client.embeddings.create(
+                    model=self.configs.azure_embedding.azure_embedding_deployment,
+                    input=text,
                 )
-            except ValueError:
-                # Collection doesn't exist, create a new one
-                chroma_collection = db.create_collection(
-                    self.configs.chatbot.vector_db_collection_name
-                )
-
-            vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-            storage_context = StorageContext.from_defaults(vector_store=vector_store)
-            service_context = ServiceContext.from_defaults(
-                llm=llm_llama,
-                embed_model=embedding_function_llama,
-                chunk_size=self.configs.chatbot.chunk_size_limit,
-                chunk_overlap=self.configs.chatbot.max_chunk_overlap,
-            )
-
-            index = VectorStoreIndex.from_vector_store(
-                vector_store=vector_store,
-                service_context=service_context,
-                storage_context=storage_context,
-            )
-
-            return index
-        except (ChromaError, ValueError, sqlite3.OperationalError) as e:
-            logging.error(f"Failed to initialize Chroma DB. Error: {str(e)}")
-            logging.error(f"Chroma DB path contents: {os.listdir(self.chroma_db_path)}")
-        raise
-
-    def _create_llm_instance_only(self):
-        """
-        Creates an LLM instance for generating answers without retrieval-augmented generation.
-
-        Returns:
-        AzureOpenAI: Plain LLM instance.
-        """
-        llm_llama = openai.AzureOpenAI(
-            api_key=self.model_config.api_key,
-            azure_endpoint=self.model_config.endpoint,
-            api_version=self.model_config.api_version,
-        )
-        return llm_llama
-
-    def _create_retriever(self):
-        """
-        Creates a retriever instance for fetching similar documents.
-
-        Returns:
-        Retriever: Retriever instance.
-        """
-        retriever = self._index.as_retriever(
-            similarity_top_k=self.configs.chatbot.n_neighbours
-        )
-        return retriever
-
-    def _create_query_engine(self):
-        """
-        Creates a query engine instance for processing queries.
-
-        Returns:
-        QueryEngine: Query engine instance.
-        """
-        query_engine = self._index.as_query_engine(
-            vector_store_query_mode="mmr", chat_mode="CONTEXT"
-        )
-        return query_engine
-
-    def _create_chat_gpt_instance(self):
-        """
-        Creates a ChatGPT instance for generating chat responses.
-
-        Returns:
-        AzureOpenAI: ChatGPT instance.
-        """
-        client = openai.AzureOpenAI(
-            api_key=self.model_config.api_key,
-            azure_endpoint=self.model_config.endpoint,
-            api_version=self.model_config.api_version,
-        )
-        return client
-
-    def get_llm_answer(self, query: str) -> str:
-        """
-        Generates an answer for a given query using a plain LLM instance.
-
-        Parameters:
-        query (str): User query.
-
-        Returns:
-        str: LLM-generated response.
-        """
-        messages_prompt = [
-            {
-                "role": "system",
-                "content": self.configs.chatbot.system_prompt_plain_llm,
-            },
-            {"role": "user", "content": query},
-        ]
-        completion = self._vanilla_llm.chat.completions.create(
-            messages=messages_prompt,
-            model=self.model_config.deployment,
-            temperature=self.configs.llm_hyperparams.temperature,
-            max_tokens=self.configs.llm_hyperparams.max_tokens,
-        )
-
-        return completion.choices[0].message.content
+                batch_embeddings.append(response.data[0].embedding)
+            return batch_embeddings
+        except Exception as e:
+            logging.error(f"Error getting Azure embeddings: {str(e)}")
+            raise
 
     def get_answer(self, query: str) -> str:
-        """
-        Generates an answer for a given query using the query engine.
+        """Generate an answer to a query using relevant context."""
+        try:
+            relevant_chunks = self.query_chroma(query, self.file_id, n_results=3)
+            if not relevant_chunks:
+                return (
+                    "I couldn't find any relevant information to answer your question."
+                )
 
-        Parameters:
-        query (str): User query.
+            context = "\n".join(relevant_chunks)
+            messages = [
+                {
+                    "role": "system",
+                    "content": self.configs.chatbot.system_prompt_rag_llm,
+                },
+                {"role": "user", "content": f"Context: {context}\n\nQuestion: {query}"},
+            ]
 
-        Returns:
-        str: Query engine-generated response.
-        """
-        response = self.query_engine.query(query)
-        print(f"Getting answer using model: {self.model_choice}")
-        return response.response
+            response = self.llm_client.chat.completions.create(
+                model=self.model_config.deployment,
+                messages=messages,
+                temperature=self.configs.llm_hyperparams.temperature,
+                max_tokens=self.configs.llm_hyperparams.max_tokens,
+                top_p=self.configs.llm_hyperparams.top_p,
+                frequency_penalty=self.configs.llm_hyperparams.frequency_penalty,
+                presence_penalty=self.configs.llm_hyperparams.presence_penalty,
+                stop=self.configs.llm_hyperparams.stop,
+            )
 
-    def get_n_nearest_neighbours(
-        self, query: str, n_neighbours: int, unpack_response=False
-    ) -> str:
-        """
-        Retrieves the n nearest neighbors for a given query based on similarity.
+            return response.choices[0].message.content
+        except Exception as e:
+            logging.error(f"Error in get_answer: {str(e)}")
+            raise
 
-        Parameters:
-        query (str): User query.
-        n_neighbours (int): Number of nearest neighbors to retrieve.
-        unpack_response (bool): Whether to unpack the response.
-
-        Returns:
-        str: Nearest neighbors.
-        """
-        retriever = self._index.as_retriever(similarity_top_k=n_neighbours)
-        response = retriever.retrieve(query)
-
-        return response
-
-    def _check_message(self, current_prompt: str, history_prompt: list = []) -> str:
-        """
-        Checks if a given prompt appears in the history and returns an appropriate response.
-
-        Parameters:
-        current_prompt (str): Current user prompt.
-        history_prompt (list): List of historical prompts.
-
-        Returns:
-        str: "TRUE" if the prompt appears in history, otherwise "FALSE".
-        """
-        temp_history_list = history_prompt.copy()
-
-        if current_prompt in temp_history_list:
-            temp_history_list.remove(current_prompt)
-
-        message_text = [
-            {
-                "role": "user",
-                "content": f"Check the following statement."
-                "Does this statement refer to a statement from the attached list? "
-                "If this is the case, then answer TRUE. "
-                "If the statement appears in the list, also return the index of the matching element."
-                f"Otherwise answer FALSE. Statement: {current_prompt} "
-                f"List: {' '.join(temp_history_list)}",
-            }
-        ]
-
-        completion = self.chat_engine.chat.completions.create(
-            model=self.configs.azure_llm.azure_llm_deployment,
-            messages=message_text,
-            temperature=self.configs.llm_hyperparams.temperature,
-            max_tokens=self.configs.llm_hyperparams.max_tokens,
-            top_p=self.configs.llm_hyperparams.top_p,
-            frequency_penalty=self.configs.llm_hyperparams.frequency_penalty,
-            presence_penalty=self.configs.llm_hyperparams.presence_penalty,
-            stop=self.configs.llm_hyperparams.stop,
-        )
-
-        if "TRUE" in completion.choices[0].message.content:
-            return completion.choices[0].message.content
-        else:
-            return "FALSE"
-
-    def generate_chart(self, query):
-        # Extract data from the query or retrieve from the index
-        data = self._extract_data_for_chart(query)
-
-        # Create a simple bar chart
-        plt.figure(figsize=(10, 6))
-        sns.barplot(x=data["x"], y=data["y"])
-        plt.title(data["title"])
-        plt.xlabel(data["x_label"])
-        plt.ylabel(data["y_label"])
-
-        # Save the chart to a bytes buffer
-        buffer = io.BytesIO()
-        plt.savefig(buffer, format="png")
-        buffer.seek(0)
-
-        # Encode the image to base64
-        chart_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-
-        return {
-            "chart_type": "bar",
-            "chart_data": chart_base64,
-            "chart_title": data["title"],
-        }
-
-    def _extract_data_for_chart(self, query):
-        # This is a placeholder. In a real implementation, you would use
-        # the query to extract relevant data from your index or database.
-        return {
-            "x": ["A", "B", "C", "D"],
-            "y": [10, 20, 15, 25],
-            "title": "Sample Chart",
-            "x_label": "Categories",
-            "y_label": "Values",
-        }
+    def get_n_nearest_neighbours(self, query: str, n_neighbours: int = 3) -> List[str]:
+        """Get nearest neighbors for a query."""
+        return self.query_chroma(query, self.file_id, n_results=n_neighbours)
 
 
 def get_azure_non_rag_response(
@@ -350,9 +127,35 @@ def get_azure_non_rag_response(
         Exception: If there's an error in getting the response, with the error message included.
     """
     try:
-        chatbot = Chatbot(configs, file_id=None, model_choice=model_choice)
-        response = chatbot.get_llm_answer(query)
-        return response
+        # Initialize Azure OpenAI client for direct completion
+        llm_client = openai.AzureOpenAI(
+            api_key=configs.azure_llm.models[model_choice].api_key,
+            azure_endpoint=configs.azure_llm.models[model_choice].endpoint,
+            api_version=configs.azure_llm.models[model_choice].api_version,
+        )
+
+        # Create completion with system prompt and user query
+        messages = [
+            {
+                "role": "system",
+                "content": configs.chatbot.system_prompt_plain_llm,
+            },
+            {"role": "user", "content": query},
+        ]
+
+        completion = llm_client.chat.completions.create(
+            model=configs.azure_llm.models[model_choice].deployment,
+            messages=messages,
+            temperature=configs.llm_hyperparams.temperature,
+            max_tokens=configs.llm_hyperparams.max_tokens,
+            top_p=configs.llm_hyperparams.top_p,
+            frequency_penalty=configs.llm_hyperparams.frequency_penalty,
+            presence_penalty=configs.llm_hyperparams.presence_penalty,
+            stop=configs.llm_hyperparams.stop,
+        )
+
+        return completion.choices[0].message.content
+
     except Exception as e:
         logging.error(f"Error in get_azure_non_rag_response: {str(e)}")
         raise Exception(f"Failed to get response: {str(e)}")

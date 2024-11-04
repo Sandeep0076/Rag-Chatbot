@@ -80,13 +80,8 @@ def handle_file_upload():
                     if is_image:
                         st.session_state.uploaded_image = uploaded_file
 
-                    # Initialize the selected model
-                    initialize_model(st.session_state.model_choice)
-
                     # Reset messages when a new file is uploaded
                     st.session_state.messages = []
-
-                    # st.experimental_rerun()  # Add this line to force a rerun
                 else:
                     st.error(f"File upload failed: {upload_response.text}")
 
@@ -177,7 +172,6 @@ def display_chat_interface():
                                     st.write(f"{i}. {neighbor}")
                 else:
                     st.error(f"Request failed: {chat_response.text}")
-
     else:
         st.warning("Please upload and process a file first")
 
@@ -199,10 +193,12 @@ def initialize_session_state():
         st.session_state.model_choice = "gpt_4o_mini"
     if "file_type" not in st.session_state:
         st.session_state.file_type = "PDF"
-    if "model_initialized" not in st.session_state:
-        st.session_state.model_initialized = False
     if "uploaded_image" not in st.session_state:
         st.session_state.uploaded_image = None
+
+
+def on_model_change():
+    st.session_state.model_choice = st.session_state.temp_model_choice
 
 
 def initialize_model(model_choice):
@@ -245,20 +241,14 @@ def main():
             cleanup_files()
             st.rerun()
 
-    # Model selection dropdown
-    new_model_choice = st.selectbox(
+    # Model selection dropdown - Fixed version
+    st.selectbox(
         "Select Model",
         options=st.session_state.available_models,
         index=st.session_state.available_models.index(st.session_state.model_choice),
-        key="model_select",
+        key="temp_model_choice",
+        on_change=on_model_change,
     )
-
-    # Check if a new model is selected or if the model hasn't been initialized yet
-    if (
-        new_model_choice != st.session_state.model_choice
-        or not st.session_state.model_initialized
-    ):
-        initialize_model(new_model_choice)
 
     handle_file_upload()
     display_chat_interface()

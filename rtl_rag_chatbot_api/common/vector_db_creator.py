@@ -1,9 +1,8 @@
+import logging
 import os
 from pathlib import Path
 from typing import List
 
-import chromadb
-from chromadb.config import Settings
 from llama_index.core import ServiceContext, SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.storage.storage_context import StorageContext
@@ -43,7 +42,7 @@ class VectorDbWrapper:
         text_data_folder_path,
         gcs_subfolder="file-embeddings",
         file_id=None,
-        chroma_db=None,
+        chroma_collection=None,
         is_image=False,
         username=None,
     ):
@@ -56,7 +55,7 @@ class VectorDbWrapper:
         self.embedding_model = self._init_embedding_model()
         self.gcs_subfolder = gcs_subfolder
         self.file_id = file_id
-        self.chroma_db = chroma_db
+        self.chroma_collection = chroma_collection
         self.documents = self._create_list_of_documents()
         self.is_image = is_image
         self.gcs_handler = gcs_handler
@@ -123,82 +122,53 @@ class VectorDbWrapper:
     def create_and_store_index(
         self,
         storage_folder: str = "./chroma_db",
-        collection_name: str = "RAG_CHATBOT",
+        collection_name: str = None,
         chunk_size: int = 400,
         chunk_overlap: int = 40,
     ) -> None:
-        """
-        Create and store a vector index for a RAG (Retrieval-Augmented Generation) chatbot using Chroma DB.
+        """Create and store a vector index using the provided collection."""
+        try:
+            # Use the provided collection
+            if not self.chroma_collection:
+                raise ValueError("ChromaDB collection not provided")
 
-        This method processes the documents stored in the instance, chunks them into nodes,
-        creates a vector index, and stores it in a persistent Chroma DB. The index can be
-        used later for efficient similarity searches in the RAG chatbot.
+            vector_store = ChromaVectorStore(chroma_collection=self.chroma_collection)
+            storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-        Args:
-            storage_folder (str, optional): The path where the Chroma DB will be stored.
-                Defaults to "./chroma_db".
-            collection_name (str, optional): The name of the collection in Chroma DB.
-                Defaults to "RAG_CHATBOT".
-            chunk_size (int, optional): The size of each text chunk when parsing documents.
-                Defaults to 400.
-            chunk_overlap (int, optional): The number of overlapping tokens between chunks.
-                Defaults to 40.
-
-        Returns:
-            None
-        """
-        if self.chroma_db:
-            db = self.chroma_db
-        else:
-            db = chromadb.PersistentClient(
-                path=storage_folder,
-                settings=Settings(allow_reset=True, is_persistent=True),
+            # Create service context
+            service_context = ServiceContext.from_defaults(
+                llm=self.llm_model, embed_model=self.embedding_model
             )
 
-        chroma_collection = db.get_or_create_collection(collection_name)
-        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+            node_parser = SimpleNodeParser.from_defaults(
+                chunk_size=chunk_size,
+                separator=" ",
+                chunk_overlap=chunk_overlap,
+                paragraph_separator="\n\n\n",
+                secondary_chunking_regex="[^,.;。？！]+[,.;。？！]?",
+                include_metadata=True,
+                include_prev_next_rel=True,
+            )
 
-        storage_context = StorageContext.from_defaults(vector_store=vector_store)
+            base_nodes = node_parser.get_nodes_from_documents(self.documents)
+            print(f"Created {len(base_nodes)} nodes from documents")
+            self.n_base_nodes = len(base_nodes)
 
-        # Always create the service_context
-        service_context = ServiceContext.from_defaults(
-            llm=self.llm_model, embed_model=self.embedding_model
-        )
+            # Create vector index
+            my_vector_index = VectorStoreIndex(
+                base_nodes,
+                service_context=service_context,
+                storage_context=storage_context,
+                show_progress=True,
+            )
 
-        node_parser = SimpleNodeParser.from_defaults(
-            chunk_size=chunk_size,
-            separator=" ",
-            chunk_overlap=chunk_overlap,
-            tokenizer=None,
-            paragraph_separator="\n\n\n",
-            chunking_tokenizer_fn=None,
-            secondary_chunking_regex="[^,.;。？！]+[,.;。？！]?",
-            callback_manager=None,
-            include_metadata=True,
-            include_prev_next_rel=True,
-        )
+            # Store configuration
+            my_vector_index.storage_context.persist(storage_folder)
+            print("Vector index created and stored successfully")
 
-        base_nodes = node_parser.get_nodes_from_documents(self.documents)
-
-        print(
-            "Done creating base_nodes from documents.",
-            f"The text was transformed into a total of {len(base_nodes)} nodes, i.e. chunks.",
-            "Now creating and storing VectorStoreIndex. This might take a while",
-        )
-        self.n_base_nodes = len(base_nodes)  # mlflow logging
-
-        # This will create all Chroma DB blobs and store them in /chroma_db
-        my_vector_index = VectorStoreIndex(
-            base_nodes,
-            service_context=service_context,
-            storage_context=storage_context,
-            show_progress=True,
-        )
-
-        # This will store Chroma DB config files (.jsons), required to
-        # load it again later
-        my_vector_index.storage_context.persist(storage_folder)
-        print("Done creating and storing Chroma DB artifacts")
+        except Exception as e:
+            logging.error(f"Error in create_and_store_index: {str(e)}")
+            raise
 
     def upload_all_files_in_folder(
         self,
