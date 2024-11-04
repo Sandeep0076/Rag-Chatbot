@@ -14,6 +14,33 @@ logger = logging.getLogger(__name__)
 
 
 class CleanupCoordinator:
+    """
+    Coordinates cleanup operations for ChromaDB instances and associated resources.
+
+    This class manages the cleanup of stale ChromaDB instances, local files, and database
+    resources based on configurable time thresholds. It implements a comprehensive cleanup
+    strategy that includes memory management, file system cleanup, and database maintenance.
+
+    Attributes:
+        config (Config): Configuration object containing cleanup settings:
+            - staleness_threshold_minutes (int): Time before resource is considered stale
+            - min_cleanup_interval (int): Minimum time between cleanup runs
+            - cleanup_interval_minutes (int): Scheduled cleanup interval
+        session_factory (Optional[Session]): SQLAlchemy session factory for database operations
+        chroma_manager (ChromaDBManager): Manager for ChromaDB instances
+        last_cleanup (datetime): Timestamp of last cleanup operation
+        cleanup_folders (List[str]): List of folders to clean ['chroma_db', 'local_data', 'processed_data']
+
+    Methods:
+        cleanup(): Main cleanup method that coordinates all cleanup operations
+        _should_cleanup() -> bool: Checks if cleanup should run based on time intervals
+        _cleanup_chroma_instance(file_id: str): Cleans up specific ChromaDB instance
+        _get_stale_file_ids() -> List[str]: Identifies stale file resources
+        _cleanup_folder(folder: str): Cleans up specific folder while preserving active resources
+        _is_stale_instance(file_id: str) -> bool: Checks if specific instance is stale
+
+    """
+
     def __init__(self, config: Config, session_factory: Optional[Session] = None):
         self.config = config
         self.session_factory = session_factory

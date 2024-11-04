@@ -2,7 +2,6 @@
 Main FastAPI application for the RAG PDF API.
 """
 
-import gc
 import json
 import logging
 import os
@@ -281,6 +280,34 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
 async def create_embeddings(
     request: EmbeddingCreationRequest, current_user=Depends(get_current_user)
 ):
+    """
+    Creates embeddings for an uploaded file using Azure or Google Gemini models.
+
+    This endpoint handles the generation and storage of embeddings for document processing.
+    It checks if embeddings already exist, creates new ones if needed, and updates the file status.
+
+    Args:
+        request (EmbeddingCreationRequest): Request body containing:
+            - file_id (str): Unique identifier for the uploaded file
+            - is_image (bool): Flag indicating if the file is an image
+        current_user: Authenticated user information (handled by dependency)
+
+    Returns:
+        dict: Dictionary containing:
+            - message (str): Status message about embedding creation
+            - info (dict, optional): Existing embedding information if already present
+
+    Raises:
+        HTTPException:
+            - 404: If file info or source file not found
+            - 500: For embedding creation or storage errors
+
+    Notes:
+        - Embeddings are stored using ChromaDB
+        - Status is tracked in GCS file metadata
+        - Supports both text and image files
+    """
+
     try:
         embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
@@ -324,6 +351,35 @@ async def create_embeddings(
 
 @app.post("/file/chat")
 async def chat(query: Query, current_user=Depends(get_current_user)):
+    """
+    Process chat queries against document content using specified language models.
+
+    Handles multiple model types (Azure LLM, Gemini) and data formats (text, tabular).
+    Automatically initializes or switches models based on request parameters.
+
+    Args:
+        query (Query): Request body containing:
+            - text (str): User's query text
+            - file_id (str): ID of the file to query against
+            - model_choice (str): Selected model (e.g., 'gpt_4o_mini', 'gemini-pro')
+        current_user: Authenticated user information (handled by dependency)
+
+    Returns:
+        dict: Response containing:
+            - response (str): Model's answer to the query
+            - For tabular data: Returns formatted markdown table if applicable
+
+    Raises:
+        HTTPException:
+            - 404: If file not found or model not initialized
+            - 500: For model initialization or query processing errors
+
+    Notes:
+        - Lazily initializes models on first use
+        - Handles model switching between Azure and Gemini
+        - Supports both RAG for documents and SQL querying for tabular data
+        - Maintains model instances in memory for subsequent queries
+    """
     try:
         model = initialized_models.get(query.file_id)
         is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
@@ -516,53 +572,38 @@ async def analyze_image_endpoint(
         )
 
 
-# Function to offload the ChromaDB instance for a given file_id
-def offload_chromadb_instance(file_id: str) -> None:
-    """
-    Dereferences the Chroma DB instance associated with the given `file_id`
-    from the dictionary of Chroma DB instances, `initialized_models`. Invokes
-    garbage collection manually after dereferencing.
-    """
-    if file_id in initialized_models:
-        # dereference the ChromaDB instance
-        initialized_models[file_id] = None
-        logging.info(f"ChromaDB instance for {file_id} offloaded.")
-
-        # force garbage collection
-        gc.collect()
-        logging.info(f"Memory cleanup attempted for {file_id}.")
-    else:
-        logging.warning(
-            f"Offloading ChromaDB instance for {file_id} requested, but model is not initialized. "
-            "This method might have been called from the scheduler and the model is not initialized "
-            "due to a re-deployment, e.g."
-        )
-
-
 @app.delete("/chroma/delete")
 async def delete_chroma_embeddings(
     request: ChromaDeleteRequest, current_user=Depends(get_current_user)
 ):
-    """Delete Chroma DB embeddings for a specific file ID."""
+    """
+    Delete ChromaDB embeddings and associated resources for a specific file.
+
+    Handles complete cleanup using the unified cleanup approach through
+    CleanupCoordinator.
+
+    Args:
+        request (ChromaDeleteRequest): Request body containing:
+            - file_id (str): Unique identifier of file whose embeddings should be deleted
+        current_user: Authenticated user information (handled by dependency)
+
+    Returns:
+        dict: Response containing:
+            - message (str): Success message
+            - deleted_path (str): Path of deleted ChromaDB files
+
+    Raises:
+        HTTPException:
+            - 500: If deletion fails for any reason
+    """
     file_id = request.file_id
     try:
-        # Remove from initialized models
-        if file_id in initialized_models:
-            del initialized_models[file_id]
-            # Remove the file from initialized_models if it exists
-            offload_chromadb_instance(file_id=file_id)
-
-        # Clean up local files
-        chroma_db_path = f"./chroma_db/{file_id}"
-        if os.path.exists(chroma_db_path):
-            shutil.rmtree(chroma_db_path)
-
-        # Cleanup from ChromaDBManager
-        chroma_manager.cleanup_instance(file_id)
+        cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
+        cleanup_coordinator.cleanup_chroma_instance(file_id)
 
         return {
             "message": f"Chroma DB embeddings for file_id {file_id} have been deleted successfully",
-            "deleted_path": chroma_db_path,
+            "deleted_path": f"./chroma_db/{file_id}",
         }
     except Exception as e:
         raise HTTPException(

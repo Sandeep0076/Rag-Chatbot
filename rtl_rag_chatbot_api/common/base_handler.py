@@ -70,6 +70,22 @@ class BaseRAGHandler:
     def create_and_store_embeddings(
         self, chunks: List[str], file_id: str, subfolder: str
     ) -> str:
+        """
+        Create embeddings for text chunks and store them in ChromaDB with batch processing.
+
+        Processes text chunks into embeddings while handling token limits and batch sizes.
+        Supports both Azure and Gemini embedding models with different token limits.
+        Implements automatic chunk splitting for oversized text segments.
+
+        Args:
+            chunks (List[str]): List of text chunks to be embedded
+            file_id (str): Unique identifier for the file being processed
+            subfolder (str): Storage subfolder ('azure' or 'google') determining model type
+
+        Returns:
+            str: Status string ('completed' on success)
+
+        """
         try:
             collection = self.chroma_manager.get_collection(
                 file_id, subfolder, self.collection_name
