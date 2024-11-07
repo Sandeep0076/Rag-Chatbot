@@ -338,6 +338,9 @@ async def create_embeddings(
             request.file_id, file_info.get("is_image", False), temp_file_path
         )
 
+        if result["status"] == "error":
+            return JSONResponse(status_code=400, content={"message": result["message"]})
+
         # Update file info
         gcs_handler.update_file_info(
             request.file_id, {"embeddings_status": "completed"}
@@ -346,7 +349,12 @@ async def create_embeddings(
 
     except Exception as e:
         logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={
+                "message": "An unexpected error occurred while processing your file. Please try again later."
+            },
+        )
 
 
 @app.post("/file/chat")
@@ -616,45 +624,81 @@ async def delete_chroma_embeddings(
 async def delete_files(
     request: FileDeleteRequest, current_user=Depends(get_current_user)
 ):
-    """Delete embeddings and files."""
+    """Delete embeddings and files from both local storage and GCS."""
     file_ids = request.file_ids
     deleted_files = []
     errors = []
 
-    for file_id in file_ids:
-        try:
-            # Clean up ChromaDB instances
-            chroma_manager.cleanup_instance(file_id)
+    try:
+        for file_id in file_ids:
+            try:
+                # Verify if files exist first
+                chroma_db_path = f"./chroma_db/{file_id}"
+                if not os.path.exists(chroma_db_path):
+                    errors.append(
+                        {"file_id": file_id, "error": "File does not exist locally"}
+                    )
+                    continue
 
-            # Delete local files
-            chroma_db_path = f"./chroma_db/{file_id}"
-            if os.path.exists(chroma_db_path):
+                # Handle ChromaDB cleanup first
+                try:
+                    chroma_manager.cleanup_old_instances()  # Use the correct method
+                    if file_id in initialized_models:
+                        del initialized_models[file_id]
+                except Exception as e:
+                    errors.append(
+                        {
+                            "file_id": file_id,
+                            "error": f"ChromaDB cleanup failed: {str(e)}",
+                        }
+                    )
+                    continue
+
+                # Delete local files
                 shutil.rmtree(chroma_db_path)
 
-            # Delete from GCS
-            folder_prefix = f"file-embeddings/{file_id}/"
-            blobs = gcs_handler.bucket.list_blobs(prefix=folder_prefix)
-            for blob in blobs:
-                blob.delete()
+                # Delete from GCS with proper error handling
+                try:
+                    folder_prefix = f"file-embeddings/{file_id}/"
+                    blobs = list(gcs_handler.bucket.list_blobs(prefix=folder_prefix))
+                    if not blobs:
+                        errors.append(
+                            {"file_id": file_id, "error": "No files found in GCS"}
+                        )
+                        continue
 
-            # Remove from initialized_models
-            if file_id in initialized_models:
-                del initialized_models[file_id]
+                    for blob in blobs:
+                        blob.delete()
+                except Exception as e:
+                    errors.append(
+                        {"file_id": file_id, "error": f"GCS deletion failed: {str(e)}"}
+                    )
+                    continue
 
-            deleted_files.append(file_id)
-        except Exception as e:
-            errors.append({"file_id": file_id, "error": str(e)})
+                deleted_files.append(file_id)
+                logging.info(f"Successfully deleted file {file_id}")
 
-    if errors:
+            except Exception as e:
+                errors.append({"file_id": file_id, "error": str(e)})
+
+        # Prepare response based on results
+        if not deleted_files and errors:
+            return JSONResponse(
+                status_code=500,
+                content={"message": "Failed to delete any files", "errors": errors},
+            )
+
         return {
-            "message": "Some files could not be deleted",
+            "message": "File deletion completed",
             "deleted_files": deleted_files,
-            "errors": errors,
+            "errors": errors if errors else None,
         }
-    return {
-        "message": "All files and their embeddings have been deleted successfully",
-        "deleted_files": deleted_files,
-    }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected error occurred during deletion process: {str(e)}",
+        )
 
 
 @app.post("/chat/gemini")

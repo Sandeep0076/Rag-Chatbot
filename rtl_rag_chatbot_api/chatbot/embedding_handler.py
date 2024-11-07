@@ -156,7 +156,19 @@ class EmbeddingHandler:
 
             base_handler = BaseRAGHandler(self.configs, self.gcs_handler)
             text = base_handler.extract_text_from_file(temp_file_path)
+            # Check if the text starts with "ERROR:"
+            if text.startswith("ERROR:"):
+                return {
+                    "message": text[7:],  # Remove "ERROR:" prefix
+                    "status": "error",
+                }
+
             chunks = base_handler.split_text(text)
+            if not chunks:
+                return {
+                    "message": "No processable text found in the document. Please try a different file.",
+                    "status": "error",
+                }
 
             # Log the chunk sizes for debugging
             for i, chunk in enumerate(chunks):
@@ -202,7 +214,10 @@ class EmbeddingHandler:
             logging.error(
                 f"Error in create_and_upload_embeddings: {str(e)}", exc_info=True
             )
-            raise
+            return {
+                "message": "An error occurred while processing your file. Please try again or use a different file.",
+                "status": "error",
+            }
 
     def _create_azure_embeddings(
         self, file_id: str, chunks: List[str], api_key: str, username: str
