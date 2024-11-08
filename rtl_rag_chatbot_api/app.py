@@ -5,7 +5,6 @@ Main FastAPI application for the RAG PDF API.
 import json
 import logging
 import os
-import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -34,9 +33,8 @@ from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
 from rtl_rag_chatbot_api.common.models import (
     ChatRequest,
-    ChromaDeleteRequest,
+    DeleteRequest,
     EmbeddingCreationRequest,
-    FileDeleteRequest,
     FileUploadResponse,
     NeighborsQuery,
     Query,
@@ -580,125 +578,58 @@ async def analyze_image_endpoint(
         )
 
 
-@app.delete("/chroma/delete")
-async def delete_chroma_embeddings(
-    request: ChromaDeleteRequest, current_user=Depends(get_current_user)
+@app.delete("/delete")
+async def delete_resources(
+    request: DeleteRequest, current_user=Depends(get_current_user)
 ):
     """
-    Delete ChromaDB embeddings and associated resources for a specific file.
-
-    Handles complete cleanup using the unified cleanup approach through
-    CleanupCoordinator.
+    Delete ChromaDB embeddings and associated resources for one or multiple files.
 
     Args:
-        request (ChromaDeleteRequest): Request body containing:
-            - file_id (str): Unique identifier of file whose embeddings should be deleted
-        current_user: Authenticated user information (handled by dependency)
+        request (DeleteRequest): Request body containing:
+            - file_ids (Union[str, List[str]]): Single file ID or list of file IDs
+            - include_gcs (bool): Whether to include GCS cleanup (default: False)
+        current_user: Authenticated user information
 
     Returns:
-        dict: Response containing:
-            - message (str): Success message
-            - deleted_path (str): Path of deleted ChromaDB files
-
-    Raises:
-        HTTPException:
-            - 500: If deletion fails for any reason
+        dict: Response containing status for each file ID
     """
-    file_id = request.file_id
     try:
-        cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
-        cleanup_coordinator.cleanup_chroma_instance(file_id)
-
-        return {
-            "message": f"Chroma DB embeddings for file_id {file_id} have been deleted successfully",
-            "deleted_path": f"./chroma_db/{file_id}",
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"An error occurred while deleting Chroma DB embeddings: {str(e)}",
+        # Convert single file_id to list for consistent processing
+        file_ids = (
+            [request.file_ids]
+            if isinstance(request.file_ids, str)
+            else request.file_ids
         )
 
-
-@app.delete("/files")
-async def delete_files(
-    request: FileDeleteRequest, current_user=Depends(get_current_user)
-):
-    """Delete embeddings and files from both local storage and GCS."""
-    file_ids = request.file_ids
-    deleted_files = []
-    errors = []
-
-    try:
+        results = {}
         for file_id in file_ids:
             try:
-                # Verify if files exist first
-                chroma_db_path = f"./chroma_db/{file_id}"
-                if not os.path.exists(chroma_db_path):
-                    errors.append(
-                        {"file_id": file_id, "error": "File does not exist locally"}
-                    )
-                    continue
-
-                # Handle ChromaDB cleanup first
-                try:
-                    chroma_manager.cleanup_old_instances()  # Use the correct method
-                    if file_id in initialized_models:
-                        del initialized_models[file_id]
-                except Exception as e:
-                    errors.append(
-                        {
-                            "file_id": file_id,
-                            "error": f"ChromaDB cleanup failed: {str(e)}",
-                        }
-                    )
-                    continue
-
-                # Delete local files
-                shutil.rmtree(chroma_db_path)
-
-                # Delete from GCS with proper error handling
-                try:
-                    folder_prefix = f"file-embeddings/{file_id}/"
-                    blobs = list(gcs_handler.bucket.list_blobs(prefix=folder_prefix))
-                    if not blobs:
-                        errors.append(
-                            {"file_id": file_id, "error": "No files found in GCS"}
-                        )
-                        continue
-
-                    for blob in blobs:
-                        blob.delete()
-                except Exception as e:
-                    errors.append(
-                        {"file_id": file_id, "error": f"GCS deletion failed: {str(e)}"}
-                    )
-                    continue
-
-                deleted_files.append(file_id)
-                logging.info(f"Successfully deleted file {file_id}")
-
+                cleanup_coordinator = CleanupCoordinator(
+                    configs, SessionLocal, gcs_handler
+                )
+                cleanup_coordinator.cleanup_chroma_instance(
+                    file_id, include_gcs=request.include_gcs
+                )
+                results[file_id] = "Success"
             except Exception as e:
-                errors.append({"file_id": file_id, "error": str(e)})
+                results[file_id] = f"Error: {str(e)}"
+                logging.error({"file_id": file_id, "error": str(e)})
 
-        # Prepare response based on results
-        if not deleted_files and errors:
-            return JSONResponse(
-                status_code=500,
-                content={"message": "Failed to delete any files", "errors": errors},
-            )
+        # If only one file_id was provided, maintain original response format
+        if isinstance(request.file_ids, str):
+            if results[request.file_ids] == "Success":
+                return {
+                    "message": f"ChromaDB embeddings for file_id {request.file_ids} have been deleted successfully"
+                }
+            else:
+                raise HTTPException(status_code=500, detail=results[request.file_ids])
 
-        return {
-            "message": "File deletion completed",
-            "deleted_files": deleted_files,
-            "errors": errors if errors else None,
-        }
+        # For multiple file_ids, return status of all operations
+        return {"results": results}
 
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"An unexpected error occurred during deletion process: {str(e)}",
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/chat/gemini")

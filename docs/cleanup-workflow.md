@@ -13,20 +13,34 @@ This document details the automatic cleanup system implemented in the RAG applic
 
 
 ### Default Values and Their Purpose
-1. **Cleanup Interval (240 minutes / 4 hours)**
-   - Controls automatic cleanup frequency
-   - Balances resource usage and system performance
-   - Adjustable for different workload patterns
+1. **Cleanup Interval (60 minutes / 1 hours)**
+   - This is how often the scheduler wakes up to check
+   - Like an alarm clock ringing every hour
+
 
 2. **Staleness Threshold (240 minutes / 4 hours)**
-   - Determines file inactivity period
-   - Marks files for cleanup after threshold
-   - Configurable based on usage patterns
+   - How long a file needs to be untouched to be considered "stale"
+   - Files not accessed for 4+ hours are candidates for cleanup
 
-3. **Minimum Cleanup Interval (15 minutes)**
-   - Prevents cleanup operation clustering
-   - Protects system from cleanup overhead
-   - Important for manual cleanup triggers
+3. **Minimum Cleanup Interval (30 minutes)**
+   - Minimum time required between two cleanup attempts
+   - Prevents too frequent cleanups even if requested
+
+
+### Example
+Time 0:00 -> Application starts
+             ↓
+
+Time 1:00 -> First scheduler wake-up
+             Checks last_cleanup time
+
+             If (current_time - last_cleanup) ≥ 30 mins
+                → Performs cleanup
+             Updates last_cleanup timestamp
+             ↓
+
+Time 2:00 -> Next scheduler wake-up
+             Same process repeats
 
 ## System Components
 
@@ -44,24 +58,6 @@ project/
 └── chroma_manager.py        # Database management
 ```
 
-## Setup Process
-
-### 1. Initial Configuration
-```python
-cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
-```
-- Loads environment variables
-- Establishes database connections
-- Initializes logging system
-
-### 2. Scheduler Setup
-```python
-scheduler.add_job(
-    cleanup_coordinator.cleanup,
-    trigger="interval",
-    minutes=configs.cleanup.cleanup_interval_minutes
-)
-```
 
 ## Operation Workflow
 
@@ -100,72 +96,51 @@ scheduler.add_job(
    └── Marked for removal
    ```
 
-## Cleanup Process
+##
 
-### Trigger Methods
-1. **Automatic Cleanup**
-   ```python
-   if time_since_last_cleanup >= cleanup_interval_minutes:
-       initiate_cleanup()
-   ```
+# DELETE /files Endpoint
 
-2. **Manual Cleanup**
-   ```http
-   POST /file/cleanup
-   ```
+## Overview
+Deletes files and their associated embeddings from **both local storage and Google Cloud Storage (GCS)**. This endpoint handles batch deletion requests and provides detailed feedback on the success or failure of each deletion operation.
 
-### Cleanup Steps
-1. **Time Verification**
-   ```plaintext
-   ├── Check last cleanup timestamp
-   ├── Verify minimum interval
-   └── Check staleness thresholds
-   ```
-
-2. **File Analysis**
-   ```plaintext
-   ├── Scan directories
-   ├── Check access times
-   └── List stale files
-   ```
-
-3. **ChromaDB Cleanup**
-   ```plaintext
-   ├── Close inactive connections
-   ├── Remove database files
-   └── Clear memory cache
-   ```
-
-4. **Directory Cleanup**
-   ```plaintext
-   ├── Remove temporary files
-   ├── Clean processed data
-   └── Delete empty directories
-   ```
-
-5. **Logging and Updates**
-   ```plaintext
-   ├── Record cleanup actions
-   ├── Update timestamps
-   └── Log statistics
-   ```
+## Request
 
 
 
-### Debug Process
-1. **Check Logs**
-   ```bash
-   tail -f cleanup.log
-   ```
+### Request Body
+```json
+{
+    "file_ids": ["string"]  // Array of file IDs to delete
+}
+```
 
-2. **Manual Testing**
-   ```http
-   POST /file/cleanup
-   GET /cleanup/status
-   ```
+## Response
+
+### Success Response
+```json
+{
+    "message": "File deletion completed",
+    "deleted_files": ["string"],  // Array of successfully deleted file IDs
+    "errors": [                   // Optional array of errors
+        {
+            "file_id": "string",
+            "error": "string"
+        }
+    ]
+}
+```
 
 
 
+## Deletion Process
 
-## Conclusion
-The configurable cleanup system ensures efficient resource management while maintaining system stability and data integrity. Regular monitoring, proper configuration, and maintenance ensure optimal performance.
+1. **ChromaDB Cleanup**
+   - Cleans up ChromaDB instances from memory
+   - Removes initialized models
+
+2. **Local Storage Cleanup**
+   - Deletes the ChromaDB directory for each file
+   - Path pattern: `./chroma_db/{file_id}`
+
+3. **GCS Cleanup**
+   - Removes all blobs with prefix `file-embeddings/{file_id}/`

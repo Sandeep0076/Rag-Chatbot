@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -57,5 +57,6 @@ class ChatRequest(BaseModel):
     message: str
 
 
-class ChromaDeleteRequest(BaseModel):
-    file_id: str
+class DeleteRequest(BaseModel):
+    file_ids: Union[str, List[str]]  # Can be single ID or list of IDs
+    include_gcs: bool = False

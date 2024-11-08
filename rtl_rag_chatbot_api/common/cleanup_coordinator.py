@@ -41,10 +41,17 @@ class CleanupCoordinator:
 
     """
 
-    def __init__(self, config: Config, session_factory: Optional[Session] = None):
+    def __init__(
+        self,
+        config: Config,
+        session_factory: Optional[Session] = None,
+        gcs_handler=None,
+    ):
         self.config = config
         self.session_factory = session_factory
         self.chroma_manager = ChromaDBManager()
+        self.gcs_handler = gcs_handler
+        # self.gcs_handler = GCSHandler(config)
         self.last_cleanup = datetime.now()
         # Use config values instead of hardcoded values
         self.cleanup_threshold = timedelta(
@@ -59,20 +66,6 @@ class CleanupCoordinator:
         """Check if enough time has passed since last cleanup."""
         time_since_cleanup = datetime.now() - self.last_cleanup
         return time_since_cleanup >= self.min_cleanup_interval
-
-    def _cleanup_chroma_instance(self, file_id: str) -> None:
-        """Cleanup a specific ChromaDB instance and its files."""
-        try:
-            # Cleanup from ChromaDB manager
-            self.chroma_manager.cleanup_instance(file_id)
-
-            # Remove local ChromaDB files
-            chroma_path = f"./chroma_db/{file_id}"
-            if os.path.exists(chroma_path):
-                shutil.rmtree(chroma_path)
-            logger.info(f"Cleaned up ChromaDB instance and files for {file_id}")
-        except Exception as e:
-            logger.error(f"Error cleaning up ChromaDB instance {file_id}: {str(e)}")
 
     def _get_stale_file_ids(self) -> List[str]:
         """Get list of file IDs that haven't been accessed in threshold period."""
@@ -93,24 +86,6 @@ class CleanupCoordinator:
             logger.error(f"Error getting stale file IDs: {str(e)}")
         return stale_files
 
-    def _cleanup_folder(self, folder: str) -> None:
-        """Clean up a specific folder while preserving important files."""
-        try:
-            folder_path = os.path.join(os.getcwd(), folder)
-            if os.path.exists(folder_path):
-                for item in os.listdir(folder_path):
-                    item_path = os.path.join(folder_path, item)
-                    # Skip if the item is a currently active ChromaDB instance
-                    if folder == "chroma_db" and not self._is_stale_instance(item):
-                        continue
-                    if os.path.isfile(item_path):
-                        os.unlink(item_path)
-                    elif os.path.isdir(item_path):
-                        shutil.rmtree(item_path)
-                logger.info(f"Cleaned up {folder}")
-        except Exception as e:
-            logger.error(f"Error cleaning up {folder}: {str(e)}")
-
     def _is_stale_instance(self, file_id: str) -> bool:
         """Check if a ChromaDB instance is stale."""
         try:
@@ -122,27 +97,66 @@ class CleanupCoordinator:
         except Exception:
             return False
 
+    def cleanup_chroma_instance(self, file_id: str, include_gcs: bool = False) -> None:
+        """
+        Cleanup ChromaDB instance and its files.
+        Args:
+            file_id: The ID of the file to cleanup
+            include_gcs: Whether to also cleanup GCS storage
+        """
+        try:
+            # Clean up local files
+            chroma_path = f"./chroma_db/{file_id}"
+            if os.path.exists(chroma_path):
+                shutil.rmtree(chroma_path)
+            logging.info(f"Cleaned up local ChromaDB instance and files for {file_id}")
+
+            # Clean up GCS if requested
+            if include_gcs:
+                try:
+                    self.gcs_handler.delete_embeddings(file_id)
+                    logging.info(f"Cleaned up GCS embeddings for {file_id}")
+                except Exception as e:
+                    logging.error(
+                        f"Error cleaning up GCS embeddings for {file_id}: {str(e)}"
+                    )
+
+        except Exception as e:
+            logging.error(f"Error cleaning up ChromaDB instance {file_id}: {str(e)}")
+
+    def _cleanup_folder(self, folder: str) -> None:
+        """Clean up a specific local folder."""
+        try:
+            folder_path = os.path.join(os.getcwd(), folder)
+            if os.path.exists(folder_path):
+                for item in os.listdir(folder_path):
+                    item_path = os.path.join(folder_path, item)
+                    if os.path.isfile(item_path):
+                        os.unlink(item_path)
+                    elif os.path.isdir(item_path):
+                        shutil.rmtree(item_path)
+                logging.info(f"Cleaned up local folder: {folder}")
+        except Exception as e:
+            logging.error(f"Error cleaning up folder {folder}: {str(e)}")
+
     def cleanup(self) -> None:
-        """Main cleanup method that coordinates all cleanup operations."""
+        """Periodic cleanup method - only cleans local resources."""
         if not self._should_cleanup():
-            logger.info("Skipping cleanup - minimum interval not reached")
+            logging.info("Skipping cleanup - minimum interval not reached")
             return
 
         try:
-            logger.info("Starting coordinated cleanup")
+            logging.info("Starting local cleanup")
 
-            # Get stale file IDs
-            stale_files = self._get_stale_file_ids()
-
-            # Cleanup stale ChromaDB instances and their files
-            for file_id in stale_files:
-                self._cleanup_chroma_instance(file_id)
-
-            # Clean up other folders
+            # Clean up local folders
             for folder in self.cleanup_folders:
-                self._cleanup_folder(folder)
+                if folder == "chroma_db":
+                    # For chroma_db, need to clean both files and memory instances
+                    self.chroma_manager.cleanup_old_instances()
+                else:
+                    self._cleanup_folder(folder)
 
             self.last_cleanup = datetime.now()
-            logger.info("Coordinated cleanup completed successfully")
+            logging.info("Local cleanup completed successfully")
         except Exception as e:
-            logger.error(f"Error in coordinated cleanup: {str(e)}")
+            logging.error(f"Error in local cleanup: {str(e)}")
