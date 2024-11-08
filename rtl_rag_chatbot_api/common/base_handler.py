@@ -70,6 +70,22 @@ class BaseRAGHandler:
     def create_and_store_embeddings(
         self, chunks: List[str], file_id: str, subfolder: str
     ) -> str:
+        """
+        Create embeddings for text chunks and store them in ChromaDB with batch processing.
+
+        Processes text chunks into embeddings while handling token limits and batch sizes.
+        Supports both Azure and Gemini embedding models with different token limits.
+        Implements automatic chunk splitting for oversized text segments.
+
+        Args:
+            chunks (List[str]): List of text chunks to be embedded
+            file_id (str): Unique identifier for the file being processed
+            subfolder (str): Storage subfolder ('azure' or 'google') determining model type
+
+        Returns:
+            str: Status string ('completed' on success)
+
+        """
         try:
             collection = self.chroma_manager.get_collection(
                 file_id, subfolder, self.collection_name
@@ -174,12 +190,27 @@ class BaseRAGHandler:
 
             if word_count == 0:
                 logging.info("pdfminer failed to extract text. Attempting OCR...")
-                images = convert_from_path(file_path)
-                text = ""
-                for i, image in enumerate(images):
-                    logging.info(f"Processing page {i+1}")
-                    text += pytesseract.image_to_string(image)
-                word_count = len(text.split())
+                try:
+                    images = convert_from_path(file_path)
+                    text = ""
+                    for i, image in enumerate(images):
+                        logging.info(f"Processing page {i+1}")
+                        text += pytesseract.image_to_string(image)
+                    word_count = len(text.split())
+
+                    if word_count == 0:
+                        return (
+                            "ERROR: Unable to extract text from this PDF. The file might be scanned,"
+                            "corrupted, or password-protected. "
+                            "Please try a different PDF file."
+                        )
+
+                except Exception as ocr_error:
+                    logging.error(f"OCR extraction failed: {str(ocr_error)}")
+                    return (
+                        "ERROR: Unable to process this PDF. The file might be corrupted or in an unsupported format. "
+                        "Please try a different PDF file."
+                    )
 
             logging.info(
                 f"Text extraction completed successfully. Word count: {word_count}"
@@ -187,7 +218,7 @@ class BaseRAGHandler:
             return text
         except Exception as e:
             logging.error(f"Error in extract_text_from_pdf: {str(e)}")
-            raise
+            return "ERROR: Unable to read this PDF file. Please ensure it's a valid PDF and try again."
 
     def split_text(self, text: str) -> List[str]:
         """Split text into chunks based on token limits."""

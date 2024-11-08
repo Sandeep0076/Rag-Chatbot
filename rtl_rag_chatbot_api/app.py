@@ -2,11 +2,9 @@
 Main FastAPI application for the RAG PDF API.
 """
 
-import gc
 import json
 import logging
 import os
-import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -32,11 +30,11 @@ from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
+from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
 from rtl_rag_chatbot_api.common.models import (
     ChatRequest,
-    ChromaDeleteRequest,
+    DeleteRequest,
     EmbeddingCreationRequest,
-    FileDeleteRequest,
     FileUploadResponse,
     NeighborsQuery,
     Query,
@@ -44,7 +42,6 @@ from rtl_rag_chatbot_api.common.models import (
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
-from rtl_rag_chatbot_api.common.scheduled_tasks import offload_chromadb_embeddings
 from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
 
 # from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
@@ -110,17 +107,21 @@ Note: File storage in GCP has been removed from this version.
 
 @asynccontextmanager
 async def start_scheduler(app: FastAPI):
+    cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
     scheduler = BackgroundScheduler()
     scheduler.configure(logger=logging.getLogger("apscheduler"))
+
+    # Use config value for interval
     scheduler.add_job(
-        id="job1",
-        func=offload_chromadb_embeddings,
-        args=[SessionLocal],
+        cleanup_coordinator.cleanup,
         trigger="interval",
-        minutes=15,
+        minutes=configs.cleanup.cleanup_interval_minutes,  # Use configured interval
+        id="cleanup_job",
     )
+
     scheduler.start()
     yield
+    scheduler.shutdown()
 
 
 app = FastAPI(
@@ -277,6 +278,34 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
 async def create_embeddings(
     request: EmbeddingCreationRequest, current_user=Depends(get_current_user)
 ):
+    """
+    Creates embeddings for an uploaded file using Azure or Google Gemini models.
+
+    This endpoint handles the generation and storage of embeddings for document processing.
+    It checks if embeddings already exist, creates new ones if needed, and updates the file status.
+
+    Args:
+        request (EmbeddingCreationRequest): Request body containing:
+            - file_id (str): Unique identifier for the uploaded file
+            - is_image (bool): Flag indicating if the file is an image
+        current_user: Authenticated user information (handled by dependency)
+
+    Returns:
+        dict: Dictionary containing:
+            - message (str): Status message about embedding creation
+            - info (dict, optional): Existing embedding information if already present
+
+    Raises:
+        HTTPException:
+            - 404: If file info or source file not found
+            - 500: For embedding creation or storage errors
+
+    Notes:
+        - Embeddings are stored using ChromaDB
+        - Status is tracked in GCS file metadata
+        - Supports both text and image files
+    """
+
     try:
         embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
@@ -307,6 +336,9 @@ async def create_embeddings(
             request.file_id, file_info.get("is_image", False), temp_file_path
         )
 
+        if result["status"] == "error":
+            return JSONResponse(status_code=400, content={"message": result["message"]})
+
         # Update file info
         gcs_handler.update_file_info(
             request.file_id, {"embeddings_status": "completed"}
@@ -315,11 +347,45 @@ async def create_embeddings(
 
     except Exception as e:
         logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={
+                "message": "An unexpected error occurred while processing your file. Please try again later."
+            },
+        )
 
 
 @app.post("/file/chat")
 async def chat(query: Query, current_user=Depends(get_current_user)):
+    """
+    Process chat queries against document content using specified language models.
+
+    Handles multiple model types (Azure LLM, Gemini) and data formats (text, tabular).
+    Automatically initializes or switches models based on request parameters.
+
+    Args:
+        query (Query): Request body containing:
+            - text (str): User's query text
+            - file_id (str): ID of the file to query against
+            - model_choice (str): Selected model (e.g., 'gpt_4o_mini', 'gemini-pro')
+        current_user: Authenticated user information (handled by dependency)
+
+    Returns:
+        dict: Response containing:
+            - response (str): Model's answer to the query
+            - For tabular data: Returns formatted markdown table if applicable
+
+    Raises:
+        HTTPException:
+            - 404: If file not found or model not initialized
+            - 500: For model initialization or query processing errors
+
+    Notes:
+        - Lazily initializes models on first use
+        - Handles model switching between Azure and Gemini
+        - Supports both RAG for documents and SQL querying for tabular data
+        - Maintains model instances in memory for subsequent queries
+    """
     try:
         model = initialized_models.get(query.file_id)
         is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
@@ -413,14 +479,11 @@ async def get_available_models(current_user=Depends(get_current_user)):
 
 
 @app.post("/file/cleanup")
-async def cleanup_files(current_user=Depends(get_current_user)):
-    """
-    Endpoint to clean-up local files in chroma_db and local_data folders,
-    as well as cache files in the project.
-    """
+async def manual_cleanup(current_user=Depends(get_current_user)):
+    """Endpoint to manually trigger cleanup."""
     try:
-        gcs_handler = GCSHandler(configs)
-        gcs_handler.cleanup_local_files()
+        cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
+        cleanup_coordinator.cleanup()
         return {"status": "Cleanup completed successfully"}
     except Exception as e:
         raise HTTPException(
@@ -515,104 +578,58 @@ async def analyze_image_endpoint(
         )
 
 
-# Function to offload the ChromaDB instance for a given file_id
-def offload_chromadb_instance(file_id: str) -> None:
-    """
-    Dereferences the Chroma DB instance associated with the given `file_id`
-    from the dictionary of Chroma DB instances, `initialized_models`. Invokes
-    garbage collection manually after dereferencing.
-    """
-    if file_id in initialized_models:
-        # dereference the ChromaDB instance
-        initialized_models[file_id] = None
-        logging.info(f"ChromaDB instance for {file_id} offloaded.")
-
-        # force garbage collection
-        gc.collect()
-        logging.info(f"Memory cleanup attempted for {file_id}.")
-    else:
-        logging.warning(
-            f"Offloading ChromaDB instance for {file_id} requested, but model is not initialized. "
-            "This method might have been called from the scheduler and the model is not initialized "
-            "due to a re-deployment, e.g."
-        )
-
-
-@app.delete("/chroma/delete")
-async def delete_chroma_embeddings(
-    request: ChromaDeleteRequest, current_user=Depends(get_current_user)
+@app.delete("/delete")
+async def delete_resources(
+    request: DeleteRequest, current_user=Depends(get_current_user)
 ):
-    """Delete Chroma DB embeddings for a specific file ID."""
-    file_id = request.file_id
+    """
+    Delete ChromaDB embeddings and associated resources for one or multiple files.
+
+    Args:
+        request (DeleteRequest): Request body containing:
+            - file_ids (Union[str, List[str]]): Single file ID or list of file IDs
+            - include_gcs (bool): Whether to include GCS cleanup (default: False)
+        current_user: Authenticated user information
+
+    Returns:
+        dict: Response containing status for each file ID
+    """
     try:
-        # Remove from initialized models
-        if file_id in initialized_models:
-            del initialized_models[file_id]
-            # Remove the file from initialized_models if it exists
-            offload_chromadb_instance(file_id=file_id)
-
-        # Clean up local files
-        chroma_db_path = f"./chroma_db/{file_id}"
-        if os.path.exists(chroma_db_path):
-            shutil.rmtree(chroma_db_path)
-
-        # Cleanup from ChromaDBManager
-        chroma_manager.cleanup_instance(file_id)
-
-        return {
-            "message": f"Chroma DB embeddings for file_id {file_id} have been deleted successfully",
-            "deleted_path": chroma_db_path,
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"An error occurred while deleting Chroma DB embeddings: {str(e)}",
+        # Convert single file_id to list for consistent processing
+        file_ids = (
+            [request.file_ids]
+            if isinstance(request.file_ids, str)
+            else request.file_ids
         )
 
+        results = {}
+        for file_id in file_ids:
+            try:
+                cleanup_coordinator = CleanupCoordinator(
+                    configs, SessionLocal, gcs_handler
+                )
+                cleanup_coordinator.cleanup_chroma_instance(
+                    file_id, include_gcs=request.include_gcs
+                )
+                results[file_id] = "Success"
+            except Exception as e:
+                results[file_id] = f"Error: {str(e)}"
+                logging.error({"file_id": file_id, "error": str(e)})
 
-@app.delete("/files")
-async def delete_files(
-    request: FileDeleteRequest, current_user=Depends(get_current_user)
-):
-    """Delete embeddings and files."""
-    file_ids = request.file_ids
-    deleted_files = []
-    errors = []
+        # If only one file_id was provided, maintain original response format
+        if isinstance(request.file_ids, str):
+            if results[request.file_ids] == "Success":
+                return {
+                    "message": f"ChromaDB embeddings for file_id {request.file_ids} have been deleted successfully"
+                }
+            else:
+                raise HTTPException(status_code=500, detail=results[request.file_ids])
 
-    for file_id in file_ids:
-        try:
-            # Clean up ChromaDB instances
-            chroma_manager.cleanup_instance(file_id)
+        # For multiple file_ids, return status of all operations
+        return {"results": results}
 
-            # Delete local files
-            chroma_db_path = f"./chroma_db/{file_id}"
-            if os.path.exists(chroma_db_path):
-                shutil.rmtree(chroma_db_path)
-
-            # Delete from GCS
-            folder_prefix = f"file-embeddings/{file_id}/"
-            blobs = gcs_handler.bucket.list_blobs(prefix=folder_prefix)
-            for blob in blobs:
-                blob.delete()
-
-            # Remove from initialized_models
-            if file_id in initialized_models:
-                del initialized_models[file_id]
-
-            deleted_files.append(file_id)
-        except Exception as e:
-            errors.append({"file_id": file_id, "error": str(e)})
-
-    if errors:
-        return {
-            "message": "Some files could not be deleted",
-            "deleted_files": deleted_files,
-            "errors": errors,
-        }
-    return {
-        "message": "All files and their embeddings have been deleted successfully",
-        "deleted_files": deleted_files,
-    }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/chat/gemini")
