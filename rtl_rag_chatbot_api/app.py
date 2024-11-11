@@ -395,6 +395,10 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         - Maintains model instances in memory for subsequent queries
     """
     try:
+        # Validate input first
+        if len(query.text) == 0:
+            raise HTTPException(status_code=400, detail="Text array cannot be empty")
+
         model = initialized_models.get(query.file_id)
         is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
         needs_initialization = False
@@ -455,8 +459,21 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                 f"Model initialized for file_id: {query.file_id} using {query.model_choice}"
             )
 
-        # Get response using the model
-        response = model.get_answer(query.text)
+        # Get current question (last item in array)
+        current_question = query.text[-1]
+
+        # If there's history, format it for context
+        chat_context = ""
+        if len(query.text) > 1:
+            chat_context = "\n".join(
+                [f"Previous message: {msg}" for msg in query.text[:-1]]
+            )
+            chat_context += "\nCurrent question: " + current_question
+        else:
+            chat_context = current_question
+
+        # Get response using the model with context
+        response = model.get_answer(chat_context)
 
         # Format response for tabular data if needed
         if isinstance(response, list) and len(response) > 1:

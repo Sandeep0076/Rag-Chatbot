@@ -115,9 +115,15 @@ def display_chat_interface():
                 st.write(user_input)
 
             with st.spinner("Processing your request..."):
-                # Chat request
+                # Get previous messages to include in history
+                previous_messages = [
+                    msg["content"]
+                    for msg in st.session_state.messages[-3:]  # Get last 3 messages
+                    if msg["role"] == "user"  # Only including user messages
+                ]
+
                 chat_payload = {
-                    "text": user_input,
+                    "text": previous_messages,  # This will include history and current message
                     "file_id": st.session_state.file_id,
                     "model_choice": st.session_state.model_choice,
                 }

@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class Query(BaseModel):
-    text: str
+    text: List[str]
     file_id: str
     model_choice: str = Field(..., description="The chosen language model")
     model_config = {"protected_namespaces": ()}
