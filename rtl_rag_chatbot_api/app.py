@@ -306,7 +306,6 @@ async def create_embeddings(
         - Status is tracked in GCS file metadata
         - Supports both text and image files
     """
-
     try:
         embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
@@ -337,21 +336,29 @@ async def create_embeddings(
             request.file_id, file_info.get("is_image", False), temp_file_path
         )
 
-        if result["status"] == "error":
-            return JSONResponse(status_code=400, content={"message": result["message"]})
+        # Check if result is dictionary and has message
+        if isinstance(result, dict):
+            if result.get("status") == "error":
+                return JSONResponse(
+                    status_code=400,
+                    content={"message": result.get("message", "Unknown error")},
+                )
 
-        # Update file info
-        gcs_handler.update_file_info(
-            request.file_id, {"embeddings_status": "completed"}
-        )
-        return result
+            # Update file info
+            gcs_handler.update_file_info(
+                request.file_id, {"embeddings_status": "completed"}
+            )
+            return result
+        else:
+            return {"message": "Embeddings created successfully", "status": "completed"}
 
     except Exception as e:
         logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={
-                "message": "An unexpected error occurred while processing your file. Please try again later."
+                "message": "An unexpected error occurred while processing your file.",
+                "error": str(e),
             },
         )
 
