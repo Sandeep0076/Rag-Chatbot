@@ -30,6 +30,8 @@ universal-helm-chart:
       initialDelaySeconds: 15
       periodSeconds: 15
   deployment:
+    podLabels:
+      app: rtl-rag-chatbot-api
     podAnnotations:
       prometheus.io/scrape: "true"
       prometheus.io/path: /metrics
