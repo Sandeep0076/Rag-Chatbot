@@ -11,7 +11,7 @@ RUN adduser \
     worker \
     && mkdir -p /code /opt/poetry /nltk_data \
     && chown -R worker:worker /code /opt/poetry /nltk_data \
-    && apt-get update && apt-get install -y poppler-utils \
+    && apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-deu poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /code
