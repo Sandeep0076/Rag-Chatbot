@@ -11,7 +11,7 @@ from pathlib import Path
 
 import uvicorn
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import create_engine
@@ -33,6 +33,7 @@ from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
 from rtl_rag_chatbot_api.common.models import (
     ChatRequest,
+    CleanupRequest,
     DeleteRequest,
     EmbeddingCreationRequest,
     FileUploadResponse,
@@ -479,11 +480,14 @@ async def get_available_models(current_user=Depends(get_current_user)):
 
 
 @app.post("/file/cleanup")
-async def manual_cleanup(current_user=Depends(get_current_user)):
+async def manual_cleanup(
+    request: CleanupRequest = Body(default=CleanupRequest()),
+    current_user=Depends(get_current_user),
+):
     """Endpoint to manually trigger cleanup."""
     try:
         cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
-        cleanup_coordinator.cleanup()
+        cleanup_coordinator.cleanup(is_manual=request.is_manual)
         return {"status": "Cleanup completed successfully"}
     except Exception as e:
         raise HTTPException(

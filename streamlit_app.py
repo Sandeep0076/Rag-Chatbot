@@ -15,7 +15,11 @@ def reset_session():
 
 
 def cleanup_files():
-    response = requests.post(f"{API_URL}/file/cleanup")
+    response = requests.post(
+        f"{API_URL}/file/cleanup",
+        json={"is_manual": True},
+        headers={"Content-Type": "application/json"},
+    )
     if response.status_code == 200:
         st.success("Cleanup completed successfully")
         reset_session()

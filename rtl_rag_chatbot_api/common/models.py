@@ -57,6 +57,10 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class CleanupRequest(BaseModel):
+    is_manual: bool = True
+
+
 class DeleteRequest(BaseModel):
     file_ids: Union[str, List[str]]  # Can be single ID or list of IDs
     include_gcs: bool = False

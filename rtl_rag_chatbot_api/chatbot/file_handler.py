@@ -58,6 +58,9 @@ class FileHandler:
         """
         try:
             original_filename = file.filename
+            if len(original_filename) > 100:
+                ext = os.path.splitext(original_filename)[1]
+                original_filename = original_filename[:96] + ext
             file_content = await file.read()
             file_hash = self.calculate_file_hash(file_content)
             is_tabular = original_filename.lower().endswith((".csv", ".xlsx", ".xls"))
