@@ -11,7 +11,7 @@ from pathlib import Path
 
 import uvicorn
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import create_engine
@@ -33,6 +33,7 @@ from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
 from rtl_rag_chatbot_api.common.models import (
     ChatRequest,
+    CleanupRequest,
     DeleteRequest,
     EmbeddingCreationRequest,
     FileUploadResponse,
@@ -305,7 +306,6 @@ async def create_embeddings(
         - Status is tracked in GCS file metadata
         - Supports both text and image files
     """
-
     try:
         embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
@@ -336,21 +336,29 @@ async def create_embeddings(
             request.file_id, file_info.get("is_image", False), temp_file_path
         )
 
-        if result["status"] == "error":
-            return JSONResponse(status_code=400, content={"message": result["message"]})
+        # Check if result is dictionary and has message
+        if isinstance(result, dict):
+            if result.get("status") == "error":
+                return JSONResponse(
+                    status_code=400,
+                    content={"message": result.get("message", "Unknown error")},
+                )
 
-        # Update file info
-        gcs_handler.update_file_info(
-            request.file_id, {"embeddings_status": "completed"}
-        )
-        return result
+            # Update file info
+            gcs_handler.update_file_info(
+                request.file_id, {"embeddings_status": "completed"}
+            )
+            return result
+        else:
+            return {"message": "Embeddings created successfully", "status": "completed"}
 
     except Exception as e:
         logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={
-                "message": "An unexpected error occurred while processing your file. Please try again later."
+                "message": "An unexpected error occurred while processing your file.",
+                "error": str(e),
             },
         )
 
@@ -387,6 +395,10 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         - Maintains model instances in memory for subsequent queries
     """
     try:
+        # Validate input first
+        if len(query.text) == 0:
+            raise HTTPException(status_code=400, detail="Text array cannot be empty")
+
         model = initialized_models.get(query.file_id)
         is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
         needs_initialization = False
@@ -447,8 +459,21 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                 f"Model initialized for file_id: {query.file_id} using {query.model_choice}"
             )
 
-        # Get response using the model
-        response = model.get_answer(query.text)
+        # Get current question (last item in array)
+        current_question = query.text[-1]
+
+        # If there's history, format it for context
+        chat_context = ""
+        if len(query.text) > 1:
+            chat_context = "\n".join(
+                [f"Previous message: {msg}" for msg in query.text[:-1]]
+            )
+            chat_context += "\nCurrent question: " + current_question
+        else:
+            chat_context = current_question
+
+        # Get response using the model with context
+        response = model.get_answer(chat_context)
 
         # Format response for tabular data if needed
         if isinstance(response, list) and len(response) > 1:
@@ -479,11 +504,14 @@ async def get_available_models(current_user=Depends(get_current_user)):
 
 
 @app.post("/file/cleanup")
-async def manual_cleanup(current_user=Depends(get_current_user)):
+async def manual_cleanup(
+    request: CleanupRequest = Body(default=CleanupRequest()),
+    current_user=Depends(get_current_user),
+):
     """Endpoint to manually trigger cleanup."""
     try:
         cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
-        cleanup_coordinator.cleanup()
+        cleanup_coordinator.cleanup(is_manual=request.is_manual)
         return {"status": "Cleanup completed successfully"}
     except Exception as e:
         raise HTTPException(

@@ -62,8 +62,10 @@ class CleanupCoordinator:
         )
         self.cleanup_folders = ["chroma_db", "local_data", "processed_data"]
 
-    def _should_cleanup(self) -> bool:
+    def _should_cleanup(self, is_manual: bool = False) -> bool:
         """Check if enough time has passed since last cleanup."""
+        if is_manual:
+            return True  # Always allow manual cleanup
         time_since_cleanup = datetime.now() - self.last_cleanup
         return time_since_cleanup >= self.min_cleanup_interval
 
@@ -139,14 +141,18 @@ class CleanupCoordinator:
         except Exception as e:
             logging.error(f"Error cleaning up folder {folder}: {str(e)}")
 
-    def cleanup(self) -> None:
-        """Periodic cleanup method - only cleans local resources."""
-        if not self._should_cleanup():
+    def cleanup(self, is_manual: bool = False) -> None:
+        """
+        Periodic cleanup method - cleans local resources.
+        Args:
+            is_manual (bool, optional): If True, bypasses time interval check. Defaults to False.
+        """
+        if not self._should_cleanup(is_manual):
             logging.info("Skipping cleanup - minimum interval not reached")
             return
 
         try:
-            logging.info("Starting local cleanup")
+            logging.info(f"Starting {'manual' if is_manual else 'scheduled'} cleanup")
 
             # Clean up local folders
             for folder in self.cleanup_folders:
@@ -157,6 +163,8 @@ class CleanupCoordinator:
                     self._cleanup_folder(folder)
 
             self.last_cleanup = datetime.now()
-            logging.info("Local cleanup completed successfully")
+            logging.info(
+                f"{'Manual' if is_manual else 'Scheduled'} cleanup completed successfully"
+            )
         except Exception as e:
-            logging.error(f"Error in local cleanup: {str(e)}")
+            logging.error(f"Error in cleanup: {str(e)}")
