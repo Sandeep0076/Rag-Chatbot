@@ -1,0 +1,11 @@
+# PodDisruptionBudget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rtl-rag-chatbot-api-pdb
+  namespace: "{{ .Release.Namespace }}"
+spec:
+  minAvailable: 1  # Ensure at least 1 replica is available during disruptions
+  selector:
+    matchLabels:
+      app: rtl-rag-chatbot-api
