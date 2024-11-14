@@ -7,6 +7,7 @@ class Query(BaseModel):
     text: List[str]
     file_id: str
     model_choice: str = Field(..., description="The chosen language model")
+    user_id: str
     model_config = {"protected_namespaces": ()}
 
 

@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import shutil
+from pathlib import Path
 from typing import Dict, Optional, Union
 
 import google.auth
@@ -70,6 +71,7 @@ class GCSHandler:
         blob.download_to_filename(destination_file_path)
 
     def download_files_from_folder_by_id(self, file_id):
+        """Download files maintaining the original structure."""
         prefix = f"file-embeddings/{file_id}/"
         blobs = list(self.bucket.list_blobs(prefix=prefix))
 
@@ -78,18 +80,21 @@ class GCSHandler:
             return
 
         for blob in blobs:
-            if blob.name.endswith("/"):  # Skip directory markers
+            if blob.name.endswith("/"):
                 continue
 
+            # Maintain the exact same structure as in GCS
             relative_path = blob.name[len(prefix) :]
-            local_file_path = os.path.join("chroma_db", file_id, relative_path)
+            local_path = os.path.join("chroma_db", file_id, relative_path)
 
-            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
-            blob.download_to_filename(local_file_path)
-            logging.info(f"Downloaded {blob.name} to {local_file_path}")
+            # Download file
+            blob.download_to_filename(local_path)
+            logging.info(f"Downloaded {blob.name} to {local_path}")
 
-        logging.info(f"Finished downloading all files for folder ID: {file_id}")
+        logging.info(f"Finished downloading all files for file ID: {file_id}")
 
     def cleanup_local_files(self, exclude=[]):
         folders_to_clean = ["chroma_db", "local_data", "processed_data"]
@@ -108,16 +113,25 @@ class GCSHandler:
             else:
                 logging.info(f"{folder} does not exist, skipping cleanup")
 
-    def upload_file_to_gcs(
-        self, bucket_name: str, source_file_path: str, destination_blob_name: str
-    ):
-        """Upload a file to the bucket."""
-        bucket = self._storage_client.bucket(bucket_name)
-        blob = bucket.blob(destination_blob_name)
+    def upload_db_files_to_gcs(self, file_id: str, embedding_type: str):
+        """Upload files maintaining consistent folder structure."""
+        try:
+            base_path = f"./chroma_db/{file_id}/{embedding_type}"
+            gcs_base_path = f"file-embeddings/{file_id}/{embedding_type}"
 
-        blob.upload_from_filename(source_file_path)
+            # Upload embeddings
+            files_to_upload = {}
+            for file in Path(base_path).rglob("*"):
+                if file.is_file():
+                    relative_path = file.relative_to(base_path)
+                    gcs_object_name = f"{gcs_base_path}/{relative_path}"
+                    files_to_upload[str(relative_path)] = (str(file), gcs_object_name)
 
-        print(f"File {source_file_path} uploaded to {destination_blob_name}.")
+            self.upload_to_gcs(self.bucket_name, files_to_upload)
+            logging.info(f"Uploaded embeddings to {gcs_base_path}")
+        except Exception as e:
+            logging.error(f"Error uploading to GCS: {str(e)}")
+        raise
 
     def upload_to_gcs(
         self,

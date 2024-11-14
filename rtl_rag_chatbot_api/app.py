@@ -395,31 +395,29 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         - Maintains model instances in memory for subsequent queries
     """
     try:
-        # Validate input first
         if len(query.text) == 0:
             raise HTTPException(status_code=400, detail="Text array cannot be empty")
 
-        model = initialized_models.get(query.file_id)
+        # Using username from Query model instead of current_user
+        model = initialized_models.get(f"{query.file_id}_{query.user_id}")
         is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
         needs_initialization = False
 
-        # Case 1: No model exists at all
+        # Case 1: No model exists for this user
         if not model:
             needs_initialization = True
-            logging.info(f"No model found for file_id: {query.file_id}")
+            logging.info(
+                f"No model found for file_id: {query.file_id} and user: {query.user_id}"
+            )
         else:
-            # Case 2: Model type mismatch (switching between Gemini and Azure)
             current_model_type = (
                 "gemini" if isinstance(model, GeminiHandler) else "azure"
             )
             requested_model_type = "gemini" if is_gemini else "azure"
             if current_model_type != requested_model_type:
                 needs_initialization = True
-                logging.info(
-                    f"Model type mismatch. Switching from {current_model_type} to {requested_model_type}"
-                )
+                logging.info(f"Model type mismatch for user {query.user_id}")
 
-        # Only initialize if needed
         if needs_initialization:
             file_info = gcs_handler.get_file_info(query.file_id)
             if not file_info:
@@ -430,10 +428,8 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             if os.path.exists(db_path):
                 model = TabularDataHandler(configs, query.file_id, query.model_choice)
             else:
-                # Ensure ChromaDB files are present
                 chroma_path = f"./chroma_db/{query.file_id}"
                 if not os.path.exists(chroma_path):
-                    logging.info(f"Downloading ChromaDB files for {query.file_id}")
                     gcs_handler.download_files_from_folder_by_id(query.file_id)
 
                 embedding_type = "google" if is_gemini else "azure"
@@ -444,6 +440,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                         file_id=query.file_id,
                         embedding_type=embedding_type,
                         collection_name=f"rag_collection_{query.file_id}",
+                        user_id=query.user_id,  # Using username instead
                     )
                 else:
                     model = Chatbot(configs, gcs_handler)
@@ -452,17 +449,15 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                         file_id=query.file_id,
                         embedding_type=embedding_type,
                         collection_name=f"rag_collection_{query.file_id}",
+                        user_id=query.user_id,  # Using username instead
                     )
 
-            initialized_models[query.file_id] = model
+            initialized_models[f"{query.file_id}_{query.user_id}"] = model
             logging.info(
-                f"Model initialized for file_id: {query.file_id} using {query.model_choice}"
+                f"Model initialized for file_id: {query.file_id} user: {query.user_id}"
             )
 
-        # Get current question (last item in array)
         current_question = query.text[-1]
-
-        # If there's history, format it for context
         chat_context = ""
         if len(query.text) > 1:
             chat_context = "\n".join(
@@ -472,10 +467,8 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         else:
             chat_context = current_question
 
-        # Get response using the model with context
         response = model.get_answer(chat_context)
 
-        # Format response for tabular data if needed
         if isinstance(response, list) and len(response) > 1:
             headers = response[0]
             rows = response[1:]
@@ -521,20 +514,16 @@ async def manual_cleanup(
 
 @app.post("/file/neighbors")
 async def get_neighbors(query: NeighborsQuery, current_user=Depends(get_current_user)):
-    """
-    Endpoint to retrieve nearest neighbors for a given text query and file ID.
-    Checks if the model is initialized for the specified file, then retrieves the nearest neighbors accordingly.
-    Returns a dictionary containing the list of neighbors.
-    Handles exceptions and returns appropriate HTTP status codes with error details.
-    """
-    if query.file_id not in initialized_models:
-        raise HTTPException(
-            status_code=404, detail="Model not initialized for this file"
-        )
-
+    """Endpoint to retrieve nearest neighbors for a given text query."""
     try:
-        model = initialized_models[query.file_id]
-        # Simplified call that works for both model types
+        # Get the model instance using the combined key
+        model_key = f"{query.file_id}_{current_user.id}"  # or however you get user ID
+        if model_key not in initialized_models:
+            raise HTTPException(
+                status_code=404, detail="Model not initialized for this file"
+            )
+
+        model = initialized_models[model_key]
         neighbors = model.get_n_nearest_neighbours(
             query.text, n_neighbours=query.n_neighbors
         )

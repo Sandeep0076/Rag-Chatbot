@@ -41,6 +41,7 @@ class GeminiHandler(BaseRAGHandler):
         file_id: str = None,
         embedding_type: str = None,
         collection_name: str = None,
+        user_id: str = None,
     ):
         """Initialize the Gemini model with specific configurations."""
         # Map model choice to actual model name
@@ -75,6 +76,7 @@ class GeminiHandler(BaseRAGHandler):
         self.file_id = file_id
         self.embedding_type = embedding_type
         self.collection_name = collection_name or f"rag_collection_{file_id}"
+        self.user_id = user_id
 
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         try:
