@@ -87,7 +87,8 @@ class ChromaDBManager:
 
         # Always use the base collection for querying
         collection = client.get_or_create_collection(
-            name=collection_name, metadata={"file_id": file_id}
+            name=collection_name,
+            metadata={"file_id": file_id, "embedding_type": embedding_type},
         )
 
         return collection

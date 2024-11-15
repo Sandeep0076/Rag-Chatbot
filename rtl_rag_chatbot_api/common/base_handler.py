@@ -104,8 +104,12 @@ class BaseRAGHandler:
 
         """
         try:
+            # Get collection with explicit subfolder path
             collection = self.chroma_manager.get_collection(
-                file_id, subfolder, self.collection_name
+                file_id=file_id,
+                embedding_type=subfolder,  # 'azure' or 'google'
+                collection_name=self.collection_name,
+                user_id=None,  # No user filtering for embeddings creation
             )
 
             processed_count = 0

@@ -2,7 +2,6 @@
 import json
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List
 
@@ -177,23 +176,14 @@ class EmbeddingHandler:
 
             logging.info(f"Text extracted and split into {len(chunks)} chunks")
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                azure_future = executor.submit(
-                    self._create_azure_embeddings,
-                    file_id,
-                    chunks,
-                    self.configs.azure_embedding.azure_embedding_api_key,
-                    username,
-                )
-                gemini_future = executor.submit(
-                    self._create_gemini_embeddings,
-                    file_id,
-                    chunks,
-                    username,
-                )
-
-                azure_result = azure_future.result()
-                gemini_result = gemini_future.result()
+            # Sequential execution instead of ThreadPoolExecutor
+            azure_result = self._create_azure_embeddings(
+                file_id,
+                chunks,
+                self.configs.azure_embedding.azure_embedding_api_key,
+                username,
+            )
+            gemini_result = self._create_gemini_embeddings(file_id, chunks, username)
 
             # Upload embeddings to GCS
             self._upload_embeddings_to_gcs(file_id)
@@ -249,6 +239,7 @@ class EmbeddingHandler:
         """Creates embeddings using Gemini model."""
         logging.info("Generating Gemini embeddings...")
         try:
+            # This was commented to check if file structure is correct.
             collection_name = f"rag_collection_{file_id}"
 
             # Initialize Gemini handler
