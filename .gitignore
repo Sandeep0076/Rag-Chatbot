@@ -13,3 +13,4 @@ processed_data/
 git_commits.txt
 .aider*
 version_doc/
+.cursorignore
