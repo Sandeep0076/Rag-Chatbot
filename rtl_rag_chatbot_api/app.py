@@ -314,10 +314,11 @@ async def create_embeddings(
         if not file_info:
             raise HTTPException(status_code=404, detail="File info not found")
 
-        if file_info.get("embeddings_status") == "completed":
+        if file_info.get("azure_ready"):
             return {
-                "message": "Embeddings already exist for this file",
+                "message": "Azure embeddings already exist for this file",
                 "info": file_info.get("embeddings"),
+                "can_chat": True,
             }
 
         # Get original filename
@@ -344,13 +345,14 @@ async def create_embeddings(
                     content={"message": result.get("message", "Unknown error")},
                 )
 
-            # Update file info
-            gcs_handler.update_file_info(
-                request.file_id, {"embeddings_status": "completed"}
-            )
+            # Update file info (this part is already handled in embedding_handler)
             return result
         else:
-            return {"message": "Embeddings created successfully", "status": "completed"}
+            return {
+                "message": "Embeddings created successfully",
+                "status": "completed",
+                "can_chat": True,
+            }
 
     except Exception as e:
         logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
@@ -359,6 +361,7 @@ async def create_embeddings(
             content={
                 "message": "An unexpected error occurred while processing your file.",
                 "error": str(e),
+                "can_chat": False,
             },
         )
 
@@ -398,30 +401,30 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         if len(query.text) == 0:
             raise HTTPException(status_code=400, detail="Text array cannot be empty")
 
-        # Using username from Query model instead of current_user
-        model = initialized_models.get(f"{query.file_id}_{query.user_id}")
-        is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+        # Check if the model needs to be re-initialized based on the model choice
         needs_initialization = False
+        model_key = f"{query.file_id}_{query.user_id}"
 
-        # Case 1: No model exists for this user
-        if not model:
+        # Check if the model is already initialized
+        model = initialized_models.get(model_key)
+        is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+
+        # If the model is not found or the model choice has changed, re-initialize
+        if not model or (model and model.model_choice != query.model_choice):
             needs_initialization = True
-            logging.info(
-                f"No model found for file_id: {query.file_id} and user: {query.user_id}"
-            )
-        else:
-            current_model_type = (
-                "gemini" if isinstance(model, GeminiHandler) else "azure"
-            )
-            requested_model_type = "gemini" if is_gemini else "azure"
-            if current_model_type != requested_model_type:
-                needs_initialization = True
-                logging.info(f"Model type mismatch for user {query.user_id}")
+            logging.info(f"Model needs re-initialization for user {query.user_id}")
 
         if needs_initialization:
             file_info = gcs_handler.get_file_info(query.file_id)
             if not file_info:
                 raise HTTPException(status_code=404, detail="File not found")
+
+            # Add check for Azure readiness
+            if not file_info.get("azure_ready"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Azure embeddings are not ready yet. Please wait a moment.",
+                )
 
             # Check for tabular data
             db_path = f"./chroma_db/{query.file_id}/tabular_data.db"
@@ -452,9 +455,10 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                         user_id=query.user_id,  # Using username instead
                     )
 
-            initialized_models[f"{query.file_id}_{query.user_id}"] = model
+            # Update the initialized models dictionary
+            initialized_models[model_key] = model
             logging.info(
-                f"Model initialized for file_id: {query.file_id} user: {query.user_id}"
+                f"Model initialized for file_id: {query.file_id} user: {query.user_id} with model: {query.model_choice}"
             )
 
         current_question = query.text[-1]
