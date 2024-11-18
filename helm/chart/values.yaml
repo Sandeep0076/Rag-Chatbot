@@ -1,7 +1,7 @@
 global:
   env: "test"
   port: 8080
-  probePath: /info
+  probePath: /health
 
   vault:
     mount_path: "da/itowe/ci"
@@ -23,12 +23,13 @@ universal-helm-chart:
         cpu: 1000m
         memory: 4Gi
     livenessProbe:
-      failureThreshold: 3
+      failureThreshold: 5
       initialDelaySeconds: 15
-      periodSeconds: 15
+      periodSeconds: 30
+      timeoutSeconds: 5
     readinessProbe:
       initialDelaySeconds: 15
-      periodSeconds: 15
+      periodSeconds: 30
   deployment:
     podLabels:
       app: rtl-rag-chatbot-api

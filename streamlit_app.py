@@ -126,6 +126,7 @@ def display_chat_interface():
                     "text": previous_messages,  # This will include history and current message
                     "file_id": st.session_state.file_id,
                     "model_choice": st.session_state.model_choice,
+                    "user_id": st.session_state.username,
                 }
                 chat_response = requests.post(f"{API_URL}/file/chat", json=chat_payload)
 
@@ -163,23 +164,23 @@ def display_chat_interface():
                             st.image(img, use_column_width=True)
 
                     # Nearest neighbors request (only for PDF and Image files)
-                    if st.session_state.file_type in ["PDF", "Image"]:
-                        neighbors_payload = {
-                            "text": user_input,
-                            "file_id": st.session_state.file_id,
-                            "n_neighbors": 3,
-                        }
-                        neighbors_response = requests.post(
-                            f"{API_URL}/file/neighbors", json=neighbors_payload
-                        )
-                        if neighbors_response.status_code == 200:
-                            neighbors_result = neighbors_response.json()
-                            with st.sidebar:
-                                st.subheader("Nearest Neighbors:")
-                                for i, neighbor in enumerate(
-                                    neighbors_result["neighbors"], 1
-                                ):
-                                    st.write(f"{i}. {neighbor}")
+                    # if st.session_state.file_type in ["PDF", "Image"]:
+                    #     neighbors_payload = {
+                    #         "text": user_input,
+                    #         "file_id": st.session_state.file_id,
+                    #         "n_neighbors": 3,
+                    #     }
+                    #     neighbors_response = requests.post(
+                    #         f"{API_URL}/file/neighbors", json=neighbors_payload
+                    #     )
+                    #     if neighbors_response.status_code == 200:
+                    #         neighbors_result = neighbors_response.json()
+                    #         with st.sidebar:
+                    #             st.subheader("Nearest Neighbors:")
+                    #             for i, neighbor in enumerate(
+                    #                 neighbors_result["neighbors"], 1
+                    #             ):
+                    #                 st.write(f"{i}. {neighbor}")
                 else:
                     st.error(f"Request failed: {chat_response.text}")
     else:

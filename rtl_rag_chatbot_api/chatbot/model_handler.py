@@ -12,7 +12,9 @@ class ModelHandler:
         self.gcs_handler = gcs_handler
         self.chroma_manager = ChromaDBManager()
 
-    def initialize_model(self, model_choice: str, file_id: str, embedding_type: str):
+    def initialize_model(
+        self, model_choice: str, file_id: str, embedding_type: str, user_id: str = None
+    ):
         """Initialize and return a model based on the specified model choice."""
         try:
             chroma_db_path = f"./chroma_db/{file_id}/{embedding_type}"
@@ -30,6 +32,7 @@ class ModelHandler:
                     file_id=file_id,
                     embedding_type=embedding_type,
                     collection_name=collection_name,
+                    user_id=user_id,
                 )
             else:
                 model = AzureChatbot(self.configs, self.gcs_handler)
@@ -38,6 +41,7 @@ class ModelHandler:
                     file_id=file_id,
                     embedding_type=embedding_type,
                     collection_name=collection_name,
+                    user_id=user_id,
                 )
 
             return model

@@ -22,14 +22,14 @@ class AzureChatbot(BaseRAGHandler):
         file_id: str = None,
         embedding_type: str = None,
         collection_name: str = None,
+        user_id: str = None,
     ):
-        """Initialize the Azure model with specific configurations."""
         self.model_choice = model_choice
         self.file_id = file_id
         self.embedding_type = embedding_type
         self.collection_name = collection_name or f"rag_collection_{file_id}"
+        self.user_id = user_id  # Added user_id
 
-        # Get model configuration based on model_choice
         self.model_config = self.configs.azure_llm.models.get(model_choice)
         if not self.model_config:
             raise ValueError(f"Configuration for model {model_choice} not found")

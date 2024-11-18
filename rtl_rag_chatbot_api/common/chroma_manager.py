@@ -37,13 +37,18 @@ class ChromaDBManager:
         self._cleanup_threshold = timedelta(hours=4)  # Configurable cleanup threshold
 
     def get_instance(
-        self, file_id: str, embedding_type: str
+        self, file_id: str, embedding_type: str, user_id: str = None
     ) -> chromadb.PersistentClient:
-        """
-        Get or create a ChromaDB instance for the given file_id and embedding type.
-        Thread-safe method for concurrent access.
-        """
-        instance_key = f"{file_id}/{embedding_type}"
+        """Get or create a ChromaDB instance with optional user-specific connection."""
+        # Always use the base path for persistent storage
+        base_path = f"./chroma_db/{file_id}/{embedding_type}"
+
+        # Use different instance keys for managing connections
+        if user_id is None:
+            instance_key = f"{file_id}/{embedding_type}"
+        else:
+            # For chat sessions, track user instance but use same base path
+            instance_key = f"{file_id}/{embedding_type}/user_{user_id}"
 
         with self._instance_lock:
             if instance_key in self._instances:
@@ -51,11 +56,10 @@ class ChromaDBManager:
                 instance_data["last_used"] = datetime.now()
                 return instance_data["client"]
 
-            # Create new instance with consistent settings
             try:
-                chroma_db_path = f"./chroma_db/{file_id}/{embedding_type}"
+                # Always create client with base path to access shared embeddings
                 client = chromadb.PersistentClient(
-                    path=chroma_db_path, settings=self._settings
+                    path=base_path, settings=self._settings
                 )
 
                 self._instances[instance_key] = {
@@ -71,32 +75,36 @@ class ChromaDBManager:
                 )
                 raise
 
+    def get_collection(
+        self,
+        file_id: str,
+        embedding_type: str,
+        collection_name: str,
+        user_id: str = None,
+    ):
+        """Get or create a collection with optional user tracking."""
+        client = self.get_instance(file_id, embedding_type, user_id)
+
+        # Always use the base collection for querying
+        collection = client.get_or_create_collection(
+            name=collection_name,
+            metadata={"file_id": file_id, "embedding_type": embedding_type},
+        )
+
+        return collection
+
     def cleanup_old_instances(self):
-        """
-        Clean up instances that haven't been used for a while.
-        Should be called periodically by a background task.
-        """
+        """Clean up instances that haven't been used for a while."""
         current_time = datetime.now()
 
         with self._instance_lock:
             for instance_key in list(self._instances.keys()):
                 instance_data = self._instances[instance_key]
                 if current_time - instance_data["last_used"] > self._cleanup_threshold:
-                    # Clean up the instance
                     try:
-                        # No explicit cleanup needed for ChromaDB PersistentClient
                         del self._instances[instance_key]
                         logging.info(f"Cleaned up ChromaDB instance for {instance_key}")
                     except Exception as e:
                         logging.error(
                             f"Error cleaning up ChromaDB instance for {instance_key}: {str(e)}"
                         )
-
-    def get_collection(self, file_id: str, embedding_type: str, collection_name: str):
-        """
-        Get or create a collection in the ChromaDB instance.
-        """
-        client = self.get_instance(file_id, embedding_type)
-        return client.get_or_create_collection(
-            name=collection_name, metadata={"file_id": file_id}
-        )

@@ -99,32 +99,29 @@ class CleanupCoordinator:
         except Exception:
             return False
 
-    def cleanup_chroma_instance(self, file_id: str, include_gcs: bool = False) -> None:
-        """
-        Cleanup ChromaDB instance and its files.
-        Args:
-            file_id: The ID of the file to cleanup
-            include_gcs: Whether to also cleanup GCS storage
-        """
+    def cleanup_chroma_instance(
+        self, file_id: str, user_id: str = None, include_gcs: bool = False
+    ):
+        """Cleanup ChromaDB instance and its files with user isolation."""
         try:
-            # Clean up local files
-            chroma_path = f"./chroma_db/{file_id}"
-            if os.path.exists(chroma_path):
-                shutil.rmtree(chroma_path)
-            logging.info(f"Cleaned up local ChromaDB instance and files for {file_id}")
+            if user_id:
+                # Clean up only user-specific instance
+                instance_key = f"{file_id}/user_{user_id}"
+                if instance_key in self.chroma_manager._instances:
+                    del self.chroma_manager._instances[instance_key]
+                    logging.info(f"Cleaned up user instance: {instance_key}")
+            else:
+                # Clean up all instances for this file
+                chroma_path = f"./chroma_db/{file_id}"
+                if os.path.exists(chroma_path):
+                    shutil.rmtree(chroma_path)
+                logging.info(f"Cleaned up all instances for file: {file_id}")
 
-            # Clean up GCS if requested
             if include_gcs:
-                try:
-                    self.gcs_handler.delete_embeddings(file_id)
-                    logging.info(f"Cleaned up GCS embeddings for {file_id}")
-                except Exception as e:
-                    logging.error(
-                        f"Error cleaning up GCS embeddings for {file_id}: {str(e)}"
-                    )
+                self.gcs_handler.delete_embeddings(file_id)
 
         except Exception as e:
-            logging.error(f"Error cleaning up ChromaDB instance {file_id}: {str(e)}")
+            logging.error(f"Error cleaning up ChromaDB instance: {str(e)}")
 
     def _cleanup_folder(self, folder: str) -> None:
         """Clean up a specific local folder."""

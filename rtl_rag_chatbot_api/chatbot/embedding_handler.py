@@ -1,8 +1,7 @@
-# import asyncio
+import asyncio
 import json
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List
 
@@ -177,36 +176,30 @@ class EmbeddingHandler:
 
             logging.info(f"Text extracted and split into {len(chunks)} chunks")
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                azure_future = executor.submit(
-                    self._create_azure_embeddings,
-                    file_id,
-                    chunks,
-                    self.configs.azure_embedding.azure_embedding_api_key,
-                    username,
-                )
-                gemini_future = executor.submit(
-                    self._create_gemini_embeddings,
-                    file_id,
-                    chunks,
-                    username,
-                )
+            # Create Azure embeddings
+            azure_result = self._create_azure_embeddings(
+                file_id,
+                chunks,
+                self.configs.azure_embedding.azure_embedding_api_key,
+                username,
+            )
 
-                azure_result = azure_future.result()
-                gemini_result = gemini_future.result()
+            # Run Gemini embeddings creation and GCS upload in the background
+            asyncio.create_task(
+                self._create_gemini_embeddings(file_id, chunks, username)
+            )
+            asyncio.create_task(self._upload_embeddings_to_gcs(file_id))
 
-            # Upload embeddings to GCS
-            self._upload_embeddings_to_gcs(file_id)
-
-            # Update file info with embedding status
+            # Update file info with Azure embedding status
             new_info = {
-                "embeddings": {"azure": azure_result, "google": gemini_result},
+                "embeddings": {"azure": azure_result},
                 "embeddings_status": "completed",
             }
             self.gcs_handler.update_file_info(file_id, new_info)
 
             return {
-                "message": "Embeddings created and uploaded successfully",
+                "message": "Azure embeddings created successfully. "
+                "Gemini embeddings are being created in the background.",
                 "status": "completed",
             }
 
@@ -215,7 +208,8 @@ class EmbeddingHandler:
                 f"Error in create_and_upload_embeddings: {str(e)}", exc_info=True
             )
             return {
-                "message": "An error occurred while processing your file. Please try again or use a different file.",
+                "message": "An error occurred while processing your file. "
+                "Please try again or use a different file.",
                 "status": "error",
             }
 
@@ -227,7 +221,6 @@ class EmbeddingHandler:
         try:
             collection_name = f"rag_collection_{file_id}"
 
-            # Initialize Azure handler
             azure_handler = AzureChatbot(self.configs, self.gcs_handler)
             azure_handler.initialize(
                 model_choice="gpt_4o_mini",
@@ -236,7 +229,6 @@ class EmbeddingHandler:
                 collection_name=collection_name,
             )
 
-            # Create and store embeddings directly from chunks
             azure_handler.create_and_store_embeddings(chunks, file_id, "azure")
 
             logging.info("Azure embeddings generated successfully")
@@ -245,13 +237,14 @@ class EmbeddingHandler:
             logging.error(f"Error creating Azure embeddings: {str(e)}", exc_info=True)
             raise
 
-    def _create_gemini_embeddings(self, file_id: str, chunks: List[str], username: str):
+    async def _create_gemini_embeddings(
+        self, file_id: str, chunks: List[str], username: str
+    ):
         """Creates embeddings using Gemini model."""
         logging.info("Generating Gemini embeddings...")
         try:
             collection_name = f"rag_collection_{file_id}"
 
-            # Initialize Gemini handler
             gemini_handler = GeminiHandler(self.configs, self.gcs_handler)
             gemini_handler.initialize(
                 model="gemini-pro",
@@ -260,7 +253,6 @@ class EmbeddingHandler:
                 collection_name=collection_name,
             )
 
-            # Create and store embeddings directly from chunks
             gemini_handler.create_and_store_embeddings(chunks, file_id, "google")
 
             logging.info("Gemini embeddings generated successfully")
@@ -269,7 +261,7 @@ class EmbeddingHandler:
             logging.error(f"Error creating Gemini embeddings: {str(e)}", exc_info=True)
             raise
 
-    def _upload_embeddings_to_gcs(self, file_id: str):
+    async def _upload_embeddings_to_gcs(self, file_id: str):
         logging.info("Uploading embeddings to GCS...")
         try:
             for model in ["azure", "google"]:

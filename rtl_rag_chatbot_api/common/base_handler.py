@@ -1,8 +1,8 @@
 # base_handler.py
-
 import logging
 import os
 import re
+import uuid
 from pathlib import Path
 from typing import List
 
@@ -24,6 +24,7 @@ class BaseRAGHandler:
         self.max_tokens = 2000  # Default chunk size
         self.file_id = None
         self.embedding_type = None
+        self.user_id = None
         self.collection_name = None
         self.embedding_model = None
         self.chroma_manager = ChromaDBManager()
@@ -38,6 +39,8 @@ class BaseRAGHandler:
         try:
             query_embedding = self.get_embeddings([query])[0]
             collection = self._get_chroma_collection()
+
+            # Don't filter by user_id when querying - embeddings are shared
             results = collection.query(
                 query_embeddings=[query_embedding], n_results=n_results
             )
@@ -51,13 +54,27 @@ class BaseRAGHandler:
         if not all([self.file_id, self.embedding_type, self.collection_name]):
             raise ValueError("file_id, embedding_type, and collection_name must be set")
 
+        # Pass user_id but don't filter queries - for session tracking only
         return self.chroma_manager.get_collection(
-            self.file_id, self.embedding_type, self.collection_name
+            self.file_id, self.embedding_type, self.collection_name, self.user_id
         )
 
     def get_n_nearest_neighbours(self, query: str, n_neighbours: int = 3) -> List[str]:
         """Get nearest neighbors for a query."""
-        return self.query_chroma(query, self.file_id, n_results=n_neighbours)
+        try:
+            query_embedding = self.get_embeddings([query])[0]
+            # Use base collection without user filtering for nearest neighbors
+            collection = self.chroma_manager.get_collection(
+                self.file_id, self.embedding_type, self.collection_name
+            )
+
+            results = collection.query(
+                query_embeddings=[query_embedding], n_results=n_neighbours
+            )
+            return results["documents"][0] if results["documents"] else []
+        except Exception as e:
+            logging.error(f"Error getting nearest neighbors: {str(e)}")
+            raise
 
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Abstract method to be implemented by child classes."""
@@ -87,16 +104,22 @@ class BaseRAGHandler:
 
         """
         try:
+            # Get collection with explicit subfolder path
             collection = self.chroma_manager.get_collection(
-                file_id, subfolder, self.collection_name
+                file_id=file_id,
+                embedding_type=subfolder,  # 'azure' or 'google'
+                collection_name=self.collection_name,
+                user_id=None,  # No user filtering for embeddings creation
             )
 
             processed_count = 0
             total_chunks = len(chunks)
             batch_to_process = []
             batch_ids = []
+            embedding_id = str(
+                uuid.uuid4()
+            )  # Generate a unique ID for embeddings folder
 
-            # Set token limit based on model type
             max_tokens = (
                 self.AZURE_MAX_TOKENS
                 if subfolder == "azure"
@@ -108,28 +131,26 @@ class BaseRAGHandler:
                 chunk_tokens = len(self.simple_tokenize(chunk))
 
                 if chunk_tokens > max_tokens:
-                    # Split large chunks
                     sub_chunks = self.split_large_chunk(chunk, max_tokens)
                     for sub_idx, sub_chunk in enumerate(sub_chunks):
-                        # Verify sub_chunk size
                         sub_chunk_tokens = len(self.simple_tokenize(sub_chunk))
                         if sub_chunk_tokens <= max_tokens:
                             batch_to_process.append(sub_chunk)
-                            batch_ids.append(f"{file_id}_{i}_sub{sub_idx}")
+                            batch_ids.append(f"{embedding_id}_{i}_sub{sub_idx}")
                 else:
                     batch_to_process.append(chunk)
-                    batch_ids.append(f"{file_id}_{i}")
+                    batch_ids.append(f"{embedding_id}_{i}")
 
-                # Process when batch is full or it's the last chunk
                 if len(batch_to_process) >= self.BATCH_SIZE or i == total_chunks - 1:
-                    if batch_to_process:  # Only process if there are chunks
+                    if batch_to_process:
                         try:
                             embeddings = self.get_embeddings(batch_to_process)
                             collection.add(
                                 documents=batch_to_process,
                                 embeddings=embeddings,
                                 metadatas=[
-                                    {"source": file_id} for _ in batch_to_process
+                                    {"source": file_id, "embedding_id": embedding_id}
+                                    for _ in batch_to_process
                                 ],
                                 ids=batch_ids,
                             )
@@ -137,17 +158,16 @@ class BaseRAGHandler:
                             logging.info(
                                 f"Processed {processed_count}/{total_chunks} chunks"
                             )
-
                         except Exception as e:
                             logging.error(
                                 f"Error processing batch at chunk {i}: {str(e)}"
                             )
-                            # Continue with next batch instead of failing completely
                         finally:
-                            # Clear batches regardless of success/failure
                             batch_to_process = []
                             batch_ids = []
 
+            # Store the embedding_id for reference
+            self.embedding_id = embedding_id
             return "completed"
         except Exception as e:
             logging.error(f"Error in create_and_store_embeddings: {str(e)}")
