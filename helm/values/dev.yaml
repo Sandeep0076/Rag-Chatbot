@@ -17,5 +17,6 @@ universal-helm-chart:
       kyverno.io/require-iap-monitoring-annotations: "ignore"
   deployment:
     scaleDown: true
+    replicaCount: 2
 gcp:
   project_id: "dat-itowe-dev"
