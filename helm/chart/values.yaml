@@ -1,7 +1,7 @@
 global:
   env: "test"
   port: 8080
-  probePath: /info
+  probePath: /health
 
   vault:
     mount_path: "da/itowe/ci"
