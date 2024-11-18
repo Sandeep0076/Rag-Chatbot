@@ -401,32 +401,20 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         if len(query.text) == 0:
             raise HTTPException(status_code=400, detail="Text array cannot be empty")
 
-        # Check if the model needs to be re-initialized based on the model choice
-        needs_initialization = False
-        model_key = f"{query.file_id}_{query.user_id}"
-
-        # Check if the model is already initialized
+        model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
         model = initialized_models.get(model_key)
-        is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
 
-        # If the model is not found or the model choice has changed, re-initialize
-        if not model or (model and model.model_choice != query.model_choice):
-            needs_initialization = True
-            logging.info(f"Model needs re-initialization for user {query.user_id}")
-
-        if needs_initialization:
+        if not model:
             file_info = gcs_handler.get_file_info(query.file_id)
             if not file_info:
                 raise HTTPException(status_code=404, detail="File not found")
 
-            # Add check for Azure readiness
             if not file_info.get("azure_ready"):
                 raise HTTPException(
                     status_code=400,
                     detail="Azure embeddings are not ready yet. Please wait a moment.",
                 )
 
-            # Check for tabular data
             db_path = f"./chroma_db/{query.file_id}/tabular_data.db"
             if os.path.exists(db_path):
                 model = TabularDataHandler(configs, query.file_id, query.model_choice)
@@ -435,7 +423,9 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                 if not os.path.exists(chroma_path):
                     gcs_handler.download_files_from_folder_by_id(query.file_id)
 
+                is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
                 embedding_type = "google" if is_gemini else "azure"
+
                 if is_gemini:
                     model = GeminiHandler(configs, gcs_handler)
                     model.initialize(
@@ -443,7 +433,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                         file_id=query.file_id,
                         embedding_type=embedding_type,
                         collection_name=f"rag_collection_{query.file_id}",
-                        user_id=query.user_id,  # Using username instead
+                        user_id=query.user_id,
                     )
                 else:
                     model = Chatbot(configs, gcs_handler)
@@ -452,24 +442,21 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                         file_id=query.file_id,
                         embedding_type=embedding_type,
                         collection_name=f"rag_collection_{query.file_id}",
-                        user_id=query.user_id,  # Using username instead
+                        user_id=query.user_id,
                     )
 
-            # Update the initialized models dictionary
             initialized_models[model_key] = model
             logging.info(
-                f"Model initialized for file_id: {query.file_id} user: {query.user_id} with model: {query.model_choice}"
+                f"Model initialized: {query.file_id}, user: {query.user_id}, model: {query.model_choice}"
             )
 
         current_question = query.text[-1]
-        chat_context = ""
-        if len(query.text) > 1:
-            chat_context = "\n".join(
-                [f"Previous message: {msg}" for msg in query.text[:-1]]
-            )
-            chat_context += "\nCurrent question: " + current_question
-        else:
-            chat_context = current_question
+        chat_context = (
+            "\n".join([f"Previous message: {msg}" for msg in query.text[:-1]])
+            + f"\nCurrent question: {current_question}"
+            if len(query.text) > 1
+            else current_question
+        )
 
         response = model.get_answer(chat_context)
 
@@ -478,8 +465,9 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             rows = response[1:]
             table_str = "| " + " | ".join(str(h) for h in headers) + " |\n"
             table_str += "|" + "|".join(["---" for _ in headers]) + "|\n"
-            for row in rows:
-                table_str += "| " + " | ".join(str(cell) for cell in row) + " |\n"
+            table_str += "\n".join(
+                "| " + " | ".join(str(cell) for cell in row) + " |" for row in rows
+            )
             return {"response": table_str}
 
         return {"response": str(response)}
