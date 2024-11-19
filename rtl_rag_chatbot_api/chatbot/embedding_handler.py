@@ -176,7 +176,7 @@ class EmbeddingHandler:
 
             logging.info(f"Text extracted and split into {len(chunks)} chunks")
 
-            # Create Azure embeddings
+            # Create Azure embeddings first and wait for completion
             azure_result = self._create_azure_embeddings(
                 file_id,
                 chunks,
@@ -184,23 +184,28 @@ class EmbeddingHandler:
                 username,
             )
 
-            # Run Gemini embeddings creation and GCS upload in the background
+            # Update file info to indicate Azure embeddings are ready
+            new_info = {
+                "embeddings": {
+                    "azure": azure_result,
+                    "gemini": "pending",  # Add status for Gemini
+                },
+                "embeddings_status": "partial",  # Change status to partial
+                "azure_ready": True,  # Add explicit flag for Azure readiness
+            }
+            self.gcs_handler.update_file_info(file_id, new_info)
+
+            # Start background tasks for Gemini and GCS upload
             asyncio.create_task(
                 self._create_gemini_embeddings(file_id, chunks, username)
             )
             asyncio.create_task(self._upload_embeddings_to_gcs(file_id))
 
-            # Update file info with Azure embedding status
-            new_info = {
-                "embeddings": {"azure": azure_result},
-                "embeddings_status": "completed",
-            }
-            self.gcs_handler.update_file_info(file_id, new_info)
-
             return {
-                "message": "Azure embeddings created successfully. "
+                "message": "Azure embeddings created and ready for chat. "
                 "Gemini embeddings are being created in the background.",
-                "status": "completed",
+                "status": "azure_ready",
+                "can_chat": True,
             }
 
         except Exception as e:
@@ -211,6 +216,7 @@ class EmbeddingHandler:
                 "message": "An error occurred while processing your file. "
                 "Please try again or use a different file.",
                 "status": "error",
+                "can_chat": False,
             }
 
     def _create_azure_embeddings(
