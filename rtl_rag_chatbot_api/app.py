@@ -200,46 +200,56 @@ async def upload_file(
     current_user=Depends(get_current_user),
 ):
     """
-    Handles the uploading of a file, processes it accordingly, and prepares a response with relevant details.
-    Supports file processing for various types including images, CSV, and Excel files.
-    If the file already exists, downloads necessary files; otherwise,
-    processes the file and optionally prepares a SQLite database for tabular data.
+    Handles file upload and automatically creates embeddings for PDFs and images.
     """
     try:
         file_id = str(uuid.uuid4())
         original_filename = file.filename
         file_extension = os.path.splitext(original_filename)[1].lower()
 
+        # Process the file upload
         result = await file_handler.process_file(file, file_id, is_image, username)
-
-        print(f"Result from process_file: {result}")
-        if result["status"] == "existing":
-            file_id = result["file_id"]
-            if file_handler.download_existing_file(file_id):
-                message = "File already exists. Required files downloaded."
-            else:
-                message = "File already exists, but error downloading necessary files."
-
-            # Add temp_file_path for existing files
-            temp_file_path = f"local_data/{file_id}_{original_filename}"
-            result["temp_file_path"] = temp_file_path
-        else:
-            message = result["message"]
-
+        file_id = result[
+            "file_id"
+        ]  # Use the file_id from result in case it's an existing file
         temp_file_path = result["temp_file_path"]
 
-        # If it's a CSV or Excel file and it's a new upload, prepare the SQLite database
+        # Prepare response
+        message = result["message"]
+        upload_status = "success"
+
+        # Handle CSV/Excel files
         if file_extension in [".csv", ".xlsx", ".xls"] and result["status"] == "new":
             await prepare_sqlite_db(file_id, temp_file_path)
+
+        # Create embeddings for PDF and Image files
+        elif file_extension == ".pdf" or is_image:
+            if result["status"] != "existing":  # Only create embeddings for new files
+                try:
+                    embedding_result = await embedding_handler.ensure_embeddings_exist(
+                        file_id=file_id, temp_file_path=temp_file_path
+                    )
+
+                    if embedding_result["status"] == "error":
+                        message = f"File uploaded but embedding failed: {embedding_result['message']}"
+                        upload_status = "partial"
+                    else:
+                        message = f"{message} Embeddings created successfully."
+                except Exception as e:
+                    logging.error(f"Error creating embeddings: {str(e)}")
+                    message = f"File uploaded but embedding creation failed: {str(e)}"
+                    upload_status = "partial"
 
         return FileUploadResponse(
             message=message,
             file_id=file_id,
             original_filename=original_filename,
             is_image=is_image,
+            status=upload_status,
         )
+
     except Exception as e:
-        print(f"Exception in upload_file: {str(e)}")
+        logging.error(f"Exception in upload_file: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -307,21 +317,28 @@ async def create_embeddings(
         - Supports both text and image files
     """
     try:
-        embedding_handler = EmbeddingHandler(configs, gcs_handler)
-
-        # Get file info
         file_info = gcs_handler.get_file_info(request.file_id)
         if not file_info:
             raise HTTPException(status_code=404, detail="File info not found")
 
-        if file_info.get("azure_ready"):
+        # Check local embeddings first
+        azure_path = f"./chroma_db/{request.file_id}/azure"
+        gemini_path = f"./chroma_db/{request.file_id}/google"
+        local_exists = (
+            os.path.exists(azure_path)
+            and os.path.exists(gemini_path)
+            and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
+            and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
+        )
+
+        if local_exists:
             return {
-                "message": "Azure embeddings already exist for this file",
-                "info": file_info.get("embeddings"),
+                "message": "Embeddings already exist locally",
+                "status": "existing",
                 "can_chat": True,
             }
 
-        # Get original filename
+        # Rest of your existing embedding creation code
         original_filename = file_info.get("original_filename")
         if not original_filename:
             raise HTTPException(status_code=400, detail="Original filename not found")
@@ -332,27 +349,18 @@ async def create_embeddings(
                 status_code=404, detail=f"File not found at {temp_file_path}"
             )
 
-        # Create embeddings using the ChromaDBManager
-        result = await embedding_handler.create_and_upload_embeddings(
-            request.file_id, file_info.get("is_image", False), temp_file_path
+        embedding_handler = EmbeddingHandler(configs, gcs_handler)
+        result = await embedding_handler.ensure_embeddings_exist(
+            request.file_id, temp_file_path
         )
 
-        # Check if result is dictionary and has message
-        if isinstance(result, dict):
-            if result.get("status") == "error":
-                return JSONResponse(
-                    status_code=400,
-                    content={"message": result.get("message", "Unknown error")},
-                )
+        if isinstance(result, dict) and result.get("status") == "error":
+            return JSONResponse(
+                status_code=400,
+                content={"message": result.get("message", "Unknown error")},
+            )
 
-            # Update file info (this part is already handled in embedding_handler)
-            return result
-        else:
-            return {
-                "message": "Embeddings created successfully",
-                "status": "completed",
-                "can_chat": True,
-            }
+        return result
 
     except Exception as e:
         logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
@@ -420,6 +428,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                 model = TabularDataHandler(configs, query.file_id, query.model_choice)
             else:
                 chroma_path = f"./chroma_db/{query.file_id}"
+                print("No local embeddings found, downloading from GCS")
                 if not os.path.exists(chroma_path):
                     gcs_handler.download_files_from_folder_by_id(query.file_id)
 

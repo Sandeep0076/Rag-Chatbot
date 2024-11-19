@@ -33,22 +33,12 @@ class EmbeddingHandler:
         Returns tuple of (gcs_status, local_status, all_valid)
         """
         try:
+            # breakpoint()
             # Check GCS embeddings status from metadata
             file_info = self.gcs_handler.get_file_info(file_id)
             gcs_metadata_status = file_info.get("embeddings_status") == "completed"
 
-            # Check local embeddings directories and collection existence
-            azure_path = f"./chroma_db/{file_id}/azure"
-            gemini_path = f"./chroma_db/{file_id}/google"
-
-            local_files_exist = (
-                os.path.exists(azure_path)
-                and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
-                and os.path.exists(gemini_path)
-                and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
-            )
-
-            # Check ChromaDB collections
+            # Check ChromaDB collections first
             azure_collection_name = f"rag_collection_{file_id}"
             gemini_collection_name = f"rag_collection_{file_id}"
 
@@ -60,33 +50,58 @@ class EmbeddingHandler:
                     file_id, "google", gemini_collection_name
                 )
                 collections_valid = (
-                    azure_collection.count() > 0 and gemini_collection.count() > 0
+                    azure_collection is not None
+                    and gemini_collection is not None
+                    and azure_collection.count() > 0
+                    and gemini_collection.count() > 0
                 )
+
+                # If collections are valid locally, we don't need to check GCS
+                if collections_valid:
+                    return True, True, True
+
             except Exception:
                 collections_valid = False
 
-            # Check GCS folder structure
-            azure_gcs_prefix = f"file-embeddings/{file_id}/azure/"
-            gemini_gcs_prefix = f"file-embeddings/{file_id}/google/"
+            # Only check local files if collections aren't valid
+            azure_path = f"./chroma_db/{file_id}/azure"
+            gemini_path = f"./chroma_db/{file_id}/google"
 
-            azure_blobs = list(
-                self.gcs_handler.bucket.list_blobs(prefix=azure_gcs_prefix)
-            )
-            gemini_blobs = list(
-                self.gcs_handler.bucket.list_blobs(prefix=gemini_gcs_prefix)
-            )
-
-            gcs_files_exist = (
-                len(azure_blobs) > 0
-                and len(gemini_blobs) > 0
-                and any(blob.name.endswith("chroma.sqlite3") for blob in azure_blobs)
-                and any(blob.name.endswith("chroma.sqlite3") for blob in gemini_blobs)
+            local_files_exist = (
+                os.path.exists(azure_path)
+                and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
+                and os.path.exists(gemini_path)
+                and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
             )
 
-            gcs_status = gcs_metadata_status and gcs_files_exist
-            local_status = local_files_exist and collections_valid
+            # Only check GCS if needed
+            if not local_files_exist:
+                azure_gcs_prefix = f"file-embeddings/{file_id}/azure/"
+                gemini_gcs_prefix = f"file-embeddings/{file_id}/google/"
 
-            return gcs_status, local_status, (gcs_status and local_status)
+                azure_blobs = list(
+                    self.gcs_handler.bucket.list_blobs(prefix=azure_gcs_prefix)
+                )
+                gemini_blobs = list(
+                    self.gcs_handler.bucket.list_blobs(prefix=gemini_gcs_prefix)
+                )
+
+                gcs_files_exist = (
+                    len(azure_blobs) > 0
+                    and len(gemini_blobs) > 0
+                    and any(
+                        blob.name.endswith("chroma.sqlite3") for blob in azure_blobs
+                    )
+                    and any(
+                        blob.name.endswith("chroma.sqlite3") for blob in gemini_blobs
+                    )
+                )
+
+                gcs_status = gcs_metadata_status and gcs_files_exist
+            else:
+                gcs_status = gcs_metadata_status
+
+            return gcs_status, local_files_exist, (gcs_status and local_files_exist)
 
         except Exception as e:
             logging.error(f"Error checking embeddings existence: {str(e)}")
