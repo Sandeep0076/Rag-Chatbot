@@ -53,9 +53,7 @@ class FileHandler:
     async def process_file(
         self, file: UploadFile, file_id: str, is_image: bool, username: str
     ):
-        """
-        Process uploaded file including handling images, tabular data and existing files.
-        """
+        """Process uploaded file including handling images, tabular data and existing files."""
         try:
             original_filename = file.filename
             if len(original_filename) > 100:
@@ -79,7 +77,6 @@ class FileHandler:
             # For new image files, analyze first
             analysis_text_path = None
             if is_image and not existing_file_id:
-                # Analyze image and store analysis
                 analysis_result = analyze_images(temp_file_path)
                 analysis_text_path = f"local_data/{file_id}_analysis.txt"
                 with open(analysis_text_path, "w") as f:
@@ -101,8 +98,20 @@ class FileHandler:
                     shutil.copy2(temp_file_path, existing_temp_path)
                     temp_file_path = existing_temp_path
                 else:
-                    # For non-tabular files, download existing embeddings
-                    self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
+                    # Check if local embeddings exist first
+                    azure_path = f"./chroma_db/{existing_file_id}/azure"
+                    gemini_path = f"./chroma_db/{existing_file_id}/google"
+                    local_exists = (
+                        os.path.exists(azure_path)
+                        and os.path.exists(gemini_path)
+                        and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
+                        and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
+                    )
+
+                    if not local_exists:
+                        self.gcs_handler.download_files_from_folder_by_id(
+                            existing_file_id
+                        )
 
                     # Copy the temp file to match the existing file ID path
                     existing_temp_path = (
@@ -154,9 +163,7 @@ class FileHandler:
             # Store metadata in GCS
             self.gcs_handler.upload_to_gcs(
                 self.configs.gcp_resource.bucket_name,
-                {
-                    "metadata": (metadata, f"file-embeddings/{file_id}/file_info.json"),
-                },
+                {"metadata": (metadata, f"file-embeddings/{file_id}/file_info.json")},
             )
 
             # If it's a new tabular file, prepare SQLite database
@@ -170,12 +177,13 @@ class FileHandler:
                 "file_id": file_id,
                 "is_image": is_image,
                 "is_tabular": is_tabular,
-                "message": "File processed and metadata stored successfully. Embeddings pending."
+                "message": "File processed and ready for embedding creation."
                 if not is_tabular
                 else "File processed and ready for use.",
-                "status": "new",
+                "status": "success",
                 "temp_file_path": analysis_text_path if is_image else temp_file_path,
             }
+
         except Exception as e:
             print(f"Exception in process_file: {str(e)}")
             # Clean up temp files in case of error
@@ -187,7 +195,13 @@ class FileHandler:
                 and os.path.exists(analysis_text_path)
             ):
                 os.remove(analysis_text_path)
-            raise
+            return {
+                "status": "error",
+                "message": str(e),
+                "file_id": file_id,
+                "is_image": is_image,
+                "temp_file_path": None,
+            }
 
     def download_existing_file(self, file_id: str):
         """
