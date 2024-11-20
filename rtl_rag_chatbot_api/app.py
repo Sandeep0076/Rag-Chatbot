@@ -415,6 +415,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         if not model:
             file_info = gcs_handler.get_file_info(query.file_id)
             if not file_info:
+                print(f"File info not found for {query.file_id}")
                 raise HTTPException(status_code=404, detail="File not found")
 
             db_path = f"./chroma_db/{query.file_id}/tabular_data.db"
@@ -437,13 +438,13 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                 print("No local embeddings found, downloading from GCS")
                 gcs_handler.download_files_from_folder_by_id(query.file_id)
 
-            # Initialize model
+            # Initialize model with ChromaDB
             if is_gemini:
                 model = GeminiHandler(configs, gcs_handler)
                 model.initialize(
                     model=query.model_choice,
                     file_id=query.file_id,
-                    embedding_type=embedding_type,
+                    embedding_type="google",
                     collection_name=f"rag_collection_{query.file_id}",
                     user_id=query.user_id,
                 )
@@ -452,7 +453,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                 model.initialize(
                     model_choice=query.model_choice,
                     file_id=query.file_id,
-                    embedding_type=embedding_type,
+                    embedding_type="azure",
                     collection_name=f"rag_collection_{query.file_id}",
                     user_id=query.user_id,
                 )
