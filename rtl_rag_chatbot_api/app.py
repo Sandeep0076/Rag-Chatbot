@@ -417,42 +417,45 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             if not file_info:
                 raise HTTPException(status_code=404, detail="File not found")
 
-            if not file_info.get("azure_ready"):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Azure embeddings are not ready yet. Please wait a moment.",
-                )
-
             db_path = f"./chroma_db/{query.file_id}/tabular_data.db"
             if os.path.exists(db_path):
                 model = TabularDataHandler(configs, query.file_id, query.model_choice)
-            else:
-                chroma_path = f"./chroma_db/{query.file_id}"
+
+            # Check for local embeddings first
+            chroma_path = f"./chroma_db/{query.file_id}"
+            is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+            embedding_type = "google" if is_gemini else "azure"
+            model_path = os.path.join(chroma_path, embedding_type, "chroma.sqlite3")
+
+            # If local embeddings don't exist, check GCS
+            if not os.path.exists(model_path):
+                if not file_info.get("embeddings_status") == "completed":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Embeddings are not ready yet. Please wait a moment.",
+                    )
                 print("No local embeddings found, downloading from GCS")
-                if not os.path.exists(chroma_path):
-                    gcs_handler.download_files_from_folder_by_id(query.file_id)
+                gcs_handler.download_files_from_folder_by_id(query.file_id)
 
-                is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
-                embedding_type = "google" if is_gemini else "azure"
-
-                if is_gemini:
-                    model = GeminiHandler(configs, gcs_handler)
-                    model.initialize(
-                        model=query.model_choice,
-                        file_id=query.file_id,
-                        embedding_type=embedding_type,
-                        collection_name=f"rag_collection_{query.file_id}",
-                        user_id=query.user_id,
-                    )
-                else:
-                    model = Chatbot(configs, gcs_handler)
-                    model.initialize(
-                        model_choice=query.model_choice,
-                        file_id=query.file_id,
-                        embedding_type=embedding_type,
-                        collection_name=f"rag_collection_{query.file_id}",
-                        user_id=query.user_id,
-                    )
+            # Initialize model
+            if is_gemini:
+                model = GeminiHandler(configs, gcs_handler)
+                model.initialize(
+                    model=query.model_choice,
+                    file_id=query.file_id,
+                    embedding_type=embedding_type,
+                    collection_name=f"rag_collection_{query.file_id}",
+                    user_id=query.user_id,
+                )
+            else:
+                model = Chatbot(configs, gcs_handler)
+                model.initialize(
+                    model_choice=query.model_choice,
+                    file_id=query.file_id,
+                    embedding_type=embedding_type,
+                    collection_name=f"rag_collection_{query.file_id}",
+                    user_id=query.user_id,
+                )
 
             initialized_models[model_key] = model
             logging.info(

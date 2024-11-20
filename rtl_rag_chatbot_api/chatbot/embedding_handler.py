@@ -33,37 +33,11 @@ class EmbeddingHandler:
         Returns tuple of (gcs_status, local_status, all_valid)
         """
         try:
-            # breakpoint()
             # Check GCS embeddings status from metadata
             file_info = self.gcs_handler.get_file_info(file_id)
             gcs_metadata_status = file_info.get("embeddings_status") == "completed"
 
-            # Check ChromaDB collections first
-            azure_collection_name = f"rag_collection_{file_id}"
-            gemini_collection_name = f"rag_collection_{file_id}"
-
-            try:
-                azure_collection = self.chroma_manager.get_collection(
-                    file_id, "azure", azure_collection_name
-                )
-                gemini_collection = self.chroma_manager.get_collection(
-                    file_id, "google", gemini_collection_name
-                )
-                collections_valid = (
-                    azure_collection is not None
-                    and gemini_collection is not None
-                    and azure_collection.count() > 0
-                    and gemini_collection.count() > 0
-                )
-
-                # If collections are valid locally, we don't need to check GCS
-                if collections_valid:
-                    return True, True, True
-
-            except Exception:
-                collections_valid = False
-
-            # Only check local files if collections aren't valid
+            # Check local files first
             azure_path = f"./chroma_db/{file_id}/azure"
             gemini_path = f"./chroma_db/{file_id}/google"
 
@@ -73,6 +47,10 @@ class EmbeddingHandler:
                 and os.path.exists(gemini_path)
                 and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
             )
+
+            # If local files exist, we consider them valid regardless of GCS status
+            if local_files_exist:
+                return True, True, True
 
             # Only check GCS if needed
             if not local_files_exist:
@@ -98,10 +76,9 @@ class EmbeddingHandler:
                 )
 
                 gcs_status = gcs_metadata_status and gcs_files_exist
-            else:
-                gcs_status = gcs_metadata_status
+                return gcs_status, False, False
 
-            return gcs_status, local_files_exist, (gcs_status and local_files_exist)
+            return False, False, False
 
         except Exception as e:
             logging.error(f"Error checking embeddings existence: {str(e)}")
@@ -191,7 +168,7 @@ class EmbeddingHandler:
 
             logging.info(f"Text extracted and split into {len(chunks)} chunks")
 
-            # Create Azure embeddings first and wait for completion
+            # Create Azure embeddings first
             azure_result = self._create_azure_embeddings(
                 file_id,
                 chunks,
@@ -199,21 +176,21 @@ class EmbeddingHandler:
                 username,
             )
 
-            # Update file info to indicate Azure embeddings are ready
+            # Create Gemini embeddings synchronously
+            gemini_result = self._create_gemini_embeddings(file_id, chunks, username)
+
+            # Update file info to indicate both embeddings are ready
             new_info = {
                 "embeddings": {
                     "azure": azure_result,
-                    "gemini": "pending",  # Add status for Gemini
+                    "gemini": gemini_result,
                 },
-                "embeddings_status": "partial",  # Change status to partial
-                "azure_ready": True,  # Add explicit flag for Azure readiness
+                "embeddings_status": "completed",
+                "azure_ready": True,
             }
             self.gcs_handler.update_file_info(file_id, new_info)
 
-            # Start background tasks for Gemini and GCS upload
-            asyncio.create_task(
-                self._create_gemini_embeddings(file_id, chunks, username)
-            )
+            # Start background task for GCS upload only
             asyncio.create_task(self._upload_embeddings_to_gcs(file_id))
 
             return {
@@ -250,7 +227,9 @@ class EmbeddingHandler:
                 collection_name=collection_name,
             )
 
-            azure_handler.create_and_store_embeddings(chunks, file_id, "azure")
+            azure_handler.create_and_store_embeddings(
+                chunks, file_id, "azure", is_embedding=True
+            )
 
             logging.info("Azure embeddings generated successfully")
             return "completed"
@@ -258,9 +237,7 @@ class EmbeddingHandler:
             logging.error(f"Error creating Azure embeddings: {str(e)}", exc_info=True)
             raise
 
-    async def _create_gemini_embeddings(
-        self, file_id: str, chunks: List[str], username: str
-    ):
+    def _create_gemini_embeddings(self, file_id: str, chunks: List[str], username: str):
         """Creates embeddings using Gemini model."""
         logging.info("Generating Gemini embeddings...")
         try:
@@ -274,7 +251,9 @@ class EmbeddingHandler:
                 collection_name=collection_name,
             )
 
-            gemini_handler.create_and_store_embeddings(chunks, file_id, "google")
+            gemini_handler.create_and_store_embeddings(
+                chunks, file_id, "google", is_embedding=True
+            )
 
             logging.info("Gemini embeddings generated successfully")
             return "completed"
