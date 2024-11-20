@@ -200,46 +200,56 @@ async def upload_file(
     current_user=Depends(get_current_user),
 ):
     """
-    Handles the uploading of a file, processes it accordingly, and prepares a response with relevant details.
-    Supports file processing for various types including images, CSV, and Excel files.
-    If the file already exists, downloads necessary files; otherwise,
-    processes the file and optionally prepares a SQLite database for tabular data.
+    Handles file upload and automatically creates embeddings for PDFs and images.
     """
     try:
         file_id = str(uuid.uuid4())
         original_filename = file.filename
         file_extension = os.path.splitext(original_filename)[1].lower()
 
+        # Process the file upload
         result = await file_handler.process_file(file, file_id, is_image, username)
-
-        print(f"Result from process_file: {result}")
-        if result["status"] == "existing":
-            file_id = result["file_id"]
-            if file_handler.download_existing_file(file_id):
-                message = "File already exists. Required files downloaded."
-            else:
-                message = "File already exists, but error downloading necessary files."
-
-            # Add temp_file_path for existing files
-            temp_file_path = f"local_data/{file_id}_{original_filename}"
-            result["temp_file_path"] = temp_file_path
-        else:
-            message = result["message"]
-
+        file_id = result[
+            "file_id"
+        ]  # Use the file_id from result in case it's an existing file
         temp_file_path = result["temp_file_path"]
 
-        # If it's a CSV or Excel file and it's a new upload, prepare the SQLite database
+        # Prepare response
+        message = result["message"]
+        upload_status = "success"
+
+        # Handle CSV/Excel files
         if file_extension in [".csv", ".xlsx", ".xls"] and result["status"] == "new":
             await prepare_sqlite_db(file_id, temp_file_path)
+
+        # Create embeddings for PDF and Image files
+        elif file_extension == ".pdf" or is_image:
+            if result["status"] != "existing":  # Only create embeddings for new files
+                try:
+                    embedding_result = await embedding_handler.ensure_embeddings_exist(
+                        file_id=file_id, temp_file_path=temp_file_path
+                    )
+
+                    if embedding_result["status"] == "error":
+                        message = f"File uploaded but embedding failed: {embedding_result['message']}"
+                        upload_status = "partial"
+                    else:
+                        message = f"{message} Embeddings created successfully."
+                except Exception as e:
+                    logging.error(f"Error creating embeddings: {str(e)}")
+                    message = f"File uploaded but embedding creation failed: {str(e)}"
+                    upload_status = "partial"
 
         return FileUploadResponse(
             message=message,
             file_id=file_id,
             original_filename=original_filename,
             is_image=is_image,
+            status=upload_status,
         )
+
     except Exception as e:
-        print(f"Exception in upload_file: {str(e)}")
+        logging.error(f"Exception in upload_file: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -307,20 +317,28 @@ async def create_embeddings(
         - Supports both text and image files
     """
     try:
-        embedding_handler = EmbeddingHandler(configs, gcs_handler)
-
-        # Get file info
         file_info = gcs_handler.get_file_info(request.file_id)
         if not file_info:
             raise HTTPException(status_code=404, detail="File info not found")
 
-        if file_info.get("embeddings_status") == "completed":
+        # Check local embeddings first
+        azure_path = f"./chroma_db/{request.file_id}/azure"
+        gemini_path = f"./chroma_db/{request.file_id}/google"
+        local_exists = (
+            os.path.exists(azure_path)
+            and os.path.exists(gemini_path)
+            and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
+            and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
+        )
+
+        if local_exists:
             return {
-                "message": "Embeddings already exist for this file",
-                "info": file_info.get("embeddings"),
+                "message": "Embeddings already exist locally",
+                "status": "existing",
+                "can_chat": True,
             }
 
-        # Get original filename
+        # Rest of your existing embedding creation code
         original_filename = file_info.get("original_filename")
         if not original_filename:
             raise HTTPException(status_code=400, detail="Original filename not found")
@@ -331,26 +349,18 @@ async def create_embeddings(
                 status_code=404, detail=f"File not found at {temp_file_path}"
             )
 
-        # Create embeddings using the ChromaDBManager
-        result = await embedding_handler.create_and_upload_embeddings(
-            request.file_id, file_info.get("is_image", False), temp_file_path
+        embedding_handler = EmbeddingHandler(configs, gcs_handler)
+        result = await embedding_handler.ensure_embeddings_exist(
+            request.file_id, temp_file_path
         )
 
-        # Check if result is dictionary and has message
-        if isinstance(result, dict):
-            if result.get("status") == "error":
-                return JSONResponse(
-                    status_code=400,
-                    content={"message": result.get("message", "Unknown error")},
-                )
-
-            # Update file info
-            gcs_handler.update_file_info(
-                request.file_id, {"embeddings_status": "completed"}
+        if isinstance(result, dict) and result.get("status") == "error":
+            return JSONResponse(
+                status_code=400,
+                content={"message": result.get("message", "Unknown error")},
             )
-            return result
-        else:
-            return {"message": "Embeddings created successfully", "status": "completed"}
+
+        return result
 
     except Exception as e:
         logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
@@ -359,6 +369,7 @@ async def create_embeddings(
             content={
                 "message": "An unexpected error occurred while processing your file.",
                 "error": str(e),
+                "can_chat": False,
             },
         )
 
@@ -398,41 +409,32 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         if len(query.text) == 0:
             raise HTTPException(status_code=400, detail="Text array cannot be empty")
 
-        # Using username from Query model instead of current_user
-        model = initialized_models.get(f"{query.file_id}_{query.user_id}")
-        is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
-        needs_initialization = False
+        model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
+        model = initialized_models.get(model_key)
 
-        # Case 1: No model exists for this user
         if not model:
-            needs_initialization = True
-            logging.info(
-                f"No model found for file_id: {query.file_id} and user: {query.user_id}"
-            )
-        else:
-            current_model_type = (
-                "gemini" if isinstance(model, GeminiHandler) else "azure"
-            )
-            requested_model_type = "gemini" if is_gemini else "azure"
-            if current_model_type != requested_model_type:
-                needs_initialization = True
-                logging.info(f"Model type mismatch for user {query.user_id}")
-
-        if needs_initialization:
             file_info = gcs_handler.get_file_info(query.file_id)
             if not file_info:
                 raise HTTPException(status_code=404, detail="File not found")
 
-            # Check for tabular data
+            if not file_info.get("azure_ready"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Azure embeddings are not ready yet. Please wait a moment.",
+                )
+
             db_path = f"./chroma_db/{query.file_id}/tabular_data.db"
             if os.path.exists(db_path):
                 model = TabularDataHandler(configs, query.file_id, query.model_choice)
             else:
                 chroma_path = f"./chroma_db/{query.file_id}"
+                print("No local embeddings found, downloading from GCS")
                 if not os.path.exists(chroma_path):
                     gcs_handler.download_files_from_folder_by_id(query.file_id)
 
+                is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
                 embedding_type = "google" if is_gemini else "azure"
+
                 if is_gemini:
                     model = GeminiHandler(configs, gcs_handler)
                     model.initialize(
@@ -440,7 +442,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                         file_id=query.file_id,
                         embedding_type=embedding_type,
                         collection_name=f"rag_collection_{query.file_id}",
-                        user_id=query.user_id,  # Using username instead
+                        user_id=query.user_id,
                     )
                 else:
                     model = Chatbot(configs, gcs_handler)
@@ -449,23 +451,21 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                         file_id=query.file_id,
                         embedding_type=embedding_type,
                         collection_name=f"rag_collection_{query.file_id}",
-                        user_id=query.user_id,  # Using username instead
+                        user_id=query.user_id,
                     )
 
-            initialized_models[f"{query.file_id}_{query.user_id}"] = model
+            initialized_models[model_key] = model
             logging.info(
-                f"Model initialized for file_id: {query.file_id} user: {query.user_id}"
+                f"Model initialized: {query.file_id}, user: {query.user_id}, model: {query.model_choice}"
             )
 
         current_question = query.text[-1]
-        chat_context = ""
-        if len(query.text) > 1:
-            chat_context = "\n".join(
-                [f"Previous message: {msg}" for msg in query.text[:-1]]
-            )
-            chat_context += "\nCurrent question: " + current_question
-        else:
-            chat_context = current_question
+        chat_context = (
+            "\n".join([f"Previous message: {msg}" for msg in query.text[:-1]])
+            + f"\nCurrent question: {current_question}"
+            if len(query.text) > 1
+            else current_question
+        )
 
         response = model.get_answer(chat_context)
 
@@ -474,8 +474,9 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             rows = response[1:]
             table_str = "| " + " | ".join(str(h) for h in headers) + " |\n"
             table_str += "|" + "|".join(["---" for _ in headers]) + "|\n"
-            for row in rows:
-                table_str += "| " + " | ".join(str(cell) for cell in row) + " |\n"
+            table_str += "\n".join(
+                "| " + " | ".join(str(cell) for cell in row) + " |" for row in rows
+            )
             return {"response": table_str}
 
         return {"response": str(response)}

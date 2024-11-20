@@ -21,6 +21,8 @@ class FileUploadResponse(BaseModel):
     file_id: str
     original_filename: str
     is_image: bool
+    status: str = "success"  # Added status field with default value
+    temp_file_path: Optional[str] = None
 
 
 class NeighborsQuery(BaseModel):

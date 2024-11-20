@@ -33,12 +33,11 @@ def handle_file_upload():
     )
 
     is_image = st.session_state.file_type == "Image"
-    if is_image:
-        file_types = ["jpg", "png"]
-    elif st.session_state.file_type in ["CSV"]:
-        file_types = ["xlsx", "xls", "csv"]
-    else:  # PDF
-        file_types = ["pdf"]
+    file_types = {
+        "Image": ["jpg", "png"],
+        "CSV": ["xlsx", "xls", "csv"],
+        "PDF": ["pdf"],
+    }[st.session_state.file_type]
 
     uploaded_file = st.file_uploader(
         f"Choose a {st.session_state.file_type} file", type=file_types
@@ -62,24 +61,12 @@ def handle_file_upload():
                     st.session_state.file_id = file_id
                     st.session_state.file_uploaded = True
 
-                    # Step 2: Create embeddings or prepare SQLite DB
-                    with st.spinner("Creating embeddings or preparing database..."):
-                        if st.session_state.file_type in ["PDF", "Image"]:
-                            embed_response = requests.post(
-                                f"{API_URL}/embeddings/create",
-                                json={
-                                    "file_id": file_id,
-                                    "is_image": is_image,
-                                },
-                            )
-                            if embed_response.status_code == 200:
-                                st.success(
-                                    "File processed and embeddings created successfully."
-                                )
-                        else:  # CSV/Excel
-                            st.success(
-                                "File processed and SQLite database created successfully."
-                            )
+                    if upload_result.get("status") == "success":
+                        st.success("File processed successfully and ready for chat.")
+                    elif upload_result.get("status") == "partial":
+                        st.warning(upload_result["message"])
+                    else:
+                        st.info(upload_result["message"])
 
                     if is_image:
                         st.session_state.uploaded_image = uploaded_file

@@ -33,22 +33,12 @@ class EmbeddingHandler:
         Returns tuple of (gcs_status, local_status, all_valid)
         """
         try:
+            # breakpoint()
             # Check GCS embeddings status from metadata
             file_info = self.gcs_handler.get_file_info(file_id)
             gcs_metadata_status = file_info.get("embeddings_status") == "completed"
 
-            # Check local embeddings directories and collection existence
-            azure_path = f"./chroma_db/{file_id}/azure"
-            gemini_path = f"./chroma_db/{file_id}/google"
-
-            local_files_exist = (
-                os.path.exists(azure_path)
-                and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
-                and os.path.exists(gemini_path)
-                and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
-            )
-
-            # Check ChromaDB collections
+            # Check ChromaDB collections first
             azure_collection_name = f"rag_collection_{file_id}"
             gemini_collection_name = f"rag_collection_{file_id}"
 
@@ -60,33 +50,58 @@ class EmbeddingHandler:
                     file_id, "google", gemini_collection_name
                 )
                 collections_valid = (
-                    azure_collection.count() > 0 and gemini_collection.count() > 0
+                    azure_collection is not None
+                    and gemini_collection is not None
+                    and azure_collection.count() > 0
+                    and gemini_collection.count() > 0
                 )
+
+                # If collections are valid locally, we don't need to check GCS
+                if collections_valid:
+                    return True, True, True
+
             except Exception:
                 collections_valid = False
 
-            # Check GCS folder structure
-            azure_gcs_prefix = f"file-embeddings/{file_id}/azure/"
-            gemini_gcs_prefix = f"file-embeddings/{file_id}/google/"
+            # Only check local files if collections aren't valid
+            azure_path = f"./chroma_db/{file_id}/azure"
+            gemini_path = f"./chroma_db/{file_id}/google"
 
-            azure_blobs = list(
-                self.gcs_handler.bucket.list_blobs(prefix=azure_gcs_prefix)
-            )
-            gemini_blobs = list(
-                self.gcs_handler.bucket.list_blobs(prefix=gemini_gcs_prefix)
-            )
-
-            gcs_files_exist = (
-                len(azure_blobs) > 0
-                and len(gemini_blobs) > 0
-                and any(blob.name.endswith("chroma.sqlite3") for blob in azure_blobs)
-                and any(blob.name.endswith("chroma.sqlite3") for blob in gemini_blobs)
+            local_files_exist = (
+                os.path.exists(azure_path)
+                and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
+                and os.path.exists(gemini_path)
+                and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
             )
 
-            gcs_status = gcs_metadata_status and gcs_files_exist
-            local_status = local_files_exist and collections_valid
+            # Only check GCS if needed
+            if not local_files_exist:
+                azure_gcs_prefix = f"file-embeddings/{file_id}/azure/"
+                gemini_gcs_prefix = f"file-embeddings/{file_id}/google/"
 
-            return gcs_status, local_status, (gcs_status and local_status)
+                azure_blobs = list(
+                    self.gcs_handler.bucket.list_blobs(prefix=azure_gcs_prefix)
+                )
+                gemini_blobs = list(
+                    self.gcs_handler.bucket.list_blobs(prefix=gemini_gcs_prefix)
+                )
+
+                gcs_files_exist = (
+                    len(azure_blobs) > 0
+                    and len(gemini_blobs) > 0
+                    and any(
+                        blob.name.endswith("chroma.sqlite3") for blob in azure_blobs
+                    )
+                    and any(
+                        blob.name.endswith("chroma.sqlite3") for blob in gemini_blobs
+                    )
+                )
+
+                gcs_status = gcs_metadata_status and gcs_files_exist
+            else:
+                gcs_status = gcs_metadata_status
+
+            return gcs_status, local_files_exist, (gcs_status and local_files_exist)
 
         except Exception as e:
             logging.error(f"Error checking embeddings existence: {str(e)}")
@@ -176,7 +191,7 @@ class EmbeddingHandler:
 
             logging.info(f"Text extracted and split into {len(chunks)} chunks")
 
-            # Create Azure embeddings
+            # Create Azure embeddings first and wait for completion
             azure_result = self._create_azure_embeddings(
                 file_id,
                 chunks,
@@ -184,23 +199,28 @@ class EmbeddingHandler:
                 username,
             )
 
-            # Run Gemini embeddings creation and GCS upload in the background
+            # Update file info to indicate Azure embeddings are ready
+            new_info = {
+                "embeddings": {
+                    "azure": azure_result,
+                    "gemini": "pending",  # Add status for Gemini
+                },
+                "embeddings_status": "partial",  # Change status to partial
+                "azure_ready": True,  # Add explicit flag for Azure readiness
+            }
+            self.gcs_handler.update_file_info(file_id, new_info)
+
+            # Start background tasks for Gemini and GCS upload
             asyncio.create_task(
                 self._create_gemini_embeddings(file_id, chunks, username)
             )
             asyncio.create_task(self._upload_embeddings_to_gcs(file_id))
 
-            # Update file info with Azure embedding status
-            new_info = {
-                "embeddings": {"azure": azure_result},
-                "embeddings_status": "completed",
-            }
-            self.gcs_handler.update_file_info(file_id, new_info)
-
             return {
-                "message": "Azure embeddings created successfully. "
+                "message": "Azure embeddings created and ready for chat. "
                 "Gemini embeddings are being created in the background.",
-                "status": "completed",
+                "status": "azure_ready",
+                "can_chat": True,
             }
 
         except Exception as e:
@@ -211,6 +231,7 @@ class EmbeddingHandler:
                 "message": "An error occurred while processing your file. "
                 "Please try again or use a different file.",
                 "status": "error",
+                "can_chat": False,
             }
 
     def _create_azure_embeddings(
