@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import os
@@ -33,10 +32,6 @@ class EmbeddingHandler:
         Returns tuple of (gcs_status, local_status, all_valid)
         """
         try:
-            # Check GCS embeddings status from metadata
-            file_info = self.gcs_handler.get_file_info(file_id)
-            gcs_metadata_status = file_info.get("embeddings_status") == "completed"
-
             # Check local files first
             azure_path = f"./chroma_db/{file_id}/azure"
             gemini_path = f"./chroma_db/{file_id}/google"
@@ -48,37 +43,29 @@ class EmbeddingHandler:
                 and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
             )
 
-            # If local files exist, we consider them valid regardless of GCS status
+            # If local files exist, we consider them valid
             if local_files_exist:
                 return True, True, True
 
-            # Only check GCS if needed
-            if not local_files_exist:
-                azure_gcs_prefix = f"file-embeddings/{file_id}/azure/"
-                gemini_gcs_prefix = f"file-embeddings/{file_id}/google/"
+            # Check GCS embeddings
+            azure_gcs_prefix = f"file-embeddings/{file_id}/azure/"
+            gemini_gcs_prefix = f"file-embeddings/{file_id}/google/"
 
-                azure_blobs = list(
-                    self.gcs_handler.bucket.list_blobs(prefix=azure_gcs_prefix)
-                )
-                gemini_blobs = list(
-                    self.gcs_handler.bucket.list_blobs(prefix=gemini_gcs_prefix)
-                )
+            azure_blobs = list(
+                self.gcs_handler.bucket.list_blobs(prefix=azure_gcs_prefix)
+            )
+            gemini_blobs = list(
+                self.gcs_handler.bucket.list_blobs(prefix=gemini_gcs_prefix)
+            )
 
-                gcs_files_exist = (
-                    len(azure_blobs) > 0
-                    and len(gemini_blobs) > 0
-                    and any(
-                        blob.name.endswith("chroma.sqlite3") for blob in azure_blobs
-                    )
-                    and any(
-                        blob.name.endswith("chroma.sqlite3") for blob in gemini_blobs
-                    )
-                )
+            gcs_files_exist = (
+                len(azure_blobs) > 0
+                and len(gemini_blobs) > 0
+                and any(blob.name.endswith("chroma.sqlite3") for blob in azure_blobs)
+                and any(blob.name.endswith("chroma.sqlite3") for blob in gemini_blobs)
+            )
 
-                gcs_status = gcs_metadata_status and gcs_files_exist
-                return gcs_status, False, False
-
-            return False, False, False
+            return gcs_files_exist, False, False
 
         except Exception as e:
             logging.error(f"Error checking embeddings existence: {str(e)}")
@@ -89,9 +76,10 @@ class EmbeddingHandler:
         Ensures embeddings exist and are valid, creates only if necessary.
         """
         try:
-            file_info = self.gcs_handler.get_file_info(file_id)
-            if not file_info:
-                raise ValueError(f"No file info found for file_id: {file_id}")
+            # Instead of looking for file_info, check temp_metadata first
+            temp_metadata = self.gcs_handler.temp_metadata
+            if not temp_metadata:
+                raise ValueError(f"No metadata found for file_id: {file_id}")
 
             # Check embeddings status using the existing embeddings_exist function
             gcs_status, local_status, all_valid = self.embeddings_exist(file_id)
@@ -116,7 +104,7 @@ class EmbeddingHandler:
             # Only create new embeddings if they don't exist anywhere
             if not gcs_status:
                 if not temp_file_path:
-                    original_filename = file_info.get("original_filename")
+                    original_filename = temp_metadata.get("original_filename")
                     temp_file_path = f"local_data/{file_id}_{original_filename}"
 
                 if not os.path.exists(temp_file_path):
@@ -126,12 +114,12 @@ class EmbeddingHandler:
 
                 logging.info(f"Creating new embeddings for file_id: {file_id}")
                 return await self.create_and_upload_embeddings(
-                    file_id, file_info.get("is_image", False), temp_file_path
+                    file_id, temp_metadata.get("is_image", False), temp_file_path
                 )
 
             return {
-                "message": "Embeddings exist but may be invalid",
-                "status": "warning",
+                "message": "Embeddings status check completed",
+                "status": "checked",
             }
 
         except Exception as e:
@@ -142,22 +130,19 @@ class EmbeddingHandler:
         self, file_id: str, is_image: bool, temp_file_path: str
     ):
         try:
-            file_info = self.gcs_handler.get_file_info(file_id)
-            username = file_info.get("username", "Unknown")
+            # Get temporary metadata
+            temp_metadata = self.gcs_handler.temp_metadata
+            username = temp_metadata.get("username", "Unknown")
 
             base_handler = BaseRAGHandler(self.configs, self.gcs_handler)
             text = base_handler.extract_text_from_file(temp_file_path)
-            # Check if the text starts with "ERROR:"
             if text.startswith("ERROR:"):
-                return {
-                    "message": text[7:],  # Remove "ERROR:" prefix
-                    "status": "error",
-                }
+                return {"message": text[7:], "status": "error"}
 
             chunks = base_handler.split_text(text)
             if not chunks:
                 return {
-                    "message": "No processable text found in the document. Please try a different file.",
+                    "message": "No processable text found in the document.",
                     "status": "error",
                 }
 
@@ -168,45 +153,62 @@ class EmbeddingHandler:
 
             logging.info(f"Text extracted and split into {len(chunks)} chunks")
 
-            # Create Azure embeddings first
+            # Create embeddings
             azure_result = self._create_azure_embeddings(
                 file_id,
                 chunks,
                 self.configs.azure_embedding.azure_embedding_api_key,
                 username,
             )
-
-            # Create Gemini embeddings synchronously
             gemini_result = self._create_gemini_embeddings(file_id, chunks, username)
 
-            # Update file info to indicate both embeddings are ready
-            new_info = {
-                "embeddings": {
-                    "azure": azure_result,
-                    "gemini": gemini_result,
-                },
-                "embeddings_status": "completed",
-                "azure_ready": True,
-            }
-            self.gcs_handler.update_file_info(file_id, new_info)
+            try:
+                # Upload embeddings to GCS
+                await self._upload_embeddings_to_gcs(file_id)
 
-            # Start background task for GCS upload only
-            asyncio.create_task(self._upload_embeddings_to_gcs(file_id))
+                # Only create file_info.json after successful upload
+                file_info = {
+                    **temp_metadata,  # Include original metadata
+                    "embeddings": {
+                        "azure": azure_result,
+                        "gemini": gemini_result,
+                    },
+                    "embeddings_status": "completed",
+                    "azure_ready": True,
+                }
 
-            return {
-                "message": "Azure embeddings created and ready for chat. "
-                "Gemini embeddings are being created in the background.",
-                "status": "azure_ready",
-                "can_chat": True,
-            }
+                # Save file_info.json
+                self.gcs_handler.upload_to_gcs(
+                    self.configs.gcp_resource.bucket_name,
+                    {
+                        "metadata": (
+                            file_info,
+                            f"file-embeddings/{file_id}/file_info.json",
+                        )
+                    },
+                )
+
+                # Clear temporary metadata
+                self.gcs_handler.temp_metadata = None
+
+                return {
+                    "message": "Embeddings created and uploaded successfully. Ready for chat.",
+                    "status": "completed",
+                    "can_chat": True,
+                }
+
+            except Exception as e:
+                logging.error(f"Error uploading embeddings to GCS: {str(e)}")
+                # Clean up any partially created embeddings
+                await self._cleanup_failed_embeddings(file_id)
+                raise
 
         except Exception as e:
             logging.error(
                 f"Error in create_and_upload_embeddings: {str(e)}", exc_info=True
             )
             return {
-                "message": "An error occurred while processing your file. "
-                "Please try again or use a different file.",
+                "message": "An error occurred while processing your file.",
                 "status": "error",
                 "can_chat": False,
             }
