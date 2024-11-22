@@ -214,13 +214,22 @@ async def upload_file(
         ]  # Use the file_id from result in case it's an existing file
         temp_file_path = result["temp_file_path"]
 
-        # Prepare response
-        message = result["message"]
-        upload_status = "success"
-
         # Handle CSV/Excel files
         if file_extension in [".csv", ".xlsx", ".xls"] and result["status"] == "new":
             await prepare_sqlite_db(file_id, temp_file_path)
+            # For tabular files, we can create file_info.json immediately
+            gcs_handler.temp_metadata[
+                "embeddings_status"
+            ] = "completed"  # No embeddings needed
+            gcs_handler.upload_to_gcs(
+                configs.gcp_resource.bucket_name,
+                {
+                    "metadata": (
+                        gcs_handler.temp_metadata,
+                        f"file-embeddings/{file_id}/file_info.json",
+                    )
+                },
+            )
 
         # Create embeddings for PDF and Image files
         elif file_extension == ".pdf" or is_image:
@@ -229,27 +238,39 @@ async def upload_file(
                     embedding_result = await embedding_handler.ensure_embeddings_exist(
                         file_id=file_id, temp_file_path=temp_file_path
                     )
-
                     if embedding_result["status"] == "error":
-                        message = f"File uploaded but embedding failed: {embedding_result['message']}"
-                        upload_status = "partial"
-                    else:
-                        message = f"{message} Embeddings created successfully."
+                        raise HTTPException(
+                            status_code=500, detail=embedding_result["message"]
+                        )
                 except Exception as e:
-                    logging.error(f"Error creating embeddings: {str(e)}")
-                    message = f"File uploaded but embedding creation failed: {str(e)}"
-                    upload_status = "partial"
+                    # Clean up any partial files if embedding creation fails
+                    cleanup_coordinator = CleanupCoordinator(
+                        configs, SessionLocal, gcs_handler
+                    )
+                    cleanup_coordinator.cleanup_chroma_instance(
+                        file_id, include_gcs=True
+                    )
+                    raise HTTPException(
+                        status_code=500, detail=f"Error creating embeddings: {str(e)}"
+                    )
+
+        # Clean up temporary file
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
 
         return FileUploadResponse(
-            message=message,
             file_id=file_id,
+            message=result["message"],
+            status="success",
             original_filename=original_filename,
             is_image=is_image,
-            status=upload_status,
         )
 
     except Exception as e:
-        logging.error(f"Exception in upload_file: {str(e)}")
+        logging.error(f"Error in upload_file: {str(e)}")
+        # Ensure cleanup of any temporary files
+        if "temp_file_path" in locals() and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -415,44 +436,48 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         if not model:
             file_info = gcs_handler.get_file_info(query.file_id)
             if not file_info:
+                logging.info(f"File info not found for {query.file_id}")
                 raise HTTPException(status_code=404, detail="File not found")
-
-            if not file_info.get("azure_ready"):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Azure embeddings are not ready yet. Please wait a moment.",
-                )
 
             db_path = f"./chroma_db/{query.file_id}/tabular_data.db"
             if os.path.exists(db_path):
                 model = TabularDataHandler(configs, query.file_id, query.model_choice)
-            else:
-                chroma_path = f"./chroma_db/{query.file_id}"
+
+            # Check for local embeddings first
+            chroma_path = f"./chroma_db/{query.file_id}"
+            is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+            embedding_type = "google" if is_gemini else "azure"
+            model_path = os.path.join(chroma_path, embedding_type, "chroma.sqlite3")
+
+            # If local embeddings don't exist, check GCS
+            if not os.path.exists(model_path):
+                if not file_info.get("embeddings_status") == "completed":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Embeddings are not ready yet. Please wait a moment.",
+                    )
                 print("No local embeddings found, downloading from GCS")
-                if not os.path.exists(chroma_path):
-                    gcs_handler.download_files_from_folder_by_id(query.file_id)
+                gcs_handler.download_files_from_folder_by_id(query.file_id)
 
-                is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
-                embedding_type = "google" if is_gemini else "azure"
-
-                if is_gemini:
-                    model = GeminiHandler(configs, gcs_handler)
-                    model.initialize(
-                        model=query.model_choice,
-                        file_id=query.file_id,
-                        embedding_type=embedding_type,
-                        collection_name=f"rag_collection_{query.file_id}",
-                        user_id=query.user_id,
-                    )
-                else:
-                    model = Chatbot(configs, gcs_handler)
-                    model.initialize(
-                        model_choice=query.model_choice,
-                        file_id=query.file_id,
-                        embedding_type=embedding_type,
-                        collection_name=f"rag_collection_{query.file_id}",
-                        user_id=query.user_id,
-                    )
+            # Initialize model with ChromaDB
+            if is_gemini:
+                model = GeminiHandler(configs, gcs_handler)
+                model.initialize(
+                    model=query.model_choice,
+                    file_id=query.file_id,
+                    embedding_type="google",
+                    collection_name=f"rag_collection_{query.file_id}",
+                    user_id=query.user_id,
+                )
+            else:
+                model = Chatbot(configs, gcs_handler)
+                model.initialize(
+                    model_choice=query.model_choice,
+                    file_id=query.file_id,
+                    embedding_type="azure",
+                    collection_name=f"rag_collection_{query.file_id}",
+                    user_id=query.user_id,
+                )
 
             initialized_models[model_key] = model
             logging.info(

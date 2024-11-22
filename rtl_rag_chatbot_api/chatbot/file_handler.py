@@ -151,20 +151,16 @@ class FileHandler:
                 "username": username,
                 "original_filename": original_filename,
                 "file_id": file_id,
-                "embeddings_status": "pending",
             }
+
+            # Store metadata temporarily in memory
+            self.gcs_handler.temp_metadata = metadata
 
             # Add analysis info to metadata for new images
             if is_image and analysis_text_path:
                 metadata.update(
                     {"analysis_path": analysis_text_path, "has_analysis": True}
                 )
-
-            # Store metadata in GCS
-            self.gcs_handler.upload_to_gcs(
-                self.configs.gcp_resource.bucket_name,
-                {"metadata": (metadata, f"file-embeddings/{file_id}/file_info.json")},
-            )
 
             # If it's a new tabular file, prepare SQLite database
             if is_tabular:
