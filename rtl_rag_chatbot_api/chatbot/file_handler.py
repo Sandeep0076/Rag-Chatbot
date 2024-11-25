@@ -1,7 +1,10 @@
+import asyncio
 import hashlib
+import logging
 import os
 import shutil
 
+import aiofiles
 from fastapi import UploadFile
 
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
@@ -59,28 +62,33 @@ class FileHandler:
             if len(original_filename) > 100:
                 ext = os.path.splitext(original_filename)[1]
                 original_filename = original_filename[:96] + ext
+
+            # Read file content asynchronously
             file_content = await file.read()
             file_hash = self.calculate_file_hash(file_content)
             is_tabular = original_filename.lower().endswith((".csv", ".xlsx", ".xls"))
 
-            existing_file_id = self.gcs_handler.find_existing_file_by_hash(file_hash)
+            existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
 
             # Create local_data directory if it doesn't exist
             os.makedirs("local_data", exist_ok=True)
 
-            # Always save the uploaded file first
+            # Write file asynchronously using aiofiles
             temp_file_path = f"local_data/{file_id}_{original_filename}"
-            with open(temp_file_path, "wb") as buffer:
-                buffer.write(file_content)
+            async with aiofiles.open(temp_file_path, "wb") as buffer:
+                await buffer.write(file_content)
             del file_content
 
             # For new image files, analyze first
             analysis_text_path = None
             if is_image and not existing_file_id:
-                analysis_result = analyze_images(temp_file_path)
+                # Run image analysis in thread pool to avoid blocking
+                analysis_result = await asyncio.to_thread(
+                    analyze_images, temp_file_path
+                )
                 analysis_text_path = f"local_data/{file_id}_analysis.txt"
-                with open(analysis_text_path, "w") as f:
-                    f.write(analysis_result[0]["analysis"])
+                async with aiofiles.open(analysis_text_path, "w") as f:
+                    await f.write(analysis_result[0]["analysis"])
 
             if existing_file_id:
                 if is_tabular:
@@ -181,16 +189,16 @@ class FileHandler:
             }
 
         except Exception as e:
-            print(f"Exception in process_file: {str(e)}")
+            logging.error(f"Exception in process_file: {str(e)}")
             # Clean up temp files in case of error
             if "temp_file_path" in locals() and os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+                await asyncio.to_thread(os.remove, temp_file_path)
             if (
                 "analysis_text_path" in locals()
                 and analysis_text_path
                 and os.path.exists(analysis_text_path)
             ):
-                os.remove(analysis_text_path)
+                await asyncio.to_thread(os.remove, analysis_text_path)
             return {
                 "status": "error",
                 "message": str(e),
@@ -218,3 +226,9 @@ class FileHandler:
         except Exception as e:
             print(f"Error downloading embeddings: {str(e)}")
             return False
+
+    async def find_existing_file_by_hash_async(self, file_hash: str):
+        """Asynchronous version of finding existing file by hash."""
+        return await asyncio.to_thread(
+            self.gcs_handler.find_existing_file_by_hash, file_hash
+        )

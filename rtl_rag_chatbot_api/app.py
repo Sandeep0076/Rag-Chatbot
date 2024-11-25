@@ -11,7 +11,16 @@ from pathlib import Path
 
 import uvicorn
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import create_engine
@@ -194,6 +203,7 @@ async def info():
 
 @app.post("/file/upload", response_model=FileUploadResponse)
 async def upload_file(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     is_image: bool = Form(...),
     username: str = Form(...),
@@ -201,27 +211,29 @@ async def upload_file(
 ):
     """
     Handles file upload and automatically creates embeddings for PDFs and images.
+    Made asynchronous to prevent blocking during long operations.
     """
     try:
         file_id = str(uuid.uuid4())
         original_filename = file.filename
         file_extension = os.path.splitext(original_filename)[1].lower()
 
-        # Process the file upload
+        # Process the file upload asynchronously
         result = await file_handler.process_file(file, file_id, is_image, username)
         file_id = result[
             "file_id"
         ]  # Use the file_id from result in case it's an existing file
         temp_file_path = result["temp_file_path"]
 
-        # Handle CSV/Excel files
+        # Handle CSV/Excel files in background
         if file_extension in [".csv", ".xlsx", ".xls"] and result["status"] == "new":
-            await prepare_sqlite_db(file_id, temp_file_path)
+            background_tasks.add_task(prepare_sqlite_db, file_id, temp_file_path)
             # For tabular files, we can create file_info.json immediately
             gcs_handler.temp_metadata[
                 "embeddings_status"
             ] = "completed"  # No embeddings needed
-            gcs_handler.upload_to_gcs(
+            background_tasks.add_task(
+                gcs_handler.upload_to_gcs,
                 configs.gcp_resource.bucket_name,
                 {
                     "metadata": (
@@ -231,40 +243,31 @@ async def upload_file(
                 },
             )
 
-        # Create embeddings for PDF and Image files
+        # Create embeddings for PDF and Image files in background
         elif file_extension == ".pdf" or is_image:
             if result["status"] != "existing":  # Only create embeddings for new files
-                try:
-                    embedding_result = await embedding_handler.ensure_embeddings_exist(
-                        file_id=file_id, temp_file_path=temp_file_path
-                    )
-                    if embedding_result["status"] == "error":
-                        raise HTTPException(
-                            status_code=500, detail=embedding_result["message"]
-                        )
-                except Exception as e:
-                    # Clean up any partial files if embedding creation fails
-                    cleanup_coordinator = CleanupCoordinator(
-                        configs, SessionLocal, gcs_handler
-                    )
-                    cleanup_coordinator.cleanup_chroma_instance(
-                        file_id, include_gcs=True
-                    )
-                    raise HTTPException(
-                        status_code=500, detail=f"Error creating embeddings: {str(e)}"
-                    )
+                background_tasks.add_task(
+                    create_embeddings_background,
+                    file_id=file_id,
+                    temp_file_path=temp_file_path,
+                    embedding_handler=embedding_handler,
+                    configs=configs,
+                    SessionLocal=SessionLocal,
+                )
 
-        # Clean up temporary file
+        # Clean up temporary file in background
         if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
+            background_tasks.add_task(os.remove, temp_file_path)
 
-        return FileUploadResponse(
+        response = FileUploadResponse(
             file_id=file_id,
             message=result["message"],
             status="success",
             original_filename=original_filename,
             is_image=is_image,
         )
+
+        return JSONResponse(content=response.dict(), background=background_tasks)
 
     except Exception as e:
         logging.error(f"Error in upload_file: {str(e)}")
@@ -304,6 +307,26 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
     except Exception as e:
         logging.error(f"Error preparing SQLite database: {str(e)}")
         raise
+
+
+async def create_embeddings_background(
+    file_id: str, temp_file_path: str, embedding_handler, configs, SessionLocal
+):
+    """Background task for creating embeddings."""
+    try:
+        embedding_result = await embedding_handler.ensure_embeddings_exist(
+            file_id=file_id, temp_file_path=temp_file_path
+        )
+        if embedding_result["status"] == "error":
+            logging.error(
+                f"Error creating embeddings for {file_id}: {embedding_result['message']}"
+            )
+            cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
+            cleanup_coordinator.cleanup_chroma_instance(file_id, include_gcs=True)
+    except Exception as e:
+        logging.error(f"Error in create_embeddings_background: {str(e)}")
+        cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
+        cleanup_coordinator.cleanup_chroma_instance(file_id, include_gcs=True)
 
 
 @app.post("/embeddings/create")
