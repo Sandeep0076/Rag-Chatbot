@@ -3,7 +3,7 @@ import random
 
 from locust import HttpUser, between, task
 
-from tests.load_tests.helpers import get_random_pdf_file
+from tests.load_tests.helpers import get_random_file_id_from_file, get_random_pdf_file
 
 BEARER_TOKEN = os.getenv("idtoken")
 ENV = os.getenv("ENV", "local")
@@ -14,17 +14,14 @@ if os.path.exists("tests/resources/latest_file_ids.txt"):
     os.remove("tests/resources/latest_file_ids.txt")
 
 
+# prompts for pdf chat
+with open("tests/resources/chat-pdf.prompts.txt", "r", encoding="utf-8") as file:
+    # read each line, strip newlines, and return as a list
+    pdf_prompts = [line.strip() for line in file.readlines()]
+
+
 class FastAPILoadTest(HttpUser):
     wait_time = between(1, 2)  # Users wait between 1 and 2 seconds
-
-    # prompts for pdf chat
-    with open("tests/resources/chat-pdf.prompts.txt", "r", encoding="utf-8") as file:
-        # read each line, strip newlines, and return as a list
-        pdf_prompts = [line.strip() for line in file.readlines()]
-
-    with open("tests/resources/chat.prompts.txt", "r", encoding="utf-8") as file:
-        # read each line, strip newlines, and return as a list
-        prompts = [line.strip() for line in file.readlines()]
 
     @task(weight=10)
     def upload_file_and_create_embeddings(self):
@@ -43,6 +40,8 @@ class FastAPILoadTest(HttpUser):
             }
             # Bearer token
             headers = {"Authorization": f"Bearer {BEARER_TOKEN}"}
+
+            print(f"Create embeddings for {selected_file_path}")
             response = self.client.post(
                 "/file/upload",
                 files=file_data,
@@ -60,21 +59,32 @@ class FastAPILoadTest(HttpUser):
             else:
                 raise Exception(response.reason)
 
-            # data for /embeddings/create-endpoint
-            data = {"file_id": file_id, "is_image": "false"}
+    @task(weight=15)
+    def chat(self):
+        """"""
+        prompt = random.choice(pdf_prompts)
+        file_id = get_random_file_id_from_file(
+            file_path="tests/resources/latest_file_ids.txt"
+        )
 
-            # Bearer token
-            headers = {
-                "Authorization": f"Bearer {BEARER_TOKEN}",
-                "Content-Type": "application/json",  # Ensure the request content type is JSON
-            }
+        if not file_id:
+            return
 
-            self.client.post(
-                "/embeddings/create",
-                json=data,
-                headers=headers if ENV != "local" else None,
-            )
-            print(f"Create embeddings for {file_id}")
+        # example data for the chat endpoint
+        data = {
+            "text": [prompt],
+            "file_id": file_id,
+            "model_choice": "gpt_4o_mini",
+            "user_id": "zloch@netrtl.com",
+        }
+
+        # Bearer token
+        headers = {
+            "Authorization": f"Bearer {BEARER_TOKEN}",
+            "Content-Type": "application/json",  # Ensure the request content type is JSON
+        }
+
+        self.client.post("/file/chat", json=data, headers=headers)
 
     @task(weight=5)
     def available_models(self):
@@ -93,6 +103,6 @@ class FastAPILoadTest(HttpUser):
     @task(3)
     def random_scenario(self):
         scenario = random.choice(
-            [self.upload_file_and_create_embeddings, self.available_models]
+            [self.chat, self.upload_file_and_create_embeddings, self.available_models]
         )
         scenario()
