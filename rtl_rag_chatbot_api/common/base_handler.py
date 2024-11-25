@@ -56,7 +56,11 @@ class BaseRAGHandler:
 
         # Pass user_id but don't filter queries - for session tracking only
         return self.chroma_manager.get_collection(
-            self.file_id, self.embedding_type, self.collection_name, self.user_id
+            self.file_id,
+            self.embedding_type,
+            self.collection_name,
+            self.user_id,
+            is_embedding=False,
         )
 
     def get_n_nearest_neighbours(self, query: str, n_neighbours: int = 3) -> List[str]:
@@ -65,7 +69,11 @@ class BaseRAGHandler:
             query_embedding = self.get_embeddings([query])[0]
             # Use base collection without user filtering for nearest neighbors
             collection = self.chroma_manager.get_collection(
-                self.file_id, self.embedding_type, self.collection_name
+                self.file_id,
+                self.embedding_type,
+                self.collection_name,
+                user_id=None,  # No user filtering for nearest neighbors
+                is_embedding=False,
             )
 
             results = collection.query(
@@ -85,7 +93,7 @@ class BaseRAGHandler:
         raise NotImplementedError("Subclasses must implement get_answer")
 
     def create_and_store_embeddings(
-        self, chunks: List[str], file_id: str, subfolder: str
+        self, chunks: List[str], file_id: str, subfolder: str, is_embedding: bool = True
     ) -> str:
         """
         Create embeddings for text chunks and store them in ChromaDB with batch processing.
@@ -110,6 +118,7 @@ class BaseRAGHandler:
                 embedding_type=subfolder,  # 'azure' or 'google'
                 collection_name=self.collection_name,
                 user_id=None,  # No user filtering for embeddings creation
+                is_embedding=is_embedding,
             )
 
             processed_count = 0
@@ -184,7 +193,7 @@ class BaseRAGHandler:
         text = self.extract_text_from_file(decrypted_file_path)
         self.collection_name = collection_name or f"rag_collection_{file_id}"
         chunks = self.split_text(text)
-        self.create_and_store_embeddings(chunks, file_id, subfolder)
+        self.create_and_store_embeddings(chunks, file_id, subfolder, is_embedding=True)
         logging.info(f"{self.collection_name} collection is being used")
 
     def extract_text_from_file(self, file_path: str) -> str:

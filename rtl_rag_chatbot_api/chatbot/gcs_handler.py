@@ -35,6 +35,7 @@ class GCSHandler:
         """
         self.configs = _configs
         self.credentials = None
+        self.temp_metadata = None
 
         if os.environ.get("GOOGLE_OAUTH_ACCESS_TOKEN", None) is not None:
             logging.info("Found GOOGLE_OAUTH_ACCESS_TOKEN token, now using it.")
@@ -174,11 +175,7 @@ class GCSHandler:
                 if blob.name.endswith("/file_info.json"):
                     file_info = json.loads(blob.download_as_string())
                     if file_info.get("file_hash") == file_hash:
-                        file_id = file_info.get("file_id")
-                        logging.info(
-                            f"Found existing file with hash: {file_hash}, ID: {file_id}"
-                        )
-                        return file_id
+                        return file_info.get("file_id")
 
             logging.info(f"No file found with hash: {file_hash}")
             return None
