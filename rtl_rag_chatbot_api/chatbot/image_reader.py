@@ -109,7 +109,7 @@ def analyze_single_image(image_path: str, api_key: str, endpoint: str) -> str:
 
 
 def analyze_images(image_path: str) -> List[Dict[str, Any]]:
-    API_KEY = os.environ.get("AZURE_LLM__MODELS__GPT_4O_MINI__API_KEY")
+    API_KEY = os.environ.get("AZURE_LLM__MODELS__GPT_4_OMNI__API_KEY")
     ENDPOINT = construct_endpoint_url()
 
     if not API_KEY or not ENDPOINT:
@@ -121,9 +121,9 @@ def analyze_images(image_path: str) -> List[Dict[str, Any]]:
 
 def construct_endpoint_url():
     # Retrieve environment variables
-    base_url = os.getenv("AZURE_LLM__MODELS__GPT_4O_MINI__ENDPOINT", "").rstrip("/")
-    deployment = os.getenv("AZURE_LLM__MODELS__GPT_4O_MINI__DEPLOYMENT", "")
-    api_version = os.getenv("AZURE_LLM__MODELS__GPT_4O_MINI__API_VERSION", "")
+    base_url = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__ENDPOINT", "").rstrip("/")
+    deployment = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__DEPLOYMENT", "")
+    api_version = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__API_VERSION", "")
 
     # Construct the endpoint URL
     endpoint = f"{base_url}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
