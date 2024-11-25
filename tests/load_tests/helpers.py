@@ -2,7 +2,25 @@ import os
 import random
 
 
-def get_random_file_id(chromadb_folder: str = "./chroma_db"):
+def get_random_file_id_from_file(file_path: str):
+    """"""
+    if not os.path.exists(file_path):
+        return []
+
+    # the file is read every time the function is called, because
+    # the tests might be invoked in parallel and the file contents
+    # is subject to change
+    with open(file_path, "r", encoding="utf-8") as file:
+        # read each line, strip newlines, and return as a list
+        file_ids = [line.strip() for line in file.readlines()]
+
+    if not file_ids:
+        return []
+
+    return random.choice(file_ids)
+
+
+def get_random_file_id_from_chromadb_folder(chromadb_folder: str = "./chroma_db"):
     """"""
     # read the list of folder names inside the "chromadb" folder
     folder_names = [
