@@ -17,6 +17,7 @@ universal-helm-chart:
       kyverno.io/require-iap-monitoring-annotations: "ignore"
   deployment:
     scaleDown: true
+    # switch back to 2 or 1 replica in dev after release
     replicaCount: 4
   container:
     resources:

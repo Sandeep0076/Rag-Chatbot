@@ -12,6 +12,14 @@ universal-helm-chart:
       kyverno.io/require-iap-monitoring-annotations: "ignore"
   deployment:
     scaleDown: false
-    replicaCount: 2
+    replicaCount: 4
+  container:
+    resources:
+      requests:
+        cpu: 800m
+        memory: 2Gi
+      limits:
+        cpu: 1000m
+        memory: 4Gi
 gcp:
   project_id: "dat-itowe-prd"
