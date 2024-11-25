@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "default": {
+      "format": "%(levelname)s:\t%(message)s"
+    },
+    "module": {
+      "format": "%(levelname)s:\t%(funcName)s - %(message)s"
+    }
+  },
+  "handlers": {
+    "default": {
+      "level": "INFO",
+      "formatter": "default",
+      "class": "logging.StreamHandler",
+      "stream": "ext://sys.stdout"
+    },
+    "module": {
+      "level": "INFO",
+      "formatter": "module",
+      "class": "logging.StreamHandler",
+      "stream": "ext://sys.stdout"
+    }
+  },
+  "loggers": {
+    "": {
+      "handlers": ["default"],
+      "level": "INFO"
+    },
+    "rtl_rag_chatbot_api": {
+      "handlers": ["module"],
+      "level": "INFO",
+      "propagate": true
+    },
+    "uvicorn": {
+      "handlers": ["default"],
+      "level": "INFO",
+      "propagate": false
+    },
+    "uvicorn.access": {
+      "handlers": ["default"],
+      "level": "INFO",
+      "propagate": false
+    },
+    "uvicorn.error": {
+      "handlers": ["default"],
+      "level": "INFO",
+      "propagate": false
+    }
+  }
+}

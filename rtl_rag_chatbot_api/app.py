@@ -62,10 +62,6 @@ os.environ["GLOG_minloglevel"] = "2"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
 # disable logger for apscheduler because they are not nice. use own.
 apscheduler_log = logging.getLogger("apscheduler")
 apscheduler_log.setLevel(logging.ERROR)
@@ -746,4 +742,6 @@ def start():
         host="0.0.0.0",
         port=8080,
         reload=False,
+        log_config="logging_config.json",
+        log_level="info",
     )
