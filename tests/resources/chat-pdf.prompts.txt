@@ -21,7 +21,7 @@ Welche Schwachstelle früherer Arbeiten werden in dem Papier adressiert?
 Angenommen ich hätte das Paper gelesen. Schreibe für mich einen LinkedIn-Beitrag mit den essentiellen Aussagen aus dem Papier. Leite mindestens drei Implikationen heraus.
 Assume I have read the paper. Write a LinkedIn post for me with the key findings of the paper. Derive at least three implications from it.
 Extract the key findings depicted in the document. Prepare a social media post from it.
-Extrahiere die Haupterkenntnisse aus dem Dokument. 
+Extrahiere die Haupterkenntnisse aus dem Dokument.
 Translate the document to german.
 Translate to spanish.
 Übersetze ins Englische.
