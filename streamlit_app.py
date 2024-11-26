@@ -28,6 +28,11 @@ def cleanup_files():
 
 
 def handle_file_upload():
+    # Ensure username is available before file upload
+    if not st.session_state.username:
+        st.warning("Please enter a username before uploading files")
+        return
+
     st.session_state.file_type = st.radio(
         "Select file type:", ["PDF", "CSV", "Image"], horizontal=True
     )
@@ -45,11 +50,15 @@ def handle_file_upload():
 
     if uploaded_file is not None:
         if st.button("Upload and Process File"):
+            if not st.session_state.username:
+                st.error("Username is required. Please enter a username above.")
+                return
+
             with st.spinner("Uploading and processing file..."):
                 files = {"file": uploaded_file}
                 data = {
                     "is_image": str(is_image),
-                    "username": st.session_state.username,
+                    "username": st.session_state.username,  # Make sure username is included
                 }
                 upload_response = requests.post(
                     f"{API_URL}/file/upload", files=files, data=data
