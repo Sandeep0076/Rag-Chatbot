@@ -68,35 +68,74 @@ class AzureChatbot(BaseRAGHandler):
             raise
 
     def get_answer(self, query: str) -> str:
-        """Generate an answer to a query using relevant context."""
         try:
-            relevant_chunks = self.query_chroma(query, self.file_id, n_results=3)
-            if not relevant_chunks:
-                return (
-                    "I couldn't find any relevant information to answer your question."
-                )
+            # Log the model choice for debugging
+            logging.info(f"Model choice: {self.model_choice}")
 
-            context = "\n".join(relevant_chunks)
-            messages = [
-                {
-                    "role": "system",
-                    "content": self.configs.chatbot.system_prompt_rag_llm,
-                },
-                {"role": "user", "content": f"Context: {context}\n\nQuestion: {query}"},
-            ]
+            # Get relevant documents from ChromaDB
+            relevant_docs = self.query_chroma(query, self.file_id)
+
+            if self.model_choice.lower().startswith("gpt_3_5_turbo"):
+                logging.info("Using GPT-3.5-turbo block")
+
+                # Take only first document and limit its size
+                if relevant_docs:
+                    doc = relevant_docs[0]
+                    sentences = doc.split(". ")
+                    limited_doc = ". ".join(sentences[:2]) + "."
+
+                    # Implement token-based limit on limited_doc
+                    max_doc_tokens = 2000  # Adjust as needed to ensure total tokens stay within limits
+                    current_tokens = len(self.simple_tokenize(limited_doc))
+                    while current_tokens > max_doc_tokens and len(sentences) > 1:
+                        sentences = sentences[:-1]
+                        limited_doc = ". ".join(sentences) + "."
+                        current_tokens = len(self.simple_tokenize(limited_doc))
+                    if current_tokens > max_doc_tokens:
+                        limited_doc = "..."
+
+                    relevant_docs = [limited_doc]
+
+                # Ultra-short system message
+                system_message = "Answer the question using the provided context."
+
+                # Minimal context format for GPT-3.5
+                messages = [
+                    {"role": "system", "content": system_message},
+                    {
+                        "role": "user",
+                        "content": f"{relevant_docs[0] if relevant_docs else ''}\n\nQuestion: {query}",
+                    },
+                ]
+
+                # Reduce max tokens for completion
+                max_tokens = 2000
+
+            else:
+                logging.info("Using default model block")
+                system_message = (
+                    "You are a helpful assistant. Use the following context to answer the question "
+                    "completely and accurately."
+                )
+                context = "\n".join(relevant_docs) if relevant_docs else ""
+                messages = [
+                    {"role": "system", "content": system_message},
+                    {
+                        "role": "user",
+                        "content": f"Context:\n{context}\n\nQuestion: {query}",
+                    },
+                ]
+                max_tokens = 3000
 
             response = self.llm_client.chat.completions.create(
                 model=self.model_config.deployment,
                 messages=messages,
-                temperature=self.configs.llm_hyperparams.temperature,
-                max_tokens=self.configs.llm_hyperparams.max_tokens,
-                top_p=self.configs.llm_hyperparams.top_p,
-                frequency_penalty=self.configs.llm_hyperparams.frequency_penalty,
-                presence_penalty=self.configs.llm_hyperparams.presence_penalty,
-                stop=self.configs.llm_hyperparams.stop,
+                temperature=0.7,
+                max_tokens=max_tokens,
             )
 
             return response.choices[0].message.content
+
         except Exception as e:
             logging.error(f"Error in get_answer: {str(e)}")
             raise
