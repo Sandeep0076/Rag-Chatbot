@@ -504,12 +504,17 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             )
 
         current_question = query.text[-1]
-        chat_context = (
-            "\n".join([f"Previous message: {msg}" for msg in query.text[:-1]])
-            + f"\nCurrent question: {current_question}"
-            if len(query.text) > 1
-            else current_question
-        )
+
+        # For GPT-3.5, skip previous messages to stay within token limits
+        if query.model_choice.lower() == "gpt_3_5_turbo":
+            chat_context = current_question
+        else:
+            chat_context = (
+                "\n".join([f"Previous message: {msg}" for msg in query.text[:-1]])
+                + f"\nCurrent question: {current_question}"
+                if len(query.text) > 1
+                else current_question
+            )
 
         response = model.get_answer(chat_context)
 

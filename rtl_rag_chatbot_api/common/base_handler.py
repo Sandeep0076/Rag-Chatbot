@@ -28,10 +28,23 @@ class BaseRAGHandler:
         self.collection_name = None
         self.embedding_model = None
         self.chroma_manager = ChromaDBManager()
-        self.AZURE_MAX_TOKENS = (
-            8000  # Azure's ada-002 limit is 8,191, using 8000 for safety
-        )
-        self.GEMINI_MAX_TOKENS = 15000
+
+        # Model-specific token limits
+        self.MODEL_TOKEN_LIMITS = {
+            "gpt_3_5_turbo": 8000,
+            "gpt_4": 32000,
+            "gpt_4o_mini": 128000,
+            "gpt_4_omni": 128000,
+            "gemini-pro": 30500,
+            "gemini-flash": 15000,
+        }
+
+        self.AZURE_MAX_TOKENS = self.MODEL_TOKEN_LIMITS.get(
+            "gpt_3_5_turbo", 8000
+        )  # Use GPT-3.5 limit for Azure
+        self.GEMINI_MAX_TOKENS = self.MODEL_TOKEN_LIMITS.get(
+            "gemini-flash", 15000
+        )  # Use Gemini Flash limit
         self.BATCH_SIZE = 5
 
     def query_chroma(self, query: str, file_id: str, n_results: int = 3) -> List[str]:
@@ -256,20 +269,40 @@ class BaseRAGHandler:
         current_chunk = []
         current_chunk_tokens = 0
 
+        # Get appropriate token limit based on model type
+        if self.embedding_type == "azure":
+            max_tokens = self.AZURE_MAX_TOKENS
+        elif self.embedding_type == "google":
+            max_tokens = self.GEMINI_MAX_TOKENS
+        else:
+            max_tokens = self.max_tokens
+
         for paragraph in paragraphs:
             paragraph_tokens = len(self.simple_tokenize(paragraph))
 
-            if paragraph_tokens > self.max_tokens:
+            if paragraph_tokens > max_tokens:
+                # Split large paragraphs into smaller chunks
                 sentences = re.split(r"(?<=[.!?])\s+", paragraph)
                 for sentence in sentences:
                     sentence_tokens = len(self.simple_tokenize(sentence))
-                    if current_chunk_tokens + sentence_tokens > self.max_tokens:
-                        chunks.append(" ".join(current_chunk))
-                        current_chunk = []
-                        current_chunk_tokens = 0
-                    current_chunk.append(sentence)
-                    current_chunk_tokens += sentence_tokens
-            elif current_chunk_tokens + paragraph_tokens > self.max_tokens:
+                    if current_chunk_tokens + sentence_tokens > max_tokens:
+                        if current_chunk:
+                            chunks.append(" ".join(current_chunk))
+                            current_chunk = []
+                            current_chunk_tokens = 0
+                        # If single sentence exceeds limit, split it further
+                        if sentence_tokens > max_tokens:
+                            sentence_chunks = self.split_large_chunk(
+                                sentence, max_tokens
+                            )
+                            chunks.extend(sentence_chunks)
+                        else:
+                            current_chunk.append(sentence)
+                            current_chunk_tokens = sentence_tokens
+                    else:
+                        current_chunk.append(sentence)
+                        current_chunk_tokens += sentence_tokens
+            elif current_chunk_tokens + paragraph_tokens > max_tokens:
                 chunks.append(" ".join(current_chunk))
                 current_chunk = [paragraph]
                 current_chunk_tokens = paragraph_tokens
@@ -345,3 +378,36 @@ class BaseRAGHandler:
         self.gcs_handler.upload_to_gcs(
             self.configs.gcp_resource.bucket_name, files_to_upload
         )
+
+    def get_model_token_limit(self, model_name: str) -> int:
+        """Get the token limit for a specific model."""
+        return self.MODEL_TOKEN_LIMITS.get(model_name.lower(), 2000)
+
+    def ensure_token_limit(self, text: str, model_name: str) -> List[str]:
+        """
+        Ensure text chunks don't exceed model's token limit.
+        Returns list of chunks that fit within the model's limit.
+        """
+        model_limit = self.get_model_token_limit(model_name)
+        tokens = self.simple_tokenize(text)
+
+        if len(tokens) <= model_limit:
+            return [text]
+
+        chunks = []
+        current_chunk = []
+        current_tokens = 0
+
+        for token in tokens:
+            if current_tokens + 1 > model_limit:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = [token]
+                current_tokens = 1
+            else:
+                current_chunk.append(token)
+                current_tokens += 1
+
+        if current_chunk:
+            chunks.append(" ".join(current_chunk))
+
+        return chunks
