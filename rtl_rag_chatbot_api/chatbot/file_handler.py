@@ -91,6 +91,7 @@ class FileHandler:
                     await f.write(analysis_result[0]["analysis"])
 
             if existing_file_id:
+                logging.info(f"Found embeddings for: {original_filename}")
                 if is_tabular:
                     # For tabular files, always prepare SQLite database with new file
                     data_dir = f"./chroma_db/{existing_file_id}"
@@ -121,6 +122,17 @@ class FileHandler:
                             existing_file_id
                         )
 
+                    # For images, we only need the embeddings to chat
+                    if is_image:
+                        return {
+                            "file_id": existing_file_id,
+                            "is_image": is_image,
+                            "is_tabular": is_tabular,
+                            "message": "File already exists and has embeddings.",
+                            "status": "existing",
+                            "temp_file_path": temp_file_path,  # Keep original temp file for reference
+                        }
+
                     # Copy the temp file to match the existing file ID path
                     existing_temp_path = (
                         f"local_data/{existing_file_id}_{original_filename}"
@@ -128,15 +140,6 @@ class FileHandler:
                     os.makedirs(os.path.dirname(existing_temp_path), exist_ok=True)
                     shutil.copy2(temp_file_path, existing_temp_path)
                     temp_file_path = existing_temp_path
-
-                    if is_image:
-                        # For existing images, copy analysis file if it exists
-                        existing_analysis_path = (
-                            f"local_data/{existing_file_id}_analysis.txt"
-                        )
-                        if os.path.exists(analysis_text_path):
-                            shutil.copy2(analysis_text_path, existing_analysis_path)
-                            analysis_text_path = existing_analysis_path
 
                 return {
                     "file_id": existing_file_id,
@@ -146,9 +149,7 @@ class FileHandler:
                     if is_tabular
                     else "File already exists and has embeddings.",
                     "status": "existing",
-                    "temp_file_path": analysis_text_path
-                    if is_image
-                    else temp_file_path,
+                    "temp_file_path": temp_file_path,
                 }
 
             # Prepare metadata for new file
