@@ -1,18 +1,24 @@
 import base64
-
-# import json
+import logging  # Import logging module
 import os
 from typing import Any, Dict, List
 
 import requests
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
 
 def encode_image(image_path: str) -> str:
+    logging.info(f"Encoding image from path: {image_path}")
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("ascii")
 
 
 def create_payload(encoded_image: str) -> Dict[str, Any]:
+    logging.info("Creating payload for image analysis")
     return {
         "messages": [
             {
@@ -90,6 +96,7 @@ or uncertainties in the interpretation.
 
 
 def analyze_single_image(image_path: str, api_key: str, endpoint: str) -> str:
+    logging.info(f"Analyzing single image: {image_path}")
     headers = {
         "Content-Type": "application/json",
         "api-key": api_key,
@@ -101,25 +108,34 @@ def analyze_single_image(image_path: str, api_key: str, endpoint: str) -> str:
     try:
         response = requests.post(endpoint, headers=headers, json=payload)
         response.raise_for_status()
+        logging.info(f"Image analysis successful for: {image_path}")
         return response.json()["choices"][0]["message"]["content"]
     except requests.RequestException as e:
+        logging.error(f"Failed to make the request for {image_path}. Error: {e}")
         return f"Failed to make the request for {image_path}. Error: {e}"
     except KeyError:
+        logging.error(
+            f"Unexpected response format for {image_path}. Full response: {response.json()}"
+        )
         return f"Unexpected response format for {image_path}. Full response: {response.json()}"
 
 
 def analyze_images(image_path: str) -> List[Dict[str, Any]]:
+    logging.info(f"Starting analysis for images in path: {image_path}")
     API_KEY = os.environ.get("AZURE_LLM__MODELS__GPT_4_OMNI__API_KEY")
     ENDPOINT = construct_endpoint_url()
 
     if not API_KEY or not ENDPOINT:
+        logging.error("API_KEY or ENDPOINT environment variables are not set.")
         raise ValueError("API_KEY or ENDPOINT environment variables are not set.")
 
     result = analyze_single_image(image_path, API_KEY, ENDPOINT)
+    logging.info(f"Image analysis completed for: {image_path}")
     return [{"filename": os.path.basename(image_path), "analysis": result}]
 
 
 def construct_endpoint_url():
+    logging.info("Constructing endpoint URL")
     # Retrieve environment variables
     base_url = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__ENDPOINT", "").rstrip("/")
     deployment = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__DEPLOYMENT", "")
