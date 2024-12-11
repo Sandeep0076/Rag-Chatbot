@@ -7,6 +7,7 @@ import shutil
 import aiofiles
 from fastapi import UploadFile
 
+from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
@@ -97,15 +98,23 @@ class FileHandler:
                     data_dir = f"./chroma_db/{existing_file_id}"
                     os.makedirs(data_dir, exist_ok=True)
 
-                    # Prepare SQLite database
-                    data_preparer = PrepareSQLFromTabularData(temp_file_path, data_dir)
-                    data_preparer.run_pipeline()
-                    # Update temp_file_path to use existing_file_id
-                    existing_temp_path = (
-                        f"local_data/{existing_file_id}_{original_filename}"
-                    )
-                    shutil.copy2(temp_file_path, existing_temp_path)
-                    temp_file_path = existing_temp_path
+                    handler = TabularDataHandler(self.configs, existing_file_id)
+                    metadata = self.gcs_handler.get_file_info(existing_file_id)
+                    if handler.initialize_database(is_new_file=False):
+                        return {
+                            "file_id": existing_file_id,
+                            "is_image": is_image,
+                            "is_tabular": is_tabular,
+                            "message": "File exists. Database ready for querying.",
+                            "status": "existing",
+                            "temp_file_path": None,
+                        }
+                    # # Update temp_file_path to use existing_file_id
+                    # existing_temp_path = (
+                    #     f"local_data/{existing_file_id}_{original_filename}"
+                    # )
+                    # shutil.copy2(temp_file_path, existing_temp_path)
+                    # temp_file_path = existing_temp_path
                 else:
                     # Check if local embeddings exist first
                     azure_path = f"./chroma_db/{existing_file_id}/azure"
@@ -173,10 +182,56 @@ class FileHandler:
 
             # If it's a new tabular file, prepare SQLite database
             if is_tabular:
+                # Prepare SQLite database
+
+                metadata = {
+                    "file_id": file_id,
+                    "file_hash": file_hash,
+                    "original_filename": original_filename,
+                    "is_tabular": True,
+                    "is_image": False,
+                    "username": username,
+                    "embeddings_status": "completed",  # CSV files don't need embeddings
+                }
+
+                # Create data directory and prepare SQLite database
                 data_dir = f"./chroma_db/{file_id}"
+                db_path = os.path.join(data_dir, "tabular_data.db")
                 os.makedirs(data_dir, exist_ok=True)
+
+                # Prepare SQLite database
                 data_preparer = PrepareSQLFromTabularData(temp_file_path, data_dir)
                 data_preparer.run_pipeline()
+
+                # Upload metadata immediately
+                try:
+                    files_to_upload = {
+                        "metadata": (
+                            metadata,
+                            f"file-embeddings/{file_id}/file_info.json",
+                        ),
+                        "database": (
+                            db_path,
+                            f"file-embeddings/{file_id}/tabular_data.db",
+                        ),
+                    }
+                    await asyncio.to_thread(
+                        self.gcs_handler.upload_to_gcs,
+                        self.configs.gcp_resource.bucket_name,
+                        files_to_upload,
+                    )
+                except Exception as e:
+                    logging.error(f"Error uploading metadata: {str(e)}")
+                    raise
+
+                return {
+                    "file_id": file_id,
+                    "is_image": is_image,
+                    "is_tabular": is_tabular,
+                    "message": "File processed and ready for querying.",
+                    "status": "success",
+                    "temp_file_path": temp_file_path,
+                }
 
             return {
                 "file_id": file_id,
