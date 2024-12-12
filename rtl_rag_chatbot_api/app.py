@@ -252,7 +252,7 @@ async def upload_file(
                 )
 
         # Clean up temporary file in background
-        if os.path.exists(temp_file_path):
+        if temp_file_path and os.path.exists(temp_file_path):
             background_tasks.add_task(os.remove, temp_file_path)
 
         response = FileUploadResponse(
@@ -268,7 +268,11 @@ async def upload_file(
     except Exception as e:
         logging.error(f"Error in upload_file: {str(e)}")
         # Ensure cleanup of any temporary files
-        if "temp_file_path" in locals() and os.path.exists(temp_file_path):
+        if (
+            "temp_file_path" in locals()
+            and temp_file_path
+            and os.path.exists(temp_file_path)
+        ):
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=str(e))
 
