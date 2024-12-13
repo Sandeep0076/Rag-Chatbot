@@ -304,8 +304,43 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
             destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db",
         )
 
+        # Update file_info.json with success status
+        metadata = {
+            "embeddings_status": "completed",
+            "file_type": "tabular",
+            "processing_status": "success",
+        }
+        gcs_handler.upload_to_gcs(
+            configs.gcp_resource.bucket_name,
+            {
+                "metadata": (
+                    metadata,
+                    f"file-embeddings/{file_id}/file_info.json",
+                )
+            },
+        )
+
     except Exception as e:
         logging.error(f"Error preparing SQLite database: {str(e)}")
+        # Update file_info.json with error status
+        metadata = {
+            "embeddings_status": "failed",
+            "file_type": "tabular",
+            "processing_status": "error",
+            "error": str(e),
+        }
+        try:
+            gcs_handler.upload_to_gcs(
+                configs.gcp_resource.bucket_name,
+                {
+                    "metadata": (
+                        metadata,
+                        f"file-embeddings/{file_id}/file_info.json",
+                    )
+                },
+            )
+        except Exception as upload_error:
+            logging.error(f"Error updating file_info.json: {str(upload_error)}")
         raise
 
 
@@ -348,11 +383,11 @@ async def create_embeddings(
     Returns:
         dict: Dictionary containing:
             - message (str): Status message about embedding creation
-            - info (dict, optional): Existing embedding information if already present
+            - For tabular data: Returns formatted markdown table if applicable
 
     Raises:
         HTTPException:
-            - 404: If file info or source file not found
+            - 404: If file not found or model not initialized
             - 500: For embedding creation or storage errors
 
     Notes:

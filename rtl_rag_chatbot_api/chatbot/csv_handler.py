@@ -90,6 +90,8 @@ class TabularDataHandler:
         """
         Initializes and returns an instance of AzureChatOpenAI.
 
+
+
         Returns:
             AzureChatOpenAI: An instance of the Azure OpenAI chat model.
 
@@ -285,7 +287,9 @@ class TabularDataHandler:
         prompt = (
             f"Question: {question}\n\n"
             f"Try to find an answer from the following text:\n{answer}\n\n"
-            "If no accurate answer can be found, return 'Cannot find answer'. "
+            "Do not include text like you are trained on data "
+            "If no accurate answer can be found, "
+            "return 'Cannot find answer, Please try with a more elaborate question'. "
             "Otherwise, return the answer."
         )
         return get_azure_non_rag_response(self.config, prompt)

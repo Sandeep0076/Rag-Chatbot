@@ -44,8 +44,10 @@ Guidelines for generating SQL-like natural language queries:
 - Specify the exact information to retrieve
 - Include conditions using phrases like "WHERE", "HAVING", "GROUP BY" as needed
 - Mention specific table names if known from the database_info
-- Add sorting, distinct or limiting clauses if relevant to the question.
-- If question is about general info, what is this document about, then simply summarize the Database info and return.
+- Add sorting, distinct or limiting clauses if relevant to the question
+- If question is about general info, what is this document about, then simply summarize the Database info and return
+- Never include any disclaimers about training data or model capabilities in your response
+- Provide only the direct answer or query, without any additional commentary
 
 Examples:
 {examples}
@@ -54,7 +56,8 @@ Respond with either:
 1. A direct answer if possible based on database_info, OR
 2. A single, well-structured SQL-like natural language query.
 
-Do not explain or provide multiple options. Output a single, coherent response.
+Do not explain or provide multiple options.
+Output a single, coherent response without any disclaimers or metadata about the model.
 """
 
 
