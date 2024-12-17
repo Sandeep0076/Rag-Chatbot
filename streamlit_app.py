@@ -97,7 +97,15 @@ def display_chat_interface():
     if st.session_state.file_uploaded and st.session_state.file_id:
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
-                st.write(message["content"])
+                # Handle table formatting if content appears to be a markdown table
+                if (
+                    isinstance(message["content"], str)
+                    and "|" in message["content"]
+                    and "\n" in message["content"]
+                ):
+                    st.markdown(message["content"])
+                else:
+                    st.write(message["content"])
                 if "chart_data" in message:
                     image_data = base64.b64decode(message["chart_data"]["chart_data"])
                     image = Image.open(BytesIO(image_data))
@@ -114,7 +122,7 @@ def display_chat_interface():
                 # Get previous messages to include in history
                 previous_messages = [
                     msg["content"]
-                    for msg in st.session_state.messages[-3:]  # Get last 3 messages
+                    for msg in st.session_state.messages[-5:]  # Get last 5 messages
                     if msg["role"] == "user"  # Only including user messages
                 ]
 
@@ -132,14 +140,22 @@ def display_chat_interface():
                     # Display chat response
                     ai_message = {
                         "role": "assistant",
-                        "content": f"{chat_result['response']}\n\nModel: **{st.session_state.model_choice}**",
+                        "content": chat_result["response"],
                     }
                     if "chart_data" in chat_result:
                         ai_message["chart_data"] = chat_result["chart_data"]
                     st.session_state.messages.append(ai_message)
 
                     with st.chat_message("assistant"):
-                        st.markdown(chat_result["response"])
+                        # Handle table formatting if response appears to be a markdown table
+                        if (
+                            isinstance(chat_result["response"], str)
+                            and "|" in chat_result["response"]
+                            and "\n" in chat_result["response"]
+                        ):
+                            st.markdown(chat_result["response"])
+                        else:
+                            st.markdown(chat_result["response"])
                         st.markdown(f"Model: **{st.session_state.model_choice}**")
                         if "chart_data" in chat_result:
                             chart_data = chat_result["chart_data"]["chart_data"]
@@ -159,24 +175,6 @@ def display_chat_interface():
                             img = Image.open(st.session_state.uploaded_image)
                             st.image(img, use_column_width=True)
 
-                    # Nearest neighbors request (only for PDF and Image files)
-                    # if st.session_state.file_type in ["PDF", "Image"]:
-                    #     neighbors_payload = {
-                    #         "text": user_input,
-                    #         "file_id": st.session_state.file_id,
-                    #         "n_neighbors": 3,
-                    #     }
-                    #     neighbors_response = requests.post(
-                    #         f"{API_URL}/file/neighbors", json=neighbors_payload
-                    #     )
-                    #     if neighbors_response.status_code == 200:
-                    #         neighbors_result = neighbors_response.json()
-                    #         with st.sidebar:
-                    #             st.subheader("Nearest Neighbors:")
-                    #             for i, neighbor in enumerate(
-                    #                 neighbors_result["neighbors"], 1
-                    #             ):
-                    #                 st.write(f"{i}. {neighbor}")
                 else:
                     st.error(f"Request failed: {chat_response.text}")
     else:

@@ -1,5 +1,6 @@
 import logging
 import os
+from contextlib import contextmanager
 from typing import List, Optional
 
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
@@ -8,6 +9,7 @@ from langchain_community.utilities import SQLDatabase
 from langchain_openai import AzureChatOpenAI
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import QueuePool
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
@@ -63,7 +65,15 @@ class TabularDataHandler:
         self.db_name = "tabular_data.db"
         self.db_path = os.path.join(self.data_dir, self.db_name)
         self.db_url = f"sqlite:///{self.db_path}"
-        self.engine = create_engine(self.db_url)
+        # Configure connection pooling
+        self.engine = create_engine(
+            self.db_url,
+            poolclass=QueuePool,
+            pool_size=5,
+            max_overflow=10,
+            pool_timeout=30,
+            pool_recycle=1800,
+        )
         self.Session = sessionmaker(bind=self.engine)
         self.db = SQLDatabase(engine=self.engine)
         self.llm = self._initialize_llm()
@@ -79,6 +89,8 @@ class TabularDataHandler:
     def _initialize_llm(self) -> AzureChatOpenAI:
         """
         Initializes and returns an instance of AzureChatOpenAI.
+
+
 
         Returns:
             AzureChatOpenAI: An instance of the Azure OpenAI chat model.
@@ -99,6 +111,50 @@ class TabularDataHandler:
             model_name=model_config.model_name,
             temperature=0.2,
         )
+
+    @contextmanager
+    def get_db_session(self):
+        """Context manager for database sessions"""
+        session = self.Session()
+        try:
+            yield session
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
+    def initialize_database(self, is_new_file: bool = True):
+        """Initialize database - either create new or download existing"""
+        os.makedirs(self.data_dir, exist_ok=True)
+
+        if is_new_file:
+            if not os.path.exists(self.db_path):
+                return False
+        else:
+            # For existing files, download from GCS if not present locally
+            if not os.path.exists(self.db_path):
+                try:
+                    self.gcs_handler.download_files_from_folder_by_id(self.file_id)
+                    if not os.path.exists(self.db_path):
+                        logging.error(
+                            f"Failed to download database for file_id: {self.file_id}"
+                        )
+                        return False
+                except Exception as e:
+                    logging.error(f"Error downloading database: {str(e)}")
+                    return False
+        return True
+
+    def cleanup(self):
+        """Cleanup database connections"""
+        if hasattr(self, "engine"):
+            self.engine.dispose()
+
+    def __del__(self):
+        """Ensure cleanup on object destruction"""
+        self.cleanup()
 
     def prepare_database(self):
         """
@@ -231,7 +287,9 @@ class TabularDataHandler:
         prompt = (
             f"Question: {question}\n\n"
             f"Try to find an answer from the following text:\n{answer}\n\n"
-            "If no accurate answer can be found, return 'Cannot find answer'. "
+            "Do not include text like you are trained on data "
+            "If no accurate answer can be found, "
+            "return 'Cannot find answer, Please try with a more elaborate question'. "
             "Otherwise, return the answer."
         )
         return get_azure_non_rag_response(self.config, prompt)

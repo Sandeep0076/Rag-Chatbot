@@ -40,13 +40,27 @@ class PrepareSQLFromTabularData:
             excel_file = pd.ExcelFile(self.file_path)
             for sheet_name in excel_file.sheet_names:
                 df = pd.read_excel(self.file_path, sheet_name=sheet_name)
-                table_name = f"{self.file_name}_{sheet_name}"
-                self._save_dataframe_to_sql(df, table_name)
+                # Use just the sheet name as the table name
+                self._save_dataframe_to_sql(df, sheet_name)
         else:
             raise ValueError("The selected file type is not supported")
         print("File has been processed and saved to the SQL database.")
 
     def _save_dataframe_to_sql(self, df, table_name):
+        # Skip empty DataFrames
+        if df.empty:
+            print(f"Skipping empty sheet '{table_name}'")
+            return
+
+        # Clean up table name - remove file ID if present
+        if "_" in table_name:
+            # Split by underscore and take everything after the last UUID part (5 groups of hex numbers)
+            parts = table_name.split("_")
+            for i in range(len(parts)):
+                if len(parts[i]) == 36 and "-" in parts[i]:  # UUID format check
+                    table_name = "_".join(parts[i + 1 :])
+                    break
+
         inspector = inspect(self.engine)
         if not inspector.has_table(table_name):
             df.to_sql(table_name, self.engine, index=False)

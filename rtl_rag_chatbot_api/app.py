@@ -252,7 +252,7 @@ async def upload_file(
                 )
 
         # Clean up temporary file in background
-        if os.path.exists(temp_file_path):
+        if temp_file_path and os.path.exists(temp_file_path):
             background_tasks.add_task(os.remove, temp_file_path)
 
         response = FileUploadResponse(
@@ -268,7 +268,11 @@ async def upload_file(
     except Exception as e:
         logging.error(f"Error in upload_file: {str(e)}")
         # Ensure cleanup of any temporary files
-        if "temp_file_path" in locals() and os.path.exists(temp_file_path):
+        if (
+            "temp_file_path" in locals()
+            and temp_file_path
+            and os.path.exists(temp_file_path)
+        ):
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -300,8 +304,43 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
             destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db",
         )
 
+        # Update file_info.json with success status
+        metadata = {
+            "embeddings_status": "completed",
+            "file_type": "tabular",
+            "processing_status": "success",
+        }
+        gcs_handler.upload_to_gcs(
+            configs.gcp_resource.bucket_name,
+            {
+                "metadata": (
+                    metadata,
+                    f"file-embeddings/{file_id}/file_info.json",
+                )
+            },
+        )
+
     except Exception as e:
         logging.error(f"Error preparing SQLite database: {str(e)}")
+        # Update file_info.json with error status
+        metadata = {
+            "embeddings_status": "failed",
+            "file_type": "tabular",
+            "processing_status": "error",
+            "error": str(e),
+        }
+        try:
+            gcs_handler.upload_to_gcs(
+                configs.gcp_resource.bucket_name,
+                {
+                    "metadata": (
+                        metadata,
+                        f"file-embeddings/{file_id}/file_info.json",
+                    )
+                },
+            )
+        except Exception as upload_error:
+            logging.error(f"Error updating file_info.json: {str(upload_error)}")
         raise
 
 
@@ -344,11 +383,11 @@ async def create_embeddings(
     Returns:
         dict: Dictionary containing:
             - message (str): Status message about embedding creation
-            - info (dict, optional): Existing embedding information if already present
+            - For tabular data: Returns formatted markdown table if applicable
 
     Raises:
         HTTPException:
-            - 404: If file info or source file not found
+            - 404: If file not found or model not initialized
             - 500: For embedding creation or storage errors
 
     Notes:
@@ -449,86 +488,113 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         if len(query.text) == 0:
             raise HTTPException(status_code=400, detail="Text array cannot be empty")
 
+        file_info = gcs_handler.get_file_info(query.file_id)
         model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
         model = initialized_models.get(model_key)
 
-        if not model:
-            file_info = gcs_handler.get_file_info(query.file_id)
-            if not file_info:
-                logging.info(f"File info not found for {query.file_id}")
-                raise HTTPException(status_code=404, detail="File not found")
+        try:
+            if not model:
+                file_info = gcs_handler.get_file_info(query.file_id)
+                if not file_info:
+                    logging.info(f"File info not found for {query.file_id}")
+                    raise HTTPException(status_code=404, detail="File not found")
 
-            db_path = f"./chroma_db/{query.file_id}/tabular_data.db"
-            if os.path.exists(db_path):
-                model = TabularDataHandler(configs, query.file_id, query.model_choice)
-
-            # Check for local embeddings first
-            chroma_path = f"./chroma_db/{query.file_id}"
-            is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
-            embedding_type = "google" if is_gemini else "azure"
-            model_path = os.path.join(chroma_path, embedding_type, "chroma.sqlite3")
-
-            # If local embeddings don't exist, check GCS
-            if not os.path.exists(model_path):
-                if not file_info.get("embeddings_status") == "completed":
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Embeddings are not ready yet. Please wait a moment.",
+                db_path = f"./chroma_db/{query.file_id}/tabular_data.db"
+                if os.path.exists(db_path):
+                    logging.info("Initializing TabularDataHandler")
+                    model = TabularDataHandler(
+                        configs, query.file_id, query.model_choice
                     )
-                print("No local embeddings found, downloading from GCS")
-                gcs_handler.download_files_from_folder_by_id(query.file_id)
+                    initialized_models[model_key] = model
+                else:
+                    chroma_path = f"./chroma_db/{query.file_id}"
+                    is_gemini = query.model_choice.lower() in [
+                        "gemini-flash",
+                        "gemini-pro",
+                    ]
+                    embedding_type = "google" if is_gemini else "azure"
+                    model_path = os.path.join(
+                        chroma_path, embedding_type, "chroma.sqlite3"
+                    )
 
-            # Initialize model with ChromaDB
-            if is_gemini:
-                model = GeminiHandler(configs, gcs_handler)
-                model.initialize(
-                    model=query.model_choice,
-                    file_id=query.file_id,
-                    embedding_type="google",
-                    collection_name=f"rag_collection_{query.file_id}",
-                    user_id=query.user_id,
-                )
+                    # If local embeddings don't exist, check GCS
+                    if not os.path.exists(model_path):
+                        if not file_info.get("embeddings_status") == "completed":
+                            raise HTTPException(
+                                status_code=400,
+                                detail="Embeddings are not ready yet. Please wait a moment.",
+                            )
+                        print("No local embeddings found, downloading from GCS")
+                        gcs_handler.download_files_from_folder_by_id(query.file_id)
+
+                    # Initialize model with ChromaDB
+                    if is_gemini:
+                        model = GeminiHandler(configs, gcs_handler)
+                        model.initialize(
+                            model=query.model_choice,
+                            file_id=query.file_id,
+                            embedding_type="google",
+                            collection_name=f"rag_collection_{query.file_id}",
+                            user_id=query.user_id,
+                        )
+                    else:
+                        model = Chatbot(configs, gcs_handler)
+                        model.initialize(
+                            model_choice=query.model_choice,
+                            file_id=query.file_id,
+                            embedding_type="azure",
+                            collection_name=f"rag_collection_{query.file_id}",
+                            user_id=query.user_id,
+                        )
+
+                    initialized_models[model_key] = model
+                    logging.info(
+                        f"Model initialized: {query.file_id}, user: {query.user_id}, model: {query.model_choice}"
+                    )
+
+            current_question = query.text[-1]
+
+            # For GPT-3.5, skip previous messages to stay within token limits
+            if query.model_choice.lower() == "gpt_3_5_turbo":
+                chat_context = current_question
             else:
-                model = Chatbot(configs, gcs_handler)
-                model.initialize(
-                    model_choice=query.model_choice,
-                    file_id=query.file_id,
-                    embedding_type="azure",
-                    collection_name=f"rag_collection_{query.file_id}",
-                    user_id=query.user_id,
+                chat_context = (
+                    "\n".join([f"Previous message: {msg}" for msg in query.text[:-1]])
+                    + f"\nCurrent question: {current_question}"
+                    if len(query.text) > 1
+                    else current_question
                 )
 
-            initialized_models[model_key] = model
-            logging.info(
-                f"Model initialized: {query.file_id}, user: {query.user_id}, model: {query.model_choice}"
-            )
+            response = model.get_answer(chat_context)
 
-        current_question = query.text[-1]
+            if isinstance(response, list):
+                if len(response) > 1:
+                    headers = response[0]
+                    rows = response[1:]
 
-        # For GPT-3.5, skip previous messages to stay within token limits
-        if query.model_choice.lower() == "gpt_3_5_turbo":
-            chat_context = current_question
-        else:
-            chat_context = (
-                "\n".join([f"Previous message: {msg}" for msg in query.text[:-1]])
-                + f"\nCurrent question: {current_question}"
-                if len(query.text) > 1
-                else current_question
-            )
+                    # Create markdown table
+                    table_str = "| " + " | ".join(str(h) for h in headers) + " |\n"
+                    table_str += "|" + "|".join(["---" for _ in headers]) + "|\n"
+                    for row in rows:
+                        table_str += (
+                            "| " + " | ".join(str(cell) for cell in row) + " |\n"
+                        )
 
-        response = model.get_answer(chat_context)
+                    return {
+                        "response": table_str,
+                        "is_table": True,
+                        "headers": headers,
+                        "rows": rows,
+                    }
+                else:
+                    return {"response": "No data found", "is_table": False}
 
-        if isinstance(response, list) and len(response) > 1:
-            headers = response[0]
-            rows = response[1:]
-            table_str = "| " + " | ".join(str(h) for h in headers) + " |\n"
-            table_str += "|" + "|".join(["---" for _ in headers]) + "|\n"
-            table_str += "\n".join(
-                "| " + " | ".join(str(cell) for cell in row) + " |" for row in rows
-            )
-            return {"response": table_str}
+            return {"response": str(response), "is_table": False}
 
-        return {"response": str(response)}
+        finally:
+            # Cleanup if model is TabularDataHandler
+            if isinstance(model, TabularDataHandler):
+                model.cleanup()
 
     except Exception as e:
         logging.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
