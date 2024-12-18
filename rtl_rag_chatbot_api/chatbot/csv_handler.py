@@ -339,7 +339,7 @@ class TabularDataHandler:
             # Check if the formatted question contains specific keywords
             keywords = ["SELECT", "FIND", "LIST", "SHOW", "CALCULATE"]
             if any(keyword in formatted_question.upper() for keyword in keywords):
-                # Only invoke the agent if the formatted question contains specific keywords
+                # Enhance the query with case-insensitive comparisons
                 response = self.agent.invoke({"input": formatted_question})
                 return response["output"]
             else:

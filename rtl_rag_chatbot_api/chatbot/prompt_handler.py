@@ -5,6 +5,21 @@ configs = Config()
 
 examples = [
     {
+        "query": "Find employee Sandeep's salary",
+        "answer": (
+            "Find employee details where the name matches 'Sandeep' "
+            "case-insensitively (LOWER(name) = LOWER('Sandeep'))"
+        ),
+    },
+    {
+        "query": "Show me all employees  named John",
+        "answer": "List all people where LOWER(employee_name) LIKE LOWER('%john%')",
+    },
+    {
+        "query": "What's the salary of employee SMITH",
+        "answer": "Show salary details where LOWER(last_name) = LOWER('SMITH')",
+    },
+    {
         "query": "Name cities with population more than 10000",
         "answer": "List all distinct cities that have a population greater than 10,000.",
     },
@@ -31,9 +46,8 @@ special_prompt = """
 Analyze the given database_info and user_question. Your task is to:
 
 1. If the user_question can be directly answered using the database_info, provide a concise answer.
-2. In most cases, where database_info is insufficient,
- generate a detailed SQL-like natural language query that could answer the user_question.
-   This query should be structured similarly to SQL but written in plain English.
+2. For text-based searches (especially names), always use case-insensitive comparisons using LOWER() or UPPER().
+3. In most cases, where database_info is insufficient, generate a detailed SQL-like natural language query.
 
 Database Info: {database_info}
 Table Name: {table_name}
@@ -41,6 +55,7 @@ User Question: {user_question}
 
 Guidelines for generating SQL-like natural language queries:
 - Start with "SELECT" or equivalent phrases like "Find", "List", "Show", "Calculate"
+
 - Specify the exact information to retrieve
 - Include conditions using phrases like "WHERE", "HAVING", "GROUP BY" as needed
 - Mention specific table names if known from the database_info
