@@ -364,7 +364,7 @@ class TabularDataHandler:
                 # Extract intermediate steps if available
                 intermediate_steps = response.get("intermediate_steps", [])
 
-                print("Intermediate Steps", intermediate_steps)
+                # print("Intermediate Steps", intermediate_steps)
 
                 complete_logs = str(intermediate_steps) + "\n" + str(final_answer)
 
