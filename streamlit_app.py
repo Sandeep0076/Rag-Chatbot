@@ -34,15 +34,22 @@ def handle_file_upload():
         return
 
     st.session_state.file_type = st.radio(
-        "Select file type:", ["PDF", "CSV", "Image"], horizontal=True
+        "Select file type:", ["PDF", "CSV/Excel", "Database", "Image"], horizontal=True
     )
 
     is_image = st.session_state.file_type == "Image"
     file_types = {
         "Image": ["jpg", "png"],
-        "CSV": ["xlsx", "xls", "csv"],
+        "CSV/Excel": ["xlsx", "xls", "csv"],
+        "Database": ["db", "sqlite"],
         "PDF": ["pdf"],
     }[st.session_state.file_type]
+
+    # Display help text for database files
+    if st.session_state.file_type == "Database":
+        st.info(
+            "Upload SQLite database files (.db or .sqlite) to chat with their contents. "
+        )
 
     uploaded_file = st.file_uploader(
         f"Choose a {st.session_state.file_type} file", type=file_types
@@ -71,7 +78,14 @@ def handle_file_upload():
                     st.session_state.file_uploaded = True
 
                     if upload_result.get("status") == "success":
-                        st.success("File processed successfully and ready for chat.")
+                        if st.session_state.file_type == "Database":
+                            st.success(
+                                "Database processed successfully. You can now chat with its contents."
+                            )
+                        else:
+                            st.success(
+                                "File processed successfully and ready for chat."
+                            )
                     elif upload_result.get("status") == "partial":
                         st.warning(upload_result["message"])
                     else:

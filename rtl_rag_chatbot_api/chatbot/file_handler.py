@@ -67,7 +67,9 @@ class FileHandler:
             # Read file content asynchronously
             file_content = await file.read()
             file_hash = self.calculate_file_hash(file_content)
-            is_tabular = original_filename.lower().endswith((".csv", ".xlsx", ".xls"))
+            file_extension = os.path.splitext(original_filename)[1].lower()
+            is_tabular = file_extension in [".csv", ".xlsx", ".xls"]
+            is_database = file_extension in [".db", ".sqlite"]
 
             existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
 
@@ -93,8 +95,8 @@ class FileHandler:
 
             if existing_file_id:
                 logging.info(f"Found embeddings for: {original_filename}")
-                if is_tabular:
-                    # For tabular files, always prepare SQLite database with new file
+                if is_tabular or is_database:
+                    # For tabular/database files, always prepare SQLite database with new file
                     data_dir = f"./chroma_db/{existing_file_id}"
                     os.makedirs(data_dir, exist_ok=True)
 
@@ -104,59 +106,49 @@ class FileHandler:
                         return {
                             "file_id": existing_file_id,
                             "is_image": is_image,
-                            "is_tabular": is_tabular,
+                            "is_tabular": is_tabular or is_database,
                             "message": "File exists. Database ready for querying.",
                             "status": "existing",
                             "temp_file_path": None,
                         }
-                    # # Update temp_file_path to use existing_file_id
-                    # existing_temp_path = (
-                    #     f"local_data/{existing_file_id}_{original_filename}"
-                    # )
-                    # shutil.copy2(temp_file_path, existing_temp_path)
-                    # temp_file_path = existing_temp_path
-                else:
-                    # Check if local embeddings exist first
-                    azure_path = f"./chroma_db/{existing_file_id}/azure"
-                    gemini_path = f"./chroma_db/{existing_file_id}/google"
-                    local_exists = (
-                        os.path.exists(azure_path)
-                        and os.path.exists(gemini_path)
-                        and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
-                        and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
-                    )
 
-                    if not local_exists:
-                        self.gcs_handler.download_files_from_folder_by_id(
-                            existing_file_id
-                        )
+                # Check if local embeddings exist first
+                azure_path = f"./chroma_db/{existing_file_id}/azure"
+                gemini_path = f"./chroma_db/{existing_file_id}/google"
+                local_exists = (
+                    os.path.exists(azure_path)
+                    and os.path.exists(gemini_path)
+                    and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
+                    and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
+                )
 
-                    # For images, we only need the embeddings to chat
-                    if is_image:
-                        return {
-                            "file_id": existing_file_id,
-                            "is_image": is_image,
-                            "is_tabular": is_tabular,
-                            "message": "File already exists and has embeddings.",
-                            "status": "existing",
-                            "temp_file_path": temp_file_path,  # Keep original temp file for reference
-                        }
+                if not local_exists:
+                    self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
 
-                    # Copy the temp file to match the existing file ID path
-                    existing_temp_path = (
-                        f"local_data/{existing_file_id}_{original_filename}"
-                    )
-                    os.makedirs(os.path.dirname(existing_temp_path), exist_ok=True)
-                    shutil.copy2(temp_file_path, existing_temp_path)
-                    temp_file_path = existing_temp_path
+                # For images, we only need the embeddings to chat
+                if is_image:
+                    return {
+                        "file_id": existing_file_id,
+                        "is_image": is_image,
+                        "is_tabular": is_tabular,
+                        "message": "File already exists and has embeddings.",
+                        "status": "existing",
+                        "temp_file_path": temp_file_path,  # Keep original temp file for reference
+                    }
+
+                # Copy the temp file to match the existing file ID path
+                existing_temp_path = (
+                    f"local_data/{existing_file_id}_{original_filename}"
+                )
+                os.makedirs(os.path.dirname(existing_temp_path), exist_ok=True)
+                shutil.copy2(temp_file_path, existing_temp_path)
+                temp_file_path = existing_temp_path
 
                 return {
                     "file_id": existing_file_id,
                     "is_image": is_image,
                     "is_tabular": is_tabular,
-                    "message": "File already exists. Processing database."
-                    if is_tabular
-                    else "File already exists and has embeddings.",
+                    "message": "File already exists and has embeddings.",
                     "status": "existing",
                     "temp_file_path": temp_file_path,
                 }
@@ -164,7 +156,7 @@ class FileHandler:
             # Prepare metadata for new file
             metadata = {
                 "is_image": is_image,
-                "is_tabular": is_tabular,
+                "is_tabular": is_tabular or is_database,
                 "file_hash": file_hash,
                 "username": username,
                 "original_filename": original_filename,
@@ -180,8 +172,8 @@ class FileHandler:
                     {"analysis_path": analysis_text_path, "has_analysis": True}
                 )
 
-            # If it's a new tabular file, prepare SQLite database
-            if is_tabular:
+            # If it's a new tabular/database file, prepare SQLite database
+            if is_tabular or is_database:
                 # Prepare SQLite database
 
                 metadata = {
@@ -227,7 +219,7 @@ class FileHandler:
                 return {
                     "file_id": file_id,
                     "is_image": is_image,
-                    "is_tabular": is_tabular,
+                    "is_tabular": is_tabular or is_database,
                     "message": "File processed and ready for querying.",
                     "status": "success",
                     "temp_file_path": temp_file_path,
@@ -236,9 +228,9 @@ class FileHandler:
             return {
                 "file_id": file_id,
                 "is_image": is_image,
-                "is_tabular": is_tabular,
+                "is_tabular": is_tabular or is_database,
                 "message": "File processed and ready for embedding creation."
-                if not is_tabular
+                if not is_tabular and not is_database
                 else "File processed and ready for use.",
                 "status": "success",
                 "temp_file_path": analysis_text_path if is_image else temp_file_path,

@@ -221,8 +221,11 @@ async def upload_file(
         ]  # Use the file_id from result in case it's an existing file
         temp_file_path = result["temp_file_path"]
 
-        # Handle CSV/Excel files in background
-        if file_extension in [".csv", ".xlsx", ".xls"] and result["status"] == "new":
+        # Handle CSV/Excel/Database files in background
+        if (
+            file_extension in [".csv", ".xlsx", ".xls", ".db", ".sqlite"]
+            and result["status"] == "new"
+        ):
             background_tasks.add_task(prepare_sqlite_db, file_id, temp_file_path)
             # For tabular files, we can create file_info.json immediately
             gcs_handler.temp_metadata[
@@ -280,6 +283,8 @@ async def upload_file(
 async def prepare_sqlite_db(file_id: str, temp_file_path: str):
     """
     Handles the preparation of a SQLite database for tabular data from the uploaded file.
+    For CSV/Excel files: Creates a new SQLite database
+    For SQLite DB files: Validates and copies the database
     Downloads and decrypts the file, prepares the SQLite database,
     uploads it to GCS, and cleans up the decrypted file if successful.
     """
@@ -293,9 +298,15 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
             logging.info(f"SQLite database already exists for file_id: {file_id}")
             return
 
+        # Get file extension
+        file_extension = os.path.splitext(temp_file_path)[1].lower()
+
         # Prepare SQLite database
         data_preparer = PrepareSQLFromTabularData(temp_file_path, data_dir)
-        data_preparer.run_pipeline()
+        success = data_preparer.run_pipeline()
+
+        if not success:
+            raise ValueError("Failed to prepare database from input file")
 
         # Upload the SQLite database to GCS
         gcs_handler.upload_to_gcs(
@@ -304,10 +315,12 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
             destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db",
         )
 
-        # Update file_info.json with success status
+        # Update file_info.json with success status and file type
         metadata = {
             "embeddings_status": "completed",
-            "file_type": "tabular",
+            "file_type": "database"
+            if file_extension in [".db", ".sqlite"]
+            else "tabular",
             "processing_status": "success",
         }
         gcs_handler.upload_to_gcs(
@@ -325,7 +338,9 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
         # Update file_info.json with error status
         metadata = {
             "embeddings_status": "failed",
-            "file_type": "tabular",
+            "file_type": "database"
+            if file_extension in [".db", ".sqlite"]
+            else "tabular",
             "processing_status": "error",
             "error": str(e),
         }

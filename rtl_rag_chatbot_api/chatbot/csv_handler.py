@@ -158,10 +158,21 @@ class TabularDataHandler:
 
     def prepare_database(self):
         """
-        Prepares the SQLite database by processing the CSV or Excel file.
+        Prepares the SQLite database by processing the input file (CSV, Excel, or SQLite DB).
+        For CSV and Excel files, it creates tables in the database.
+        For SQLite DB files, it copies and validates the database structure.
         """
-        data_preparer = PrepareSQLFromTabularData(self.data_dir)
-        data_preparer.run_pipeline()
+        file_path = self.file_path if hasattr(self, "file_path") else self.data_dir
+        data_preparer = PrepareSQLFromTabularData(
+            file_path=file_path, output_dir=self.data_dir
+        )
+        success = data_preparer.run_pipeline()
+
+        if not success:
+            raise ValueError("Failed to prepare database from input file")
+
+        # Initialize SQL agent after database is prepared
+        self._initialize_agent()
 
     def _initialize_agent(self):
         """
