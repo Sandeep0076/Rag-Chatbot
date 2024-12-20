@@ -186,7 +186,10 @@ class TabularDataHandler:
             toolkit=toolkit,
             verbose=True,
             handle_parsing_errors=True,
-            agent_executor_kwargs={"handle_parsing_errors": True},
+            agent_executor_kwargs={
+                "handle_parsing_errors": True,
+                "return_intermediate_steps": True,
+            },
         )
 
     def debug_database(self):
@@ -297,7 +300,8 @@ class TabularDataHandler:
         """
         prompt = (
             f"Question: {question}\n\n"
-            f"Try to find an answer from the following text:\n{answer}\n\n"
+            f"You are expert in DatabaseTry to find an answer from the following text:\n{answer}\n\n"
+            "Answer the question in clean and readable format. Markdown is allowed.\n"
             "Do not include text like you are trained on data "
             "If no accurate answer can be found, "
             "return 'Cannot find answer, Please try with a more elaborate question'. "
@@ -352,7 +356,21 @@ class TabularDataHandler:
             if any(keyword in formatted_question.upper() for keyword in keywords):
                 # Enhance the query with case-insensitive comparisons
                 response = self.agent.invoke({"input": formatted_question})
-                return response["output"]
+                # output = response["output"]
+
+                # Extract the final answer
+                final_answer = response.get("output", "No final answer found")
+
+                # Extract intermediate steps if available
+                intermediate_steps = response.get("intermediate_steps", [])
+
+                print("Intermediate Steps", intermediate_steps)
+
+                complete_logs = str(intermediate_steps) + "\n" + str(final_answer)
+
+                output = self.get_forced_answer(formatted_question, complete_logs)
+
+                return output
             else:
                 # If no keywords are found, return the formatted question as is
                 return formatted_question
