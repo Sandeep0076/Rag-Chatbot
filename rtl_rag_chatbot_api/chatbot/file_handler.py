@@ -69,12 +69,20 @@ class FileHandler:
             file_hash = self.calculate_file_hash(file_content)
             file_extension = os.path.splitext(original_filename)[1].lower()
             is_tabular = file_extension in [".csv", ".xlsx", ".xls"]
-            is_database = file_extension in [".db", ".sqlite"]
+            is_database = file_extension in [".db", ".sqlite", ".sqlite3"]
+
+            logging.info(f"Processing file with extension: {file_extension}")
+            if not (is_tabular or is_database or file_extension == ".pdf" or is_image):
+                raise ValueError(f"Unsupported file type: {file_extension}")
 
             existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
 
-            # Create local_data directory if it doesn't exist
+            # Create necessary directories
             os.makedirs("local_data", exist_ok=True)
+            if not existing_file_id:
+                chroma_dir = f"./chroma_db/{file_id}"
+                os.makedirs(chroma_dir, exist_ok=True)
+                logging.info(f"Created directory: {chroma_dir}")
 
             # Write file asynchronously using aiofiles
             temp_file_path = f"local_data/{file_id}_{original_filename}"
