@@ -5,8 +5,9 @@ from typing import List, Optional, Union
 
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
-from langchain_community.chat_models import AzureChatOpenAI, ChatVertexAI
 from langchain_community.utilities import SQLDatabase
+from langchain_google_vertexai import ChatVertexAI
+from langchain_openai import AzureChatOpenAI
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
