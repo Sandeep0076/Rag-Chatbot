@@ -133,3 +133,91 @@ class GeminiHandler(BaseRAGHandler):
         except Exception as e:
             logging.error(f"Error in get_answer: {str(e)}")
             return f"Error generating response: {str(e)}"
+
+
+def get_gemini_non_rag_response(config, prompt: str, model_choice: str) -> str:
+    """
+    Get a response from Gemini model without using RAG context.
+
+    Args:
+        config: Configuration object containing Gemini settings
+        prompt (str): The prompt to send to the model
+        model_choice (str): The specific Gemini model to use (e.g., 'gemini-flash', 'gemini-pro')
+
+    Returns:
+        str: The model's response
+
+    Raises:
+        ValueError: If model configuration is invalid
+    """
+    try:
+        # Initialize Vertex AI
+        vertexai.init(project=config.gemini.project, location=config.gemini.location)
+
+        # Map model choice to actual model name
+        model_mapping = {
+            "gemini-flash": config.gemini.model_flash,
+            "gemini-pro": config.gemini.model_pro,
+        }
+
+        model_name = model_mapping.get(model_choice)
+        if not model_name:
+            raise ValueError(f"Invalid Gemini model choice: {model_choice}")
+
+        # Initialize the model
+        model = GenerativeModel(model_name)
+
+        # Configure generation parameters for more focused responses
+        generation_config = GenerationConfig(
+            temperature=0.1,  # Lower temperature for more focused responses
+            max_output_tokens=1024,  # Reduced token limit to discourage verbosity
+            top_p=0.8,  # More focused sampling
+            top_k=20,  # More focused token selection
+            candidate_count=1,  # Single response only
+        )
+
+        # Configure safety settings
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        }
+
+        # Add system message to enforce direct responses
+        system_prompt = (
+            "You are a direct response system. You must:\n"
+            "1. Give ONLY the exact answer requested\n"
+            "2. NEVER include explanations or commentary\n"
+            "3. NEVER mention the data source or context\n"
+            "4. NEVER include summaries or breakdowns\n"
+            "5. Format in clean markdown when appropriate\n\n"
+            "USER QUERY:\n"
+        )
+
+        full_prompt = system_prompt + prompt
+
+        # Generate response
+        response = model.generate_content(
+            full_prompt,
+            generation_config=generation_config,
+            safety_settings=safety_settings,
+        )
+
+        # Clean up response
+        answer = response.text.strip()
+
+        # Remove any "Here's the answer" or similar prefixes
+        common_prefixes = ["here's", "here is", "the answer is", "answer:"]
+        lower_answer = answer.lower()
+        for prefix in common_prefixes:
+            if lower_answer.startswith(prefix):
+                answer = answer[len(prefix) :].strip()
+                if answer.startswith(":"):
+                    answer = answer[1:].strip()
+
+        return answer
+
+    except Exception as e:
+        logging.error(f"Error in get_gemini_non_rag_response: {str(e)}", exc_info=True)
+        return f"Error generating response: {str(e)}"

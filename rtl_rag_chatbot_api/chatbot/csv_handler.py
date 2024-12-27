@@ -13,7 +13,6 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 
 from configs.app_config import Config
-from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
 from rtl_rag_chatbot_api.chatbot.prompt_handler import format_question
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
@@ -100,6 +99,9 @@ class TabularDataHandler:
         Raises:
             ValueError: If the configuration for the specified model is not found.
         """
+        logging.info(f"Initializing LLM with model choice: {self.model_choice}")
+
+        # Handle Gemini models
         if self.model_choice.startswith("gemini"):
             model_config = self.config.gemini
             if not model_config:
@@ -113,8 +115,11 @@ class TabularDataHandler:
 
             model_name = model_mapping.get(self.model_choice)
             if not model_name:
-                raise ValueError(f"Invalid Gemini model choice: {self.model_choice}")
+                raise ValueError(
+                    f"Invalid Gemini model choice: {self.model_choice}. Available choices: {list(model_mapping.keys())}"
+                )
 
+            logging.info(f"Using Gemini model: {model_name}")
             return ChatVertexAI(
                 model_name=model_name,
                 project=model_config.project,
@@ -124,21 +129,24 @@ class TabularDataHandler:
                 top_p=1,
                 top_k=40,
             )
-        else:
-            model_config = self.config.azure_llm.models.get(self.model_choice)
-            if not model_config:
-                raise ValueError(
-                    f"Configuration for model {self.model_choice} not found"
-                )
 
-            return AzureChatOpenAI(
-                azure_endpoint=model_config.endpoint,
-                azure_deployment=model_config.deployment,
-                api_version=model_config.api_version,
-                api_key=model_config.api_key,
-                model_name=model_config.model_name,
-                temperature=0.2,
+        # Handle Azure OpenAI models
+        model_config = self.config.azure_llm.models.get(self.model_choice)
+        if not model_config:
+            available_models = list(self.config.azure_llm.models.keys())
+            raise ValueError(
+                f"Configuration for model {self.model_choice} not found. Available models: {available_models}"
             )
+
+        logging.info(f"Using Azure OpenAI model: {self.model_choice}")
+        return AzureChatOpenAI(
+            azure_endpoint=model_config.endpoint,
+            azure_deployment=model_config.deployment,
+            api_version=model_config.api_version,
+            api_key=model_config.api_key,
+            model_name=model_config.model_name,
+            temperature=0.2,
+        )
 
     @contextmanager
     def get_db_session(self):
@@ -326,16 +334,45 @@ class TabularDataHandler:
         Returns:
             str: An extracted answer or "Cannot find answer" if no suitable answer is found.
         """
-        prompt = (
+        base_prompt = (
             f"Question: {question}\n\n"
-            f"You are expert in DatabaseTry to find an answer from the following text:\n{answer}\n\n"
-            "Answer the question in clean and readable format. Markdown is allowed.\n"
-            "Do not include text like you are trained on data "
-            "If no accurate answer can be found, "
-            "return 'Cannot find answer, Please try with a more elaborate question'. "
-            "Otherwise, return the answer."
+            f"Context: {answer}\n\n"
+            "Instructions:\n"
+            "1. You are a database expert providing direct answers from the context only\n"
+            "2. Format your response in clean markdown\n"
+            "3. DO NOT include:\n"
+            "   - Intermediate steps or thought process\n"
+            "   - References to the data or context\n"
+            "   - Summaries or breakdowns\n"
+            "   - Expressions like (case insensitive)\n"
+            "4. Do not reply in one word. Write in more human like response. "
+            "If asked to show some rows from table, return the answer in tabular form with headers and"
+            "rows and columns. Use markdown format.\n"
+            "5. If no accurate answer can be found, ONLY return: "
+            "'Cannot find answer, Please try with a more elaborate question'\n"
         )
-        return get_azure_non_rag_response(self.config, prompt)
+
+        if self.model_choice.startswith("gemini"):
+            gemini_prompt = (
+                base_prompt
+                + "\nCRITICAL: Your response must ONLY contain the direct answer in 1-2 sentences. "
+                "No summaries. "
+                "Just the answer in a clean Natural language format from context."
+                "Do not reply in one word. Always Write in more human like response. "
+            )
+            from rtl_rag_chatbot_api.chatbot.gemini_handler import (
+                get_gemini_non_rag_response,
+            )
+
+            return get_gemini_non_rag_response(
+                self.config, gemini_prompt, self.model_choice
+            )
+        else:
+            from rtl_rag_chatbot_api.chatbot.chatbot_creator import (
+                get_azure_non_rag_response,
+            )
+
+            return get_azure_non_rag_response(self.config, base_prompt)
 
     def get_answer(self, question: str) -> str:
         """
@@ -384,29 +421,36 @@ class TabularDataHandler:
             if any(keyword in formatted_question.upper() for keyword in keywords):
                 # Enhance the query with case-insensitive comparisons
                 response = self.agent.invoke({"input": formatted_question})
-                # output = response["output"]
 
-                # Extract the final answer
+                # Extract the final answer and intermediate steps
                 final_answer = response.get("output", "No final answer found")
-
-                # Extract intermediate steps if available
                 intermediate_steps = response.get("intermediate_steps", [])
-
-                # print("Intermediate Steps", intermediate_steps)
-
                 complete_logs = str(intermediate_steps) + "\n" + str(final_answer)
 
-                output = self.get_forced_answer(formatted_question, complete_logs)
+                # Format the response using the appropriate model
+                if self.model_choice.startswith("gemini"):
+                    from rtl_rag_chatbot_api.chatbot.gemini_handler import (
+                        get_gemini_non_rag_response,
+                    )
 
-                return output
+                    return get_gemini_non_rag_response(
+                        self.config, complete_logs, self.model_choice
+                    )
+                else:
+                    from rtl_rag_chatbot_api.chatbot.chatbot_creator import (
+                        get_azure_non_rag_response,
+                    )
+
+                    return get_azure_non_rag_response(self.config, complete_logs)
             else:
                 # If no keywords are found, return the formatted question as is
                 return formatted_question
 
         except Exception as e:
-            print(f"An error occurred while processing the question: {e}")
-            print(f"Debug: Full exception: {repr(e)}")
-            return None
+            logging.error(
+                f"An error occurred while processing the question: {e}", exc_info=True
+            )
+            return f"An error occurred while processing your question: {str(e)}"
 
 
 # def main(data_dir: str):

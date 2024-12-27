@@ -63,6 +63,7 @@ Guidelines for generating SQL-like natural language queries:
 - If question is about general info, what is this document about, then simply summarize the Database info and return
 - Never include any disclaimers about training data or model capabilities in your response
 - Provide only the direct answer or query, without any additional commentary
+- When asked about table data, return the answer in tabular form with headers and rows and columns. Use markdown format.
 
 Examples:
 {examples}

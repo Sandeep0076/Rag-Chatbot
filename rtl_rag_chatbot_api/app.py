@@ -504,23 +504,37 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             raise HTTPException(status_code=400, detail="Text array cannot be empty")
 
         file_info = gcs_handler.get_file_info(query.file_id)
+        if not file_info:
+            logging.info(f"File info not found for {query.file_id}")
+            raise HTTPException(
+                status_code=400,
+                detail="File appears to be corrupted or empty. Please try uploading a different CSV file.",
+            )
+
         model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
         model = initialized_models.get(model_key)
 
         try:
             if not model:
-                file_info = gcs_handler.get_file_info(query.file_id)
-                if not file_info:
-                    logging.info(f"File info not found for {query.file_id}")
-                    raise HTTPException(status_code=404, detail="File not found")
-
                 db_path = f"./chroma_db/{query.file_id}/tabular_data.db"
                 if os.path.exists(db_path):
                     logging.info("Initializing TabularDataHandler")
-                    model = TabularDataHandler(
-                        configs, query.file_id, query.model_choice
-                    )
-                    initialized_models[model_key] = model
+                    try:
+                        model = TabularDataHandler(
+                            configs, query.file_id, query.model_choice
+                        )
+                        initialized_models[model_key] = model
+                    except ValueError as ve:
+                        logging.error(
+                            f"Error initializing TabularDataHandler: {str(ve)}"
+                        )
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                "The CSV file appears to be corrupted or contains no valid data. "
+                                "Please try uploading a different file."
+                            ),
+                        )
                 else:
                     chroma_path = f"./chroma_db/{query.file_id}"
                     is_gemini = query.model_choice.lower() in [

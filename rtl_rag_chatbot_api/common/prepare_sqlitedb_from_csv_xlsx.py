@@ -139,54 +139,150 @@ class PrepareSQLFromTabularData:
             logging.error(f"Error getting table info: {str(e)}")
             return None
 
+    def _read_csv_with_encoding(self, encodings: List[str]):
+        """
+        Try reading CSV file with different encodings.
+
+        Args:
+            encodings (List[str]): List of encodings to try
+
+        Returns:
+            tuple: (DataFrame, successful_encoding) or (None, None) if failed
+        """
+        for encoding in encodings:
+            try:
+                logging.info(f"Attempting to read CSV with {encoding} encoding")
+                df = pd.read_csv(self.file_path, encoding=encoding, on_bad_lines="skip")
+                if df is not None and not df.empty:
+                    logging.info(f"Successfully read {len(df)} rows from CSV")
+                    return df, encoding
+                logging.warning("DataFrame is empty after reading")
+            except UnicodeDecodeError:
+                logging.debug(f"Failed to read with {encoding} encoding")
+            except Exception as e:
+                logging.error(f"Error reading CSV with {encoding} encoding: {str(e)}")
+        return None, None
+
+    def _handle_csv_file(self):
+        """Handle CSV file processing."""
+        encodings = ["utf-8", "latin1", "iso-8859-1", "cp1252"]
+        df, successful_encoding = self._read_csv_with_encoding(encodings)
+
+        if df is None or df.empty:
+            raise ValueError(
+                f"Failed to read CSV file or file is empty: {self.file_path}"
+            )
+
+        logging.info(f"Successfully read CSV file with {successful_encoding} encoding")
+        base_name = os.path.splitext(self.file_name)[0]
+        table_name = base_name.split("_", 1)[-1] if "_" in base_name else base_name
+        self._save_dataframe_to_sql(df, table_name)
+
+    def _handle_excel_file(self):
+        """Handle Excel file processing."""
+        excel_file = pd.ExcelFile(self.file_path)
+        for sheet_name in excel_file.sheet_names:
+            df = pd.read_excel(self.file_path, sheet_name=sheet_name)
+            if not df.empty:
+                self._save_dataframe_to_sql(df, sheet_name)
+            else:
+                logging.warning(f"Skipping empty sheet: {sheet_name}")
+
+    def _handle_sqlite_file(self):
+        """Handle SQLite file processing."""
+        if not self._is_valid_sqlite_db(self.file_path):
+            raise ValueError(f"Invalid SQLite database file: {self.file_path}")
+        if not self._copy_db_file():
+            raise ValueError(f"Failed to copy database file to {self.db_path}")
+        logging.info(f"SQLite database copied successfully to {self.db_path}")
+
+    def _validate_tables(self):
+        """Validate that tables were created successfully."""
+        inspector = inspect(self.engine)
+        tables = inspector.get_table_names()
+        if not tables:
+            raise ValueError("No tables were created in the database")
+        logging.info(
+            f"File processed successfully. Created tables: {', '.join(tables)}"
+        )
+
+    def _cleanup_on_error(self):
+        """Clean up database file on error."""
+        if os.path.exists(self.db_path):
+            try:
+                os.remove(self.db_path)
+                logging.info(f"Cleaned up partial database file: {self.db_path}")
+            except Exception as cleanup_error:
+                logging.error(f"Error cleaning up database file: {str(cleanup_error)}")
+
     def _prepare_db(self):
         """
-        Private method to handle different types of input files (CSV, XLSX, SQLite).
+        Handle different types of input files (CSV, XLSX, SQLite).
 
         For CSV/XLSX files, converts them into SQL tables.
         For SQLite files, copies them to the target location.
         """
-        if self.file_extension in [".csv"]:
-            df = pd.read_csv(self.file_path)
-            table_name = os.path.splitext(self.file_name)[0]
-            self._save_dataframe_to_sql(df, table_name)
-        elif self.file_extension in [".xlsx", ".xls"]:
-            excel_file = pd.ExcelFile(self.file_path)
-            for sheet_name in excel_file.sheet_names:
-                df = pd.read_excel(self.file_path, sheet_name=sheet_name)
-                self._save_dataframe_to_sql(df, sheet_name)
-        elif self.file_extension in [".db", ".sqlite", ".sqlite3"]:
-            if not self._is_valid_sqlite_db(self.file_path):
-                raise ValueError(f"Invalid SQLite database file: {self.file_path}")
-            if not self._copy_db_file():
-                raise ValueError(f"Failed to copy database file to {self.db_path}")
-            logging.info(f"SQLite database copied successfully to {self.db_path}")
-        else:
-            raise ValueError(f"Unsupported file type: {self.file_extension}")
+        try:
+            os.makedirs(self.output_dir, exist_ok=True)
+            logging.info(f"Ensuring output directory exists: {self.output_dir}")
 
-        logging.info("File has been processed and saved to the SQL database.")
+            if self.file_extension in [".csv"]:
+                self._handle_csv_file()
+            elif self.file_extension in [".xlsx", ".xls"]:
+                self._handle_excel_file()
+            elif self.file_extension in [".db", ".sqlite", ".sqlite3"]:
+                self._handle_sqlite_file()
+            else:
+                raise ValueError(f"Unsupported file type: {self.file_extension}")
+
+            self._validate_tables()
+
+        except Exception as e:
+            logging.error(f"Error in _prepare_db: {str(e)}")
+            self._cleanup_on_error()
+            raise
 
     def _save_dataframe_to_sql(self, df, table_name):
-        # Skip empty DataFrames
-        if df.empty:
-            logging.info(f"Skipping empty sheet '{table_name}'")
-            return
+        """
+        Save a DataFrame to SQL database with proper error handling and validation.
 
-        # Clean up table name - remove file ID if present
-        if "_" in table_name:
-            # Split by underscore and take everything after the last UUID part (5 groups of hex numbers)
-            parts = table_name.split("_")
-            for i in range(len(parts)):
-                if len(parts[i]) == 36 and "-" in parts[i]:  # UUID format check
-                    table_name = "_".join(parts[i + 1 :])
-                    break
+        Args:
+            df (pd.DataFrame): DataFrame to save
+            table_name (str): Name of the table to create
+        """
+        try:
+            # Skip empty DataFrames
+            if df.empty:
+                logging.warning(f"Skipping empty DataFrame for table '{table_name}'")
+                return
 
-        inspector = inspect(self.engine)
-        if not inspector.has_table(table_name):
-            df.to_sql(table_name, self.engine, index=False)
-            logging.info(f"Table '{table_name}' created and data inserted.")
-        else:
-            logging.info(f"Table '{table_name}' already exists. Skipping.")
+            # Clean and validate column names
+            df.columns = [
+                str(col).strip().replace(" ", "_").lower() for col in df.columns
+            ]
+
+            # Remove any invalid characters from table name
+            table_name = "".join(
+                c if c.isalnum() or c == "_" else "_" for c in table_name
+            )
+
+            # Ensure table name doesn't start with a number
+            if table_name[0].isdigit():
+                table_name = "table_" + table_name
+
+            inspector = inspect(self.engine)
+            if not inspector.has_table(table_name):
+                logging.info(f"Creating table '{table_name}' with {len(df)} rows")
+                df.to_sql(table_name, self.engine, index=False)
+                logging.info(
+                    f"Successfully created table '{table_name}' and inserted {len(df)} rows"
+                )
+            else:
+                logging.info(f"Table '{table_name}' already exists. Skipping.")
+
+        except Exception as e:
+            logging.error(f"Error saving DataFrame to SQL: {str(e)}")
+            raise ValueError(f"Failed to save data to table '{table_name}': {str(e)}")
 
     def _validate_db(self):
         """
