@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from typing import List
 
@@ -95,44 +94,48 @@ class GeminiHandler(BaseRAGHandler):
             logging.error(f"Error getting Gemini embeddings: {str(e)}")
             raise
 
-    async def get_gemini_response_stream(self, prompt: str):
-        """Stream responses from Gemini model."""
+    def get_gemini_response_stream(self, prompt: str) -> str:
+        """Stream responses from Gemini model and concatenate them."""
         try:
             responses = self.generative_model.generate_content(prompt, stream=True)
-            for chunk in responses:
-                if chunk.text:
-                    yield chunk.text
-                    await asyncio.sleep(0.1)
+            full_response = ""
+            for response in responses:
+                if response and response.text:
+                    full_response += response.text
+            return full_response
         except Exception as e:
-            logging.error(f"Error in get_gemini_response_stream: {str(e)}")
-            yield f"Error: {str(e)}"
+            logging.error(f"Error in Gemini response streaming: {str(e)}")
+            return f"Error generating response: {str(e)}"
 
     def get_answer(self, query: str) -> str:
         """Generate an answer to a query using relevant context."""
         try:
-            relevant_chunks = self.query_chroma(query, self.file_id, n_results=3)
-            if not relevant_chunks:
+            # Get relevant documents from ChromaDB
+            relevant_docs = self.query_chroma(query, self.file_id)
+
+            if not relevant_docs:
                 return (
                     "I couldn't find any relevant information to answer your question."
                 )
 
-            context = "\n".join(relevant_chunks)
-            prompt = f"""Based on the following context, please answer the question.
-            If the answer is not in the context, say 'I don't have enough information
-            to answer that question from the uploaded document. Please rephrase or ask another question.
-
-            Context: {context}
+            # Construct the prompt with context
+            context = "\n".join(relevant_docs[:3])  # Use top 3 most relevant documents
+            prompt = f"""Based on the following context, answer the question.
+            If the answer cannot be found in the context, say so.
+            Context:
+            {context}
 
             Question: {query}
 
             Answer:"""
 
-            response = self.generative_model.generate_content(prompt)
-            logger.info("Response from Google")
-            return response.text
+            # Get streaming response and return it
+            response = self.get_gemini_response_stream(prompt)
+            return response.strip()
+
         except Exception as e:
-            logging.error(f"Error in get_answer: {str(e)}")
-            return f"Error generating response: {str(e)}"
+            logging.error(f"Error in Gemini get_answer: {str(e)}")
+            return f"An error occurred while processing your question: {str(e)}"
 
 
 def get_gemini_non_rag_response(config, prompt: str, model_choice: str) -> str:
@@ -186,12 +189,7 @@ def get_gemini_non_rag_response(config, prompt: str, model_choice: str) -> str:
 
         # Add system message to enforce direct responses
         system_prompt = (
-            "You are a direct response system. You must:\n"
-            "1. Give ONLY the exact answer requested\n"
-            "2. NEVER include explanations or commentary\n"
-            "3. NEVER mention the data source or context\n"
-            "4. NEVER include summaries or breakdowns\n"
-            "5. Format in clean markdown when appropriate\n\n"
+            "You are an agent proficient in the domain in which question is asked about.\n"
             "USER QUERY:\n"
         )
 
@@ -206,16 +204,6 @@ def get_gemini_non_rag_response(config, prompt: str, model_choice: str) -> str:
 
         # Clean up response
         answer = response.text.strip()
-
-        # Remove any "Here's the answer" or similar prefixes
-        common_prefixes = ["here's", "here is", "the answer is", "answer:"]
-        lower_answer = answer.lower()
-        for prefix in common_prefixes:
-            if lower_answer.startswith(prefix):
-                answer = answer[len(prefix) :].strip()
-                if answer.startswith(":"):
-                    answer = answer[1:].strip()
-
         return answer
 
     except Exception as e:

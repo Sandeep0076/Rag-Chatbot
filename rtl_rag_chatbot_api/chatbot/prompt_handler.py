@@ -77,11 +77,24 @@ Output a single, coherent response without any disclaimers or metadata about the
 """
 
 
-def format_question(database_info, user_question, table_name):
+def format_question(database_info: str, user_question: str, table_name: str) -> str:
+    """
+    Formats a user question into a database-friendly query using Azure OpenAI.
+
+    Args:
+        database_info: Information about the database structure
+        user_question: The original user question
+        table_name: Name of the table being queried
+
+    Returns:
+        str: A formatted question optimized for database querying
+    """
     formatted_prompt = special_prompt.format(
         database_info=database_info,
         user_question=user_question,
         table_name=table_name,
         examples=examples,
     )
-    return get_azure_non_rag_response(configs, formatted_prompt)
+    # Get the formatted question
+    formatted_question = get_azure_non_rag_response(configs, formatted_prompt)
+    return formatted_question

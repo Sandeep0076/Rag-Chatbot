@@ -627,7 +627,10 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
     except Exception as e:
         logging.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        error_message = str(e)
+        if "coroutine" in error_message.lower():
+            error_message = "Internal server error: Model response handling failed. Please try again."
+        raise HTTPException(status_code=500, detail=error_message)
 
 
 @app.get("/available-models")

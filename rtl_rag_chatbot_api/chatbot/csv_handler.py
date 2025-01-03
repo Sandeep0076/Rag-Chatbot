@@ -13,7 +13,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 
 from configs.app_config import Config
+from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
+from rtl_rag_chatbot_api.chatbot.gemini_handler import get_gemini_non_rag_response
 from rtl_rag_chatbot_api.chatbot.prompt_handler import format_question
+from rtl_rag_chatbot_api.chatbot.utils.prompt_builder import PromptBuilder
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
@@ -298,82 +301,6 @@ class TabularDataHandler:
                 )
         return table_info
 
-    def interactive_session(self):
-        """
-        Starts an interactive session for querying the database.
-        Allows users to input questions and receive answers based on the database content.
-        """
-        print("Welcome to the interactive SQL query session.")
-        print("Type 'exit' to end the session.")
-
-        while True:
-            question = input("\nEnter your question: ").strip()
-
-            if question.lower() == "exit":
-                print("Exiting the session. Goodbye!")
-                break
-
-            answer = self.ask_question(question)
-
-            if answer:
-                print(f"\nAnswer: {answer}")
-            else:
-                print(
-                    "Sorry, I couldn't find an answer to that question.Let me try again"
-                )
-                return self.get_forced_answer(question, answer)
-
-    def get_forced_answer(self, question: str, answer: str):
-        """
-        Attempts to extract an answer from a given text when a direct answer is not available.
-
-        Args:
-            question (str): The original question asked by the user.
-            answer (str): The text to search for an answer.
-
-        Returns:
-            str: An extracted answer or "Cannot find answer" if no suitable answer is found.
-        """
-        base_prompt = (
-            f"Question: {question}\n\n"
-            f"Context: {answer}\n\n"
-            "Instructions:\n"
-            "1. You are a database expert providing direct answers from the context only\n"
-            "2. Format your response in clean markdown\n"
-            "3. DO NOT include:\n"
-            "   - Intermediate steps or thought process\n"
-            "   - References to the data or context\n"
-            "   - Summaries or breakdowns\n"
-            "   - Expressions like (case insensitive)\n"
-            "4. Do not reply in one word. Write in more human like response. "
-            "If asked to show some rows from table, return the answer in tabular form with headers and"
-            "rows and columns. Use markdown format.\n"
-            "5. If no accurate answer can be found, ONLY return: "
-            "'Cannot find answer, Please try with a more elaborate question'\n"
-        )
-
-        if self.model_choice.startswith("gemini"):
-            gemini_prompt = (
-                base_prompt
-                + "\nCRITICAL: Your response must ONLY contain the direct answer in 1-2 sentences. "
-                "No summaries. "
-                "Just the answer in a clean Natural language format from context."
-                "Do not reply in one word. Always Write in more human like response. "
-            )
-            from rtl_rag_chatbot_api.chatbot.gemini_handler import (
-                get_gemini_non_rag_response,
-            )
-
-            return get_gemini_non_rag_response(
-                self.config, gemini_prompt, self.model_choice
-            )
-        else:
-            from rtl_rag_chatbot_api.chatbot.chatbot_creator import (
-                get_azure_non_rag_response,
-            )
-
-            return get_azure_non_rag_response(self.config, base_prompt)
-
     def get_answer(self, question: str) -> str:
         """
         Processes a user's question and returns an answer based on the database content.
@@ -418,7 +345,9 @@ class TabularDataHandler:
 
             # Check if the formatted question contains specific keywords
             keywords = ["SELECT", "FIND", "LIST", "SHOW", "CALCULATE"]
-            if any(keyword in formatted_question.upper() for keyword in keywords):
+            if formatted_question and any(
+                keyword in formatted_question.upper() for keyword in keywords
+            ):
                 # Enhance the query with case-insensitive comparisons
                 response = self.agent.invoke({"input": formatted_question})
 
@@ -426,31 +355,68 @@ class TabularDataHandler:
                 final_answer = response.get("output", "No final answer found")
                 intermediate_steps = response.get("intermediate_steps", [])
                 complete_logs = str(intermediate_steps) + "\n" + str(final_answer)
+                base_prompt = PromptBuilder.build_forced_answer_prompt(
+                    formatted_question, complete_logs
+                )
 
                 # Format the response using the appropriate model
                 if self.model_choice.startswith("gemini"):
-                    from rtl_rag_chatbot_api.chatbot.gemini_handler import (
-                        get_gemini_non_rag_response,
-                    )
-
                     return get_gemini_non_rag_response(
-                        self.config, complete_logs, self.model_choice
+                        self.config, base_prompt, self.model_choice
                     )
                 else:
-                    from rtl_rag_chatbot_api.chatbot.chatbot_creator import (
-                        get_azure_non_rag_response,
-                    )
-
-                    return get_azure_non_rag_response(self.config, complete_logs)
+                    return get_azure_non_rag_response(self.config, base_prompt)
             else:
                 # If no keywords are found, return the formatted question as is
                 return formatted_question
 
+            return None
         except Exception as e:
-            logging.error(
-                f"An error occurred while processing the question: {e}", exc_info=True
-            )
+            logging.error(f"An error occurred while processing the question: {str(e)}")
+            raise
+
+    def get_forced_answer(self, question: str, answer: str) -> str:
+        """
+        Attempts to extract an answer from a given text when a direct answer is not available.
+
+        Args:
+            question (str): The original question asked by the user.
+            answer (str): The text to search for an answer.
+
+        Returns:
+            str: An extracted answer or "Cannot find answer" if no suitable answer is found.
+        """
+        try:
+            base_prompt = PromptBuilder.build_forced_answer_prompt(question, answer)
+            return get_azure_non_rag_response(self.config, base_prompt)
+        except Exception as e:
+            logging.error(f"Error in get_forced_answer: {str(e)}")
             return f"An error occurred while processing your question: {str(e)}"
+
+    def interactive_session(self):
+        """
+        Starts an interactive session for querying the database.
+        Allows users to input questions and receive answers based on the database content.
+        """
+        print("Welcome to the interactive SQL query session.")
+        print("Type 'exit' to end the session.")
+
+        while True:
+            question = input("\nEnter your question: ").strip()
+
+            if question.lower() == "exit":
+                print("Exiting the session. Goodbye!")
+                break
+
+            answer = self.get_answer(question)
+
+            if answer:
+                print(f"\nAnswer: {answer}")
+            else:
+                print(
+                    "Sorry, I couldn't find an answer to that question. Let me try again"
+                )
+                return self.get_forced_answer(question, answer)
 
 
 # def main(data_dir: str):

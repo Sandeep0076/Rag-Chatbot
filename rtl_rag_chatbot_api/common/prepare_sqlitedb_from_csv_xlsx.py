@@ -165,28 +165,97 @@ class PrepareSQLFromTabularData:
 
     def _handle_csv_file(self):
         """Handle CSV file processing."""
-        encodings = ["utf-8", "latin1", "iso-8859-1", "cp1252"]
-        df, successful_encoding = self._read_csv_with_encoding(encodings)
+        try:
+            # Try different encodings
+            encodings = ["utf-8", "latin1", "iso-8859-1", "cp1252"]
+            df, successful_encoding = self._read_csv_with_encoding(encodings)
 
-        if df is None or df.empty:
-            raise ValueError(
-                f"Failed to read CSV file or file is empty: {self.file_path}"
+            if df is None or df.empty:
+                raise ValueError(
+                    f"Failed to read CSV file or file is empty: {self.file_path}"
+                )
+
+            # Clean column names and remove any completely empty columns
+            df.columns = [str(col).strip() for col in df.columns]
+            df = df.dropna(axis=1, how="all")
+
+            # Skip if all data was removed
+            if df.empty:
+                raise ValueError("CSV file has no valid data after cleaning")
+
+            # Validate that we have some data
+            if len(df.columns) == 0:
+                raise ValueError("CSV file has no valid columns")
+
+            # Get table name from file name
+            base_name = os.path.splitext(self.file_name)[0]
+            table_name = base_name.split("_", 1)[-1] if "_" in base_name else base_name
+
+            # Save to database
+            logging.info(
+                f"Successfully read CSV file with {successful_encoding} encoding"
             )
+            logging.info(f"Processing {len(df)} rows with {len(df.columns)} columns")
+            self._save_dataframe_to_sql(df, table_name)
+            logging.info(f"Successfully processed CSV file into table: {table_name}")
 
-        logging.info(f"Successfully read CSV file with {successful_encoding} encoding")
-        base_name = os.path.splitext(self.file_name)[0]
-        table_name = base_name.split("_", 1)[-1] if "_" in base_name else base_name
-        self._save_dataframe_to_sql(df, table_name)
+        except Exception as e:
+            logging.error(f"Error processing CSV file: {str(e)}")
+            raise ValueError(f"Failed to process CSV file: {str(e)}")
 
     def _handle_excel_file(self):
         """Handle Excel file processing."""
-        excel_file = pd.ExcelFile(self.file_path)
-        for sheet_name in excel_file.sheet_names:
-            df = pd.read_excel(self.file_path, sheet_name=sheet_name)
-            if not df.empty:
-                self._save_dataframe_to_sql(df, sheet_name)
-            else:
-                logging.warning(f"Skipping empty sheet: {sheet_name}")
+        try:
+            excel_file = pd.ExcelFile(self.file_path)
+            if not excel_file.sheet_names:
+                raise ValueError("Excel file contains no sheets")
+
+            processed_sheets = 0
+            for sheet_name in excel_file.sheet_names:
+                try:
+                    logging.info(f"Processing sheet: {sheet_name}")
+                    df = pd.read_excel(self.file_path, sheet_name=sheet_name)
+
+                    # Skip empty sheets
+                    if df.empty:
+                        logging.warning(f"Skipping empty sheet: {sheet_name}")
+                        continue
+
+                    # Skip sheets with no valid columns
+                    if len(df.columns) == 0:
+                        logging.warning(f"Skipping sheet with no columns: {sheet_name}")
+                        continue
+
+                    # Clean column names and remove any completely empty columns
+                    df.columns = [str(col).strip() for col in df.columns]
+                    df = df.dropna(axis=1, how="all")
+
+                    # Skip if all data was removed
+                    if df.empty:
+                        logging.warning(
+                            f"Sheet {sheet_name} has no valid data after cleaning"
+                        )
+                        continue
+
+                    # Save to database
+                    self._save_dataframe_to_sql(df, sheet_name)
+                    processed_sheets += 1
+                    logging.info(f"Successfully processed sheet: {sheet_name}")
+
+                except Exception as sheet_error:
+                    logging.error(
+                        f"Error processing sheet {sheet_name}: {str(sheet_error)}"
+                    )
+                    continue
+
+            if processed_sheets == 0:
+                raise ValueError("No valid data found in any sheet of the Excel file")
+
+            logging.info(f"Successfully processed {processed_sheets} sheets")
+
+        except Exception as e:
+            logging.error(f"Error processing Excel file: {str(e)}")
+            raise ValueError(f"Failed to process Excel file: {str(e)}")
 
     def _handle_sqlite_file(self):
         """Handle SQLite file processing."""
@@ -290,12 +359,20 @@ class PrepareSQLFromTabularData:
         Provides information about tables, columns, and data types.
         """
         try:
+            if not os.path.exists(self.db_path):
+                raise ValueError(f"Database file does not exist at {self.db_path}")
+
             insp = inspect(self.engine)
             table_names = insp.get_table_names()
 
             if not table_names:
-                logging.warning("Warning: No tables found in the database")
-                return
+                raise ValueError(
+                    "No tables found in the database. This could be because:\n"
+                    "1. The input file was empty or contained no valid data\n"
+                    "2. All sheets/tables were skipped due to data validation\n"
+                    "3. There was an error during data import\n"
+                    "Please check the logs above for specific warnings or errors."
+                )
 
             logging.info("\nDatabase Inspection Results:")
             logging.info("-" * 50)
@@ -307,6 +384,7 @@ class PrepareSQLFromTabularData:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
+            total_rows = 0
             for table_name in table_names:
                 logging.info(f"\nTable: {table_name}")
                 # Escape table name by wrapping in quotes
@@ -314,26 +392,48 @@ class PrepareSQLFromTabularData:
                 try:
                     cursor.execute(f"PRAGMA table_info({escaped_table_name})")
                     columns = cursor.fetchall()
-                    if columns:
-                        logging.info("Columns:")
-                        for col in columns:
-                            # col format: (cid, name, type, notnull, dflt_value, pk)
-                            logging.info(f"  - {col[1]} ({col[2]})")
-                            if col[5]:  # is primary key
-                                logging.info("    Primary Key: Yes")
+                    if not columns:
+                        logging.warning(
+                            f"Warning: No columns found in table {table_name}"
+                        )
+                        continue
+
+                    logging.info("Columns:")
+                    for col in columns:
+                        # col format: (cid, name, type, notnull, dflt_value, pk)
+                        logging.info(f"  - {col[1]} ({col[2]})")
+                        if col[5]:  # is primary key
+                            logging.info("    Primary Key: Yes")
 
                     # Get row count using escaped table name
                     cursor.execute(f"SELECT COUNT(*) FROM {escaped_table_name}")
                     row_count = cursor.fetchone()[0]
+                    total_rows += row_count
                     logging.info(f"Row Count: {row_count}")
+
+                    if row_count == 0:
+                        logging.warning(f"Warning: Table {table_name} is empty")
+
                 except sqlite3.Error as e:
                     logging.error(f"Error accessing table {table_name}: {str(e)}")
 
             conn.close()
+
+            if total_rows == 0:
+                raise ValueError(
+                    "Database contains tables but no data. This could be because:\n"
+                    "1. The input file contained only headers\n"
+                    "2. All data was filtered out during cleaning\n"
+                    "3. There was an error during data import\n"
+                    "Please check the logs above for specific warnings or errors."
+                )
+
+            logging.info(f"\nTotal Rows Across All Tables: {total_rows}")
             logging.info("\nValidation complete.")
 
         except Exception as e:
             logging.error(f"Error during database validation: {str(e)}")
+            raise
 
     def run_pipeline(self):
         """
