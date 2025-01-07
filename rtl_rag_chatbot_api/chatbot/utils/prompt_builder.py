@@ -25,6 +25,7 @@ class PromptBuilder:
             "   - References to the data or context\n"
             "   - Summaries or breakdowns\n"
             "   - Expressions like (case insensitive)\n"
+            "   - Never include any disclaimers about training data or model capabilities in your response\n"
             "4. Do not reply in one word. Write in more human like response. "
             "If asked to show some rows from table, return the answer in tabular form with headers and"
             "rows and columns. Use markdown format.\n"
