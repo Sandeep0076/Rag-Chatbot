@@ -5,7 +5,7 @@ import os
 from contextlib import contextmanager
 from typing import Dict
 
-from sqlalchemy import and_, create_engine
+from sqlalchemy import and_, create_engine, distinct
 from sqlalchemy.orm import sessionmaker
 
 import workflows.db.helpers as db_helpers
@@ -67,6 +67,23 @@ def get_users_deletion_candicates():
         return filtered_users
 
 
+def get_deletion_condidates_fileids():
+    """"""
+    candidates = get_users_deletion_candicates()
+
+    with get_db_session() as session:
+        user_file_ids = (
+            session.query(distinct(Conversation.fileId))
+            .filter(
+                Conversation.userEmail.in_(list(map(lambda u: u.email, candidates))),
+                Conversation.fileId.isnot(None),
+            )
+            .all()
+        )
+
+        log.info(f"Found {len(user_file_ids)} file ids for embeddings deletion.")
+
+
 def is_new_deletion_candidate(user: User, account_statuses: Dict = {}) -> bool:
     """
     Implements the logic that determines whether the user should be marked as deletion candidate.
@@ -116,6 +133,12 @@ def mark_deletion_candidates():
         )
         # commit changes to the database
         session.commit()
+
+
+def delete_candidate_user_embeddings():
+    """ """
+    # 1. Get the list of users marked for deletion from the chatbot database
+    users = get_users_deletion_candicates()
 
 
 def delete_candidate_user_data():
