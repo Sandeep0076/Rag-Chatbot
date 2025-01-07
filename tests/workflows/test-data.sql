@@ -22,17 +22,17 @@ INSERT INTO Folder (id, userId, name, isRoot) VALUES ('folder5_id', 'user5_id', 
 INSERT INTO Folder (id, userId, name, isRoot) VALUES ('folder6_id', 'user5_id', 'User 5 Folder 2', true);
 
 -- Insert Conversations
-INSERT INTO Conversation (id, userEmail, temperature, folderId, modelId, name, prompt) VALUES
-('conv1_id', 'user1@example.com', 0, 'folder1_id', 'model1_id', 'Conversation 1', 'Prompt for conversation 1'),
-('conv2_id', 'user1@example.com', 1, 'folder1_id', 'model2_id', 'Conversation 2', 'Prompt for conversation 2'),
-('conv3_id', 'user1@example.com', 2, 'folder2_id', 'model1_id', 'Conversation 3', 'Prompt for conversation 3'),
-('conv4_id', 'user2@example.com', 0, 'folder2_id', 'model2_id', 'Conversation 4', 'Prompt for conversation 4'),
-('conv5_id', 'user3@example.com', 1, 'folder3_id', 'model1_id', 'Conversation 5', 'Prompt for conversation 5'),
-('conv6_id', 'user3@example.com', 0, 'folder3_id', 'model2_id', 'Conversation 6', 'Prompt for conversation 6'),
-('conv7_id', 'user3@example.com', 2, 'folder4_id', 'model1_id', 'Conversation 7', 'Prompt for conversation 7'),
-('conv8_id', 'user3@example.com', 1, 'folder4_id', 'model2_id', 'Conversation 8', 'Prompt for conversation 8'),
-('conv9_id', 'user5@example.com', 0, 'folder5_id', 'model1_id', 'Conversation 9', 'Prompt for conversation 9'),
-('conv10_id', 'user5@example.com', 1, 'folder5_id', 'model2_id', 'Conversation 10', 'Prompt for conversation 10');
+INSERT INTO Conversation (id, userEmail, temperature, folderId, modelId, name, prompt, fileId) VALUES
+('conv1_id', 'user1@example.com', 0, 'folder1_id', 'model1_id', 'Conversation 1', 'Prompt for conversation 1', '1dd20782-0e60-4f17-90a1-dde343786de4'),
+('conv2_id', 'user1@example.com', 1, 'folder1_id', 'model2_id', 'Conversation 2', 'Prompt for conversation 2', NULL),
+('conv3_id', 'user1@example.com', 2, 'folder2_id', 'model1_id', 'Conversation 3', 'Prompt for conversation 3', NULL),
+('conv4_id', 'user2@example.com', 0, 'folder2_id', 'model2_id', 'Conversation 4', 'Prompt for conversation 4', NULL),
+('conv5_id', 'user3@example.com', 1, 'folder3_id', 'model1_id', 'Conversation 5', 'Prompt for conversation 5', '57a1121f-a5ab-4d97-a73c-52a971056242'),
+('conv6_id', 'user3@example.com', 0, 'folder3_id', 'model2_id', 'Conversation 6', 'Prompt for conversation 6', 'f4d17237-a76f-437c-8230-79979b6f7d62'),
+('conv7_id', 'user3@example.com', 2, 'folder4_id', 'model1_id', 'Conversation 7', 'Prompt for conversation 7', NULL),
+('conv8_id', 'user3@example.com', 1, 'folder4_id', 'model2_id', 'Conversation 8', 'Prompt for conversation 8', NULL),
+('conv9_id', 'user5@example.com', 0, 'folder5_id', 'model1_id', 'Conversation 9', 'Prompt for conversation 9', '767703e0-8195-4345-914b-81bbaa0588b7'),
+('conv10_id', 'user5@example.com', 1, 'folder5_id', 'model2_id', 'Conversation 10', 'Prompt for conversation 10', 'adee32e6-a034-4a43-bee4-df5c0f0208fb');
 
 -- Insert Messages
 INSERT INTO Message (id, role, content, createdAt, conversationId) VALUES
