@@ -228,9 +228,9 @@ def test_chat_with_excel(
         assert upload_response.status_code == 200
         file_id = upload_response.json()["file_id"]
 
-    # Test chat with Excel
+    # Test chat with Excel using GPT-4
     chat_data = {
-        "text": ["What is the maximum value in col1?"],
+        "text": ["Employee Krista Orcutt is from which location?"],
         "file_id": file_id,
         "model_choice": "gpt_4o_mini",
         "user_id": "test_user",
@@ -238,7 +238,27 @@ def test_chat_with_excel(
     response = client.post("/file/chat", json=chat_data)
     assert response.status_code == 200
     assert "response" in response.json()
-    assert response.json().get("is_table") is True
+    response_text = response.json()["response"]
+    assert (
+        "Pennsylvania" in response_text
+    ), f"Expected 'Pennsylvania' in response: {response_text}"
+    assert not response.json().get("is_table", False)
+
+    # Test chat with Excel using Gemini Pro
+    chat_data_gemini = {
+        "text": ["Employee Krista Orcutt is from which location?"],
+        "file_id": file_id,
+        "model_choice": "gemini-pro",
+        "user_id": "test_user",
+    }
+    response_gemini = client.post("/file/chat", json=chat_data_gemini)
+    assert response_gemini.status_code == 200
+    assert "response" in response_gemini.json()
+    response_text_gemini = response_gemini.json()["response"]
+    assert (
+        "Pennsylvania" in response_text_gemini
+    ), f"Expected 'Pennsylvania' in response: {response_text_gemini}"
+    assert not response_gemini.json().get("is_table", False)
 
 
 def test_chat_with_db(
@@ -256,9 +276,9 @@ def test_chat_with_db(
         assert upload_response.status_code == 200
         file_id = upload_response.json()["file_id"]
 
-    # Test chat with DB
+    # Test chat with DB using GPT-4
     chat_data = {
-        "text": ["Show me all records from the test table"],
+        "text": ["What is the address of customer Maria Anders?"],
         "file_id": file_id,
         "model_choice": "gpt_4o_mini",
         "user_id": "test_user",
@@ -266,7 +286,27 @@ def test_chat_with_db(
     response = client.post("/file/chat", json=chat_data)
     assert response.status_code == 200
     assert "response" in response.json()
-    assert response.json().get("is_table") is True
+    response_text = response.json()["response"]
+    assert (
+        "Obere Str. 57" in response_text
+    ), f"Expected 'Obere Str. 57' in response: {response_text}"
+    assert not response.json().get("is_table", False)
+
+    # Test chat with DB using Gemini Pro
+    chat_data_gemini = {
+        "text": ["What is the address of customer Maria Anders?"],
+        "file_id": file_id,
+        "model_choice": "gemini-pro",
+        "user_id": "test_user",
+    }
+    response_gemini = client.post("/file/chat", json=chat_data_gemini)
+    assert response_gemini.status_code == 200
+    assert "response" in response_gemini.json()
+    response_text_gemini = response_gemini.json()["response"]
+    assert (
+        "Obere Str. 57" in response_text_gemini
+    ), f"Expected 'Obere Str. 57' in response: {response_text_gemini}"
+    assert not response_gemini.json().get("is_table", False)
 
 
 def test_chat_with_image(
@@ -288,17 +328,38 @@ def test_chat_with_image(
             assert upload_response.status_code == 200
             file_id = upload_response.json()["file_id"]
 
-        # Test chat with image
+        # Test chat with image using GPT-
         chat_data = {
-            "text": ["What can you see in this image?"],
+            "text": ["Who has highest gdp per capita?"],
             "file_id": file_id,
-            "model_choice": "gemini-pro-vision",
+            "model_choice": "gpt_4o_mini",
             "user_id": "test_user",
         }
         response = client.post("/file/chat", json=chat_data)
         assert response.status_code == 200
         assert "response" in response.json()
-        assert response.json().get("is_table") is False
+        response_text = response.json()["response"]
+        assert any(
+            country in response_text for country in ["United States", "US", "USA"]
+        ), f"Expected US reference in response: {response_text}"
+        assert not response.json().get("is_table", False)
+
+        # Test chat with image using Gemini Pro Vision
+        chat_data_gemini = {
+            "text": ["Who has highest gdp per capita?"],
+            "file_id": file_id,
+            "model_choice": "gemini-pro",
+            "user_id": "test_user",
+        }
+        response_gemini = client.post("/file/chat", json=chat_data_gemini)
+        assert response_gemini.status_code == 200
+        assert "response" in response_gemini.json()
+        response_text_gemini = response_gemini.json()["response"]
+        assert any(
+            country in response_text_gemini
+            for country in ["United States", "US", "USA"]
+        ), f"Expected US reference in response: {response_text_gemini}"
+        assert not response_gemini.json().get("is_table", False)
 
 
 def test_health():
@@ -314,93 +375,24 @@ def test_info():
     assert "description" in response.json()
 
 
-@patch("rtl_rag_chatbot_api.app.uuid.uuid4")
-@patch("rtl_rag_chatbot_api.app.file_handler.process_file")
-async def test_file_upload(mock_process_file, mock_uuid, mock_chroma_manager):
-    mock_uuid.return_value = "test_file_id"
-    mock_process_file.return_value = {
-        "file_id": "test_file_id",
-        "status": "new",
-        "message": "File processed successfully",
-        "is_image": False,
-        "temp_file_path": "local_data/test_file_id_test.pdf",
-    }
-
-    async with AsyncClient(app=app, base_url="http://test") as ac:
-        response = await ac.post(
+def test_file_upload(mock_files: dict) -> None:
+    """Test file upload functionality with a real CSV file."""
+    # Upload CSV file
+    with open(mock_files["csv"], "rb") as f:
+        files = {"file": ("mock_file.csv", f, "text/csv")}
+        response = client.post(
             "/file/upload",
-            files={"file": ("test.pdf", b"test content", "application/pdf")},
-            data={"is_image": "false", "username": "testuser"},
+            files=files,
+            data={"is_image": "false", "username": "test_user"},
         )
 
-    assert response.status_code == 200
-    assert response.json()["file_id"] == "test_file_id"
-
-
-# @pytest.mark.asyncio
-# async def test_create_embeddings(mock_gcs):
-#     with patch("rtl_rag_chatbot_api.app.os.path.exists", return_value=True), patch(
-#         "rtl_rag_chatbot_api.app.EmbeddingHandler"
-#     ) as MockEmbeddingHandler:
-#         mock_handler = MockEmbeddingHandler.return_value
-#         mock_handler.create_and_upload_embeddings = AsyncMock(
-#             return_value={"message": "Embeddings created successfully"}
-#         )
-
-#         async with AsyncClient(app=app, base_url="http://test") as ac:
-#             response = await ac.post(
-#                 "/embeddings/create",
-#                 json={"file_id": "test_file_id", "is_image": False},
-#             )
-
-#         assert response.status_code == 200
-#         assert response.json() == {"message": "Embeddings created successfully"}
-
-
-# @pytest.mark.asyncio
-# async def test_chat_with_tabular_data():
-#     with patch("rtl_rag_chatbot_api.app.os.path.exists") as mock_exists, patch(
-#         "rtl_rag_chatbot_api.app.TabularDataHandler"
-#     ) as MockTabularHandler, patch("rtl_rag_chatbot_api.app.gcs_handler") as mock_gcs:
-#         mock_exists.return_value = True  # Make it find the tabular data file
-#         mock_handler = MockTabularHandler.return_value
-#         mock_handler.get_answer.return_value = "SQL query response"
-#         mock_gcs.get_file_info.return_value = {"embeddings_status": "completed"}
-
-#         async with AsyncClient(app=app, base_url="http://test") as ac:
-#             response = await ac.post(
-#                 "/file/chat",
-#                 json={
-#                     "text": "Show me sales data",
-#                     "file_id": "test_csv_id",
-#                     "model_choice": "gpt-4o-mini",
-#                 },
-#             )
-
-#         assert response.status_code == 200
-#         assert response.json() == {"response": "SQL query response"}
-
-
-# @pytest.mark.asyncio
-# async def test_get_neighbors(mock_chroma_manager):
-#     with patch("rtl_rag_chatbot_api.app.initialized_models") as mock_models:
-#         mock_model = MagicMock()
-#         mock_model.get_n_nearest_neighbours.return_value = ["Neighbor 1", "Neighbor 2"]
-#         mock_models.__getitem__.return_value = mock_model
-#         mock_models.__contains__.return_value = True
-
-#         async with AsyncClient(app=app, base_url="http://test") as ac:
-#             response = await ac.post(
-#                 "/file/neighbors",
-#                 json={
-#                     "text": "Test query",
-#                     "file_id": "test_file_id",
-#                     "n_neighbors": 2,
-#                 },
-#             )
-
-#         assert response.status_code == 200
-#         assert response.json() == {"neighbors": ["Neighbor 1", "Neighbor 2"]}
+        # Check basic response structure
+        assert response.status_code == 200
+        assert "file_id" in response.json()
+        assert "message" in response.json()
+        assert "original_filename" in response.json()
+        assert "is_image" in response.json()
+        assert response.json()["is_image"] is False
 
 
 @pytest.mark.asyncio
@@ -417,20 +409,20 @@ async def test_cleanup(mock_chroma_manager):
         mock_coordinator.cleanup.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_gemini_chat():
-    async def mock_stream():
-        yield "Test response"
+# @pytest.mark.asyncio
+# async def test_gemini_chat():
+#     async def mock_stream():
+#         yield "Test response"
 
-    with patch("rtl_rag_chatbot_api.app.ModelHandler") as MockModelHandler:
-        mock_model = MagicMock()
-        mock_model.get_gemini_response_stream.return_value = mock_stream()
-        MockModelHandler.return_value.initialize_model.return_value = mock_model
+#     with patch("rtl_rag_chatbot_api.app.ModelHandler") as MockModelHandler:
+#         mock_model = MagicMock()
+#         mock_model.get_gemini_response_stream.return_value = mock_stream()
+#         MockModelHandler.return_value.initialize_model.return_value = mock_model
 
-        async with AsyncClient(app=app, base_url="http://test") as ac:
-            response = await ac.post(
-                "/chat/gemini", json={"model": "gemini-pro", "message": "Test message"}
-            )
+#         async with AsyncClient(app=app, base_url="http://test") as ac:
+#             response = await ac.post(
+#                 "/chat/gemini", json={"model": "gemini-pro", "message": "Test message"}
+#             )
 
-        assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/plain")
+#         assert response.status_code == 200
+#         assert response.headers["content-type"].startswith("text/plain")

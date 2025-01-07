@@ -173,7 +173,7 @@ class GCSHandler:
 
             for blob in blobs:
                 if blob.name.endswith("/file_info.json"):
-                    file_info = json.loads(blob.download_as_string())
+                    file_info = json.loads(blob.download_as_bytes().decode("utf-8"))
                     if file_info.get("file_hash") == file_hash:
                         return file_info.get("file_id")
 
@@ -186,13 +186,13 @@ class GCSHandler:
     def get_file_info(self, file_id: str):
         blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
         if blob.exists():
-            return json.loads(blob.download_as_text())
+            return json.loads(blob.download_as_bytes().decode("utf-8"))
         return {}
 
     def update_file_info(self, file_id: str, new_info: dict):
         blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
         if blob.exists():
-            current_info = json.loads(blob.download_as_text())
+            current_info = json.loads(blob.download_as_bytes().decode("utf-8"))
             current_info.update(new_info)
             blob.upload_from_string(
                 json.dumps(current_info), content_type="application/json"

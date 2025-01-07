@@ -126,8 +126,26 @@ async def start_scheduler(app: FastAPI):
     )
 
     scheduler.start()
-    yield
-    scheduler.shutdown()
+    try:
+        yield
+    finally:
+        # Proper cleanup of resources
+        scheduler.shutdown()
+        # Clean up ChromaDB
+        if chroma_manager:
+            chroma_manager.cleanup()
+        # Clean up any initialized models
+        for model in initialized_models.values():
+            if hasattr(model, "cleanup"):
+                model.cleanup()
+        # Clean up handlers
+        for handler in initialized_handlers.values():
+            if hasattr(handler, "cleanup"):
+                handler.cleanup()
+        # Clean up chatbots
+        for chatbot in initialized_chatbots.values():
+            if hasattr(chatbot, "cleanup"):
+                chatbot.cleanup()
 
 
 app = FastAPI(
@@ -749,6 +767,7 @@ async def delete_resources(
 ):
     """
     Delete ChromaDB embeddings and associated resources for one or multiple files.
+    include_gcs: Boolean flag to determine if GCS cleanup should be performed.
 
     Args:
         request (DeleteRequest): Request body containing:
