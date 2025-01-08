@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from typing import List
 
@@ -95,41 +94,118 @@ class GeminiHandler(BaseRAGHandler):
             logging.error(f"Error getting Gemini embeddings: {str(e)}")
             raise
 
-    async def get_gemini_response_stream(self, prompt: str):
-        """Stream responses from Gemini model."""
+    def get_gemini_response_stream(self, prompt: str) -> str:
+        """Stream responses from Gemini model and concatenate them."""
         try:
             responses = self.generative_model.generate_content(prompt, stream=True)
-            for chunk in responses:
-                if chunk.text:
-                    yield chunk.text
-                    await asyncio.sleep(0.1)
+            full_response = ""
+            for response in responses:
+                if response and response.text:
+                    full_response += response.text
+            return full_response
         except Exception as e:
-            logging.error(f"Error in get_gemini_response_stream: {str(e)}")
-            yield f"Error: {str(e)}"
+            logging.error(f"Error in Gemini response streaming: {str(e)}")
+            return f"Error generating response: {str(e)}"
 
     def get_answer(self, query: str) -> str:
         """Generate an answer to a query using relevant context."""
         try:
-            relevant_chunks = self.query_chroma(query, self.file_id, n_results=3)
-            if not relevant_chunks:
+            # Get relevant documents from ChromaDB
+            relevant_docs = self.query_chroma(query, self.file_id)
+
+            if not relevant_docs:
                 return (
                     "I couldn't find any relevant information to answer your question."
                 )
 
-            context = "\n".join(relevant_chunks)
-            prompt = f"""Based on the following context, please answer the question.
-            If the answer is not in the context, say 'I don't have enough information
-            to answer that question from the uploaded document. Please rephrase or ask another question.
-
-            Context: {context}
+            # Construct the prompt with context
+            context = "\n".join(relevant_docs[:3])  # Use top 3 most relevant documents
+            prompt = f"""Based on the following context, answer the question.
+            If the answer cannot be found in the context, say so.
+            Context:
+            {context}
 
             Question: {query}
 
             Answer:"""
 
-            response = self.generative_model.generate_content(prompt)
-            logger.info("Response from Google")
-            return response.text
+            # Get streaming response and return it
+            response = self.get_gemini_response_stream(prompt)
+            return response.strip()
+
         except Exception as e:
-            logging.error(f"Error in get_answer: {str(e)}")
-            return f"Error generating response: {str(e)}"
+            logging.error(f"Error in Gemini get_answer: {str(e)}")
+            return f"An error occurred while processing your question: {str(e)}"
+
+
+def get_gemini_non_rag_response(config, prompt: str, model_choice: str) -> str:
+    """
+    Get a response from Gemini model without using RAG context.
+
+    Args:
+        config: Configuration object containing Gemini settings
+        prompt (str): The prompt to send to the model
+        model_choice (str): The specific Gemini model to use (e.g., 'gemini-flash', 'gemini-pro')
+
+    Returns:
+        str: The model's response
+
+    Raises:
+        ValueError: If model configuration is invalid
+    """
+    try:
+        # Initialize Vertex AI
+        vertexai.init(project=config.gemini.project, location=config.gemini.location)
+
+        # Map model choice to actual model name
+        model_mapping = {
+            "gemini-flash": config.gemini.model_flash,
+            "gemini-pro": config.gemini.model_pro,
+        }
+
+        model_name = model_mapping.get(model_choice)
+        if not model_name:
+            raise ValueError(f"Invalid Gemini model choice: {model_choice}")
+
+        # Initialize the model
+        model = GenerativeModel(model_name)
+
+        # Configure generation parameters for more focused responses
+        generation_config = GenerationConfig(
+            temperature=0.1,  # Lower temperature for more focused responses
+            max_output_tokens=1024,  # Reduced token limit to discourage verbosity
+            top_p=0.8,  # More focused sampling
+            top_k=20,  # More focused token selection
+            candidate_count=1,  # Single response only
+        )
+
+        # Configure safety settings
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        }
+
+        # Add system message to enforce direct responses
+        system_prompt = (
+            "You are an agent proficient in the domain in which question is asked about.\n"
+            "USER QUERY:\n"
+        )
+
+        full_prompt = system_prompt + prompt
+
+        # Generate response
+        response = model.generate_content(
+            full_prompt,
+            generation_config=generation_config,
+            safety_settings=safety_settings,
+        )
+
+        # Clean up response
+        answer = response.text.strip()
+        return answer
+
+    except Exception as e:
+        logging.error(f"Error in get_gemini_non_rag_response: {str(e)}", exc_info=True)
+        return f"Error generating response: {str(e)}"

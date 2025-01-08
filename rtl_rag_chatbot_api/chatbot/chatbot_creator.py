@@ -151,9 +151,6 @@ def get_azure_non_rag_response(
     """
     Retrieves a response from Azure OpenAI without using Retrieval-Augmented Generation (RAG).
 
-    This function initializes a Chatbot instance with the given configurations and model choice,
-    then uses it to generate a response to the provided query.
-
     Args:
         configs (Config): Configuration object containing necessary settings for the Chatbot.
         query (str): The user's input query or prompt.
@@ -166,6 +163,8 @@ def get_azure_non_rag_response(
         Exception: If there's an error in getting the response, with the error message included.
     """
     try:
+        logging.info(f"Using Azure OpenAI model: {model_choice}")
+
         # Initialize Azure OpenAI client for direct completion
         llm_client = openai.AzureOpenAI(
             api_key=configs.azure_llm.models[model_choice].api_key,
@@ -182,7 +181,7 @@ def get_azure_non_rag_response(
             {"role": "user", "content": query},
         ]
 
-        completion = llm_client.chat.completions.create(
+        response = llm_client.chat.completions.create(
             model=configs.azure_llm.models[model_choice].deployment,
             messages=messages,
             temperature=configs.llm_hyperparams.temperature,
@@ -193,8 +192,8 @@ def get_azure_non_rag_response(
             stop=configs.llm_hyperparams.stop,
         )
 
-        return completion.choices[0].message.content
+        return response.choices[0].message.content.strip()
 
     except Exception as e:
         logging.error(f"Error in get_azure_non_rag_response: {str(e)}")
-        raise Exception(f"Failed to get response: {str(e)}")
+        raise

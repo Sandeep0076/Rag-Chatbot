@@ -1,11 +1,12 @@
 import logging
 import os
 from contextlib import contextmanager
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain_community.utilities import SQLDatabase
+from langchain_google_vertexai import ChatVertexAI
 from langchain_openai import AzureChatOpenAI
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
@@ -13,10 +14,15 @@ from sqlalchemy.pool import QueuePool
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
+from rtl_rag_chatbot_api.chatbot.gemini_handler import get_gemini_non_rag_response
 from rtl_rag_chatbot_api.chatbot.prompt_handler import format_question
+from rtl_rag_chatbot_api.chatbot.utils.prompt_builder import PromptBuilder
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class TabularDataHandler:
@@ -37,7 +43,7 @@ class TabularDataHandler:
         engine (Engine): SQLAlchemy database engine.
         Session (sessionmaker): SQLAlchemy session maker.
         db (SQLDatabase): SQLDatabase instance for database operations.
-        llm (AzureChatOpenAI): Language model instance for natural language processing.
+        llm (Union[AzureChatOpenAI, ChatVertexAI]): Language model instance for natural language processing.
         agent (Agent): SQL agent for executing database queries.
         table_info (List[dict]): Information about tables in the database.
         table_name (str): Name of the main table in the database.
@@ -86,23 +92,56 @@ class TabularDataHandler:
         else:
             raise ValueError("No tables found in the database")
 
-    def _initialize_llm(self) -> AzureChatOpenAI:
+    def _initialize_llm(self) -> Union[AzureChatOpenAI, ChatVertexAI]:
         """
-        Initializes and returns an instance of AzureChatOpenAI.
-
-
+        Initializes and returns an instance of either AzureChatOpenAI or ChatVertexAI based on model choice.
 
         Returns:
-            AzureChatOpenAI: An instance of the Azure OpenAI chat model.
+            Union[AzureChatOpenAI, ChatVertexAI]: An instance of either Azure OpenAI or Vertex AI chat model.
 
         Raises:
             ValueError: If the configuration for the specified model is not found.
         """
+        logging.info(f"Initializing LLM with model choice: {self.model_choice}")
+
+        # Handle Gemini models
+        if self.model_choice.startswith("gemini"):
+            model_config = self.config.gemini
+            if not model_config:
+                raise ValueError("Configuration for Gemini model not found")
+
+            # Map model choice to actual model name
+            model_mapping = {
+                "gemini-flash": model_config.model_flash,
+                "gemini-pro": model_config.model_pro,
+            }
+
+            model_name = model_mapping.get(self.model_choice)
+            if not model_name:
+                raise ValueError(
+                    f"Invalid Gemini model choice: {self.model_choice}. Available choices: {list(model_mapping.keys())}"
+                )
+
+            logging.info(f"Using Gemini model: {model_name}")
+            return ChatVertexAI(
+                model_name=model_name,
+                project=model_config.project,
+                location=model_config.location,
+                temperature=0.2,
+                max_output_tokens=2048,
+                top_p=1,
+                top_k=40,
+            )
+
+        # Handle Azure OpenAI models
         model_config = self.config.azure_llm.models.get(self.model_choice)
-
         if not model_config:
-            raise ValueError(f"Configuration for model {self.model_choice} not found")
+            available_models = list(self.config.azure_llm.models.keys())
+            raise ValueError(
+                f"Configuration for model {self.model_choice} not found. Available models: {available_models}"
+            )
 
+        logging.info(f"Using Azure OpenAI model: {self.model_choice}")
         return AzureChatOpenAI(
             azure_endpoint=model_config.endpoint,
             azure_deployment=model_config.deployment,
@@ -158,10 +197,21 @@ class TabularDataHandler:
 
     def prepare_database(self):
         """
-        Prepares the SQLite database by processing the CSV or Excel file.
+        Prepares the SQLite database by processing the input file (CSV, Excel, or SQLite DB).
+        For CSV and Excel files, it creates tables in the database.
+        For SQLite DB files, it copies and validates the database structure.
         """
-        data_preparer = PrepareSQLFromTabularData(self.data_dir)
-        data_preparer.run_pipeline()
+        file_path = self.file_path if hasattr(self, "file_path") else self.data_dir
+        data_preparer = PrepareSQLFromTabularData(
+            file_path=file_path, output_dir=self.data_dir
+        )
+        success = data_preparer.run_pipeline()
+
+        if not success:
+            raise ValueError("Failed to prepare database from input file")
+
+        # Initialize SQL agent after database is prepared
+        self._initialize_agent()
 
     def _initialize_agent(self):
         """
@@ -175,7 +225,10 @@ class TabularDataHandler:
             toolkit=toolkit,
             verbose=True,
             handle_parsing_errors=True,
-            agent_executor_kwargs={"handle_parsing_errors": True},
+            agent_executor_kwargs={
+                "handle_parsing_errors": True,
+                "return_intermediate_steps": True,
+            },
         )
 
     def debug_database(self):
@@ -248,52 +301,6 @@ class TabularDataHandler:
                 )
         return table_info
 
-    def interactive_session(self):
-        """
-        Starts an interactive session for querying the database.
-        Allows users to input questions and receive answers based on the database content.
-        """
-        print("Welcome to the interactive SQL query session.")
-        print("Type 'exit' to end the session.")
-
-        while True:
-            question = input("\nEnter your question: ").strip()
-
-            if question.lower() == "exit":
-                print("Exiting the session. Goodbye!")
-                break
-
-            answer = self.ask_question(question)
-
-            if answer:
-                print(f"\nAnswer: {answer}")
-            else:
-                print(
-                    "Sorry, I couldn't find an answer to that question.Let me try again"
-                )
-                return self.get_forced_answer(question, answer)
-
-    def get_forced_answer(self, question: str, answer: str):
-        """
-        Attempts to extract an answer from a given text when a direct answer is not available.
-
-        Args:
-            question (str): The original question asked by the user.
-            answer (str): The text to search for an answer.
-
-        Returns:
-            str: An extracted answer or "Cannot find answer" if no suitable answer is found.
-        """
-        prompt = (
-            f"Question: {question}\n\n"
-            f"Try to find an answer from the following text:\n{answer}\n\n"
-            "Do not include text like you are trained on data "
-            "If no accurate answer can be found, "
-            "return 'Cannot find answer, Please try with a more elaborate question'. "
-            "Otherwise, return the answer."
-        )
-        return get_azure_non_rag_response(self.config, prompt)
-
     def get_answer(self, question: str) -> str:
         """
         Processes a user's question and returns an answer based on the database content.
@@ -338,18 +345,78 @@ class TabularDataHandler:
 
             # Check if the formatted question contains specific keywords
             keywords = ["SELECT", "FIND", "LIST", "SHOW", "CALCULATE"]
-            if any(keyword in formatted_question.upper() for keyword in keywords):
-                # Only invoke the agent if the formatted question contains specific keywords
+            if formatted_question and any(
+                keyword in formatted_question.upper() for keyword in keywords
+            ):
+                # Enhance the query with case-insensitive comparisons
                 response = self.agent.invoke({"input": formatted_question})
-                return response["output"]
+
+                # Extract the final answer and intermediate steps
+                final_answer = response.get("output", "No final answer found")
+                intermediate_steps = response.get("intermediate_steps", [])
+                complete_logs = str(intermediate_steps) + "\n" + str(final_answer)
+                base_prompt = PromptBuilder.build_forced_answer_prompt(
+                    formatted_question, complete_logs
+                )
+
+                # Format the response using the appropriate model
+                if self.model_choice.startswith("gemini"):
+                    return get_gemini_non_rag_response(
+                        self.config, base_prompt, self.model_choice
+                    )
+                else:
+                    return get_azure_non_rag_response(self.config, base_prompt)
             else:
                 # If no keywords are found, return the formatted question as is
                 return formatted_question
 
-        except Exception as e:
-            print(f"An error occurred while processing the question: {e}")
-            print(f"Debug: Full exception: {repr(e)}")
             return None
+        except Exception as e:
+            logging.error(f"An error occurred while processing the question: {str(e)}")
+            raise
+
+    def get_forced_answer(self, question: str, answer: str) -> str:
+        """
+        Attempts to extract an answer from a given text when a direct answer is not available.
+
+        Args:
+            question (str): The original question asked by the user.
+            answer (str): The text to search for an answer.
+
+        Returns:
+            str: An extracted answer or "Cannot find answer" if no suitable answer is found.
+        """
+        try:
+            base_prompt = PromptBuilder.build_forced_answer_prompt(question, answer)
+            return get_azure_non_rag_response(self.config, base_prompt)
+        except Exception as e:
+            logging.error(f"Error in get_forced_answer: {str(e)}")
+            return f"An error occurred while processing your question: {str(e)}"
+
+    def interactive_session(self):
+        """
+        Starts an interactive session for querying the database.
+        Allows users to input questions and receive answers based on the database content.
+        """
+        print("Welcome to the interactive SQL query session.")
+        print("Type 'exit' to end the session.")
+
+        while True:
+            question = input("\nEnter your question: ").strip()
+
+            if question.lower() == "exit":
+                print("Exiting the session. Goodbye!")
+                break
+
+            answer = self.get_answer(question)
+
+            if answer:
+                print(f"\nAnswer: {answer}")
+            else:
+                print(
+                    "Sorry, I couldn't find an answer to that question. Let me try again"
+                )
+                return self.get_forced_answer(question, answer)
 
 
 # def main(data_dir: str):
