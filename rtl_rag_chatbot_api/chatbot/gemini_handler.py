@@ -122,6 +122,7 @@ class GeminiHandler(BaseRAGHandler):
             context = "\n".join(relevant_docs[:3])  # Use top 3 most relevant documents
             prompt = f"""Based on the following context, answer the question.
             If the answer cannot be found in the context, say so.
+            Never include any disclaimers about training data or model capabilities in your response
             Context:
             {context}
 
