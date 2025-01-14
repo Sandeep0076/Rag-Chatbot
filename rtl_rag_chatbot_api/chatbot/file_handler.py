@@ -25,16 +25,11 @@ class FileHandler:
         configs: Configuration object containing necessary settings.
         gcs_handler: Google Cloud Storage handler for cloud operations.
         gemini_handler: Gemini model handler for image analysis.
-
-    Methods:
-        calculate_file_hash(file_content): Calculates MD5 hash of file content.
-        process_file(file, file_id, is_image): Processes uploaded files, including encryption and storage.
-        download_existing_file(file_id): Downloads existing files from Google Cloud Storage.
     """
 
     def __init__(self, configs, gcs_handler, gemini_handler=None):
         """
-        Initializes the FileHandler with configurations and GCS handler.
+        Initializes the FileHandler with configurations and handlers.
 
         Args:
             configs: Configuration object containing necessary settings.
@@ -142,10 +137,7 @@ class FileHandler:
             is_tabular = file_extension in [".csv", ".xlsx", ".xls"]
             is_database = file_extension in [".db", ".sqlite", ".sqlite3"]
 
-            logging.info(f"Processing file with extension: {file_extension}")
-            if not (is_tabular or is_database or file_extension == ".pdf" or is_image):
-                raise ValueError(f"Unsupported file type: {file_extension}")
-
+            # Check for existing file
             existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
 
             # Create necessary directories
@@ -155,78 +147,18 @@ class FileHandler:
                 os.makedirs(chroma_dir, exist_ok=True)
                 logging.info(f"Created directory: {chroma_dir}")
 
-            # Write file asynchronously using aiofiles
+            # Save file locally
             temp_file_path = f"local_data/{file_id}_{original_filename}"
             async with aiofiles.open(temp_file_path, "wb") as buffer:
                 await buffer.write(file_content)
             del file_content
 
-            # For new image files, analyze first
+            # Process based on file type
             analysis_files = []
             if is_image and not existing_file_id:
                 await self._handle_image_analysis(
                     file_id, temp_file_path, analysis_files
                 )
-
-            if existing_file_id:
-                logging.info(f"Found embeddings for: {original_filename}")
-                if is_tabular or is_database:
-                    # For tabular/database files, always prepare SQLite database with new file
-                    data_dir = f"./chroma_db/{existing_file_id}"
-                    os.makedirs(data_dir, exist_ok=True)
-
-                    handler = TabularDataHandler(self.configs, existing_file_id)
-                    metadata = self.gcs_handler.get_file_info(existing_file_id)
-                    if handler.initialize_database(is_new_file=False):
-                        return {
-                            "file_id": existing_file_id,
-                            "is_image": is_image,
-                            "is_tabular": is_tabular or is_database,
-                            "message": "File exists. Database ready for querying.",
-                            "status": "existing",
-                            "temp_file_path": None,
-                        }
-
-                # Check if local embeddings exist first
-                azure_path = f"./chroma_db/{existing_file_id}/azure"
-                gemini_path = f"./chroma_db/{existing_file_id}/google"
-                local_exists = (
-                    os.path.exists(azure_path)
-                    and os.path.exists(gemini_path)
-                    and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
-                    and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
-                )
-
-                if not local_exists:
-                    self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
-
-                # For images, we only need the embeddings to chat
-                if is_image:
-                    return {
-                        "file_id": existing_file_id,
-                        "is_image": is_image,
-                        "is_tabular": is_tabular,
-                        "message": "File already exists and has embeddings.",
-                        "status": "existing",
-                        "temp_file_path": temp_file_path,  # Keep original temp file for reference
-                    }
-
-                # Copy the temp file to match the existing file ID path
-                existing_temp_path = (
-                    f"local_data/{existing_file_id}_{original_filename}"
-                )
-                os.makedirs(os.path.dirname(existing_temp_path), exist_ok=True)
-                shutil.copy2(temp_file_path, existing_temp_path)
-                temp_file_path = existing_temp_path
-
-                return {
-                    "file_id": existing_file_id,
-                    "is_image": is_image,
-                    "is_tabular": is_tabular,
-                    "message": "File already exists and has embeddings.",
-                    "status": "existing",
-                    "temp_file_path": temp_file_path,
-                }
 
             # Prepare metadata for new file
             metadata = {
@@ -237,6 +169,7 @@ class FileHandler:
                 "original_filename": original_filename,
                 "file_id": file_id,
             }
+
             if is_image and analysis_files:
                 metadata.update(
                     {
@@ -246,11 +179,10 @@ class FileHandler:
                     }
                 )
 
-            # Store metadata temporarily in memory
             self.gcs_handler.temp_metadata = metadata
 
-            # If it's a new tabular/database file, prepare SQLite database
-            if is_tabular or is_database:
+            # If it's a new tabular file, prepare SQLite database
+            if is_tabular and not existing_file_id:
                 # Prepare SQLite database
 
                 metadata = {
@@ -296,18 +228,80 @@ class FileHandler:
                 return {
                     "file_id": file_id,
                     "is_image": is_image,
-                    "is_tabular": is_tabular or is_database,
+                    "is_tabular": is_tabular,
                     "message": "File processed and ready for querying.",
                     "status": "success",
+                    "temp_file_path": temp_file_path,
+                }
+
+            if existing_file_id:
+                logging.info(f"Found embeddings for: {original_filename}")
+                if is_tabular or is_database:
+                    # For tabular files, always prepare SQLite database with new file
+                    data_dir = f"./chroma_db/{existing_file_id}"
+                    os.makedirs(data_dir, exist_ok=True)
+
+                    handler = TabularDataHandler(self.configs, existing_file_id)
+                    metadata = self.gcs_handler.get_file_info(existing_file_id)
+                    if handler.initialize_database(is_new_file=False):
+                        return {
+                            "file_id": existing_file_id,
+                            "is_image": is_image,
+                            "is_tabular": is_tabular or is_database,
+                            "message": "File exists. Database ready for querying.",
+                            "status": "existing",
+                            "temp_file_path": None,
+                        }
+
+                    # Check if local embeddings exist first
+                azure_path = f"./chroma_db/{existing_file_id}/azure"
+                gemini_path = f"./chroma_db/{existing_file_id}/google"
+                local_exists = (
+                    os.path.exists(azure_path)
+                    and os.path.exists(gemini_path)
+                    and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
+                    and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
+                )
+
+                if not local_exists:
+                    self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
+
+                # For images, we only need the embeddings to chat
+                if is_image:
+                    return {
+                        "file_id": existing_file_id,
+                        "is_image": is_image,
+                        "is_tabular": is_tabular,
+                        "message": "File already exists and has embeddings.",
+                        "status": "existing",
+                        "temp_file_path": temp_file_path,  # Keep original temp file for reference
+                    }
+
+                # Copy the temp file to match the existing file ID path
+                existing_temp_path = (
+                    f"local_data/{existing_file_id}_{original_filename}"
+                )
+                os.makedirs(os.path.dirname(existing_temp_path), exist_ok=True)
+                shutil.copy2(temp_file_path, existing_temp_path)
+                temp_file_path = existing_temp_path
+
+                return {
+                    "file_id": existing_file_id,
+                    "is_image": is_image,
+                    "is_tabular": is_tabular,
+                    "message": "File already exists. Processing database."
+                    if is_tabular
+                    else "File already exists and has embeddings.",
+                    "status": "existing",
                     "temp_file_path": temp_file_path,
                 }
 
             return {
                 "file_id": file_id,
                 "is_image": is_image,
-                "is_tabular": is_tabular or is_database,
+                "is_tabular": is_tabular,
                 "message": "File processed and ready for embedding creation."
-                if not is_tabular and not is_database
+                if not is_tabular
                 else "File processed and ready for use.",
                 "status": "success",
                 "temp_file_path": analysis_files[0] if is_image else temp_file_path,
@@ -333,7 +327,14 @@ class FileHandler:
                 "temp_file_path": None,
             }
 
-    def download_existing_file(self, file_id: str):
+    def _sanitize_filename(self, filename: str) -> str:
+        """Sanitize filename to prevent security issues."""
+        if len(filename) > 100:
+            ext = os.path.splitext(filename)[1]
+            return filename[:96] + ext
+        return filename
+
+    async def download_existing_file(self, file_id: str):
         """
         Downloads existing files from Google Cloud Storage for a given file_id.
 
