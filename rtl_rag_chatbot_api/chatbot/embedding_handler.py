@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -232,6 +233,7 @@ class EmbeddingHandler:
                     },
                     "embeddings_status": "completed",
                     "azure_ready": True,
+                    "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
                 }
 
                 # Save file_info.json

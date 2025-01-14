@@ -203,7 +203,7 @@ async def analyze_images(
         # Add GPT-4 analysis task
         if model in ["both", "gpt4-omni"]:
             endpoint = construct_endpoint_url()
-            api_key = os.getenv("AZURE_API_KEY")
+            api_key = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__API_KEY")
             if not api_key:
                 error_msg = "AZURE_API_KEY environment variable not set"
                 logging.error(error_msg)
@@ -248,11 +248,16 @@ async def analyze_images(
 
 def construct_endpoint_url() -> str:
     """Construct the endpoint URL for GPT-4-OMNI model."""
-    deployment_name = os.getenv("AZURE_GPT4V_DEPLOYMENT_NAME", "gpt-4-vision-preview")
-    api_version = os.getenv("AZURE_API_VERSION", "2023-12-01-preview")
-    endpoint = os.getenv("AZURE_ENDPOINT")
+    base_url = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__ENDPOINT", "").rstrip("/")
+    deployment = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__DEPLOYMENT", "")
+    api_version = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__API_VERSION", "")
+
+    # Construct the endpoint URL
+    endpoint = f"{base_url}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+
+    # Extract the deployment name from the endpoint
 
     if not endpoint:
         raise ValueError("AZURE_ENDPOINT environment variable not set")
 
-    return f"{endpoint}/openai/deployments/{deployment_name}/chat/completions?api-version={api_version}"
+    return endpoint
