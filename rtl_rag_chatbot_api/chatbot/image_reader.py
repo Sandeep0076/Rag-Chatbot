@@ -1,9 +1,13 @@
+import asyncio
 import base64
-import logging  # Import logging module
+import logging
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, Optional
 
-import requests
+import aiohttp
+from vertexai.generative_models import Part
+
+from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 
 # Configure logging
 logging.basicConfig(
@@ -12,28 +16,15 @@ logging.basicConfig(
 
 
 def encode_image(image_path: str) -> str:
+    """Encode image to base64 string."""
     logging.info(f"Encoding image from path: {image_path}")
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("ascii")
 
 
-def create_payload(encoded_image: str) -> Dict[str, Any]:
-    logging.info("Creating payload for image analysis")
-    return {
-        "messages": [
-            {
-                "role": "system",
-                "content": [
-                    {"type": "text", "text": "You are an advanced AI image analyzer."}
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": """
-Analyze the image and provide a comprehensive and structured response based on the content type
+def create_analysis_prompt() -> str:
+    """Create the analysis prompt for both GPT-4 and Gemini models."""
+    return """Analyze the image and provide a comprehensive and structured response based on the content type
 (text, graph,charts,tables etc):
 General Overview:
 
@@ -79,8 +70,27 @@ Key Insights and Summary:
 Highlight Findings: Summarize the most important findings, insights, and correlations identified across text, graph,
  or table content.
 Contextual Discussion: Provide context for the data, discuss potential conclusions, and address any limitations
-or uncertainties in the interpretation.
-                    """,
+or uncertainties in the interpretation. If the image does not contain text, graph, chart or table,
+ describe all the even the minute details and ovservations  what the image shows.
+Do not write anything that you cannot see the image."""
+
+
+def create_gpt4_payload(encoded_image: str) -> Dict[str, Any]:
+    """Create payload for GPT-4-OMNI model."""
+    return {
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are an advanced AI image analyzer."}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": create_analysis_prompt(),
                     },
                     {
                         "type": "image_url",
@@ -95,66 +105,154 @@ or uncertainties in the interpretation.
     }
 
 
-def analyze_single_image(image_path: str, api_key: str, endpoint: str) -> str:
-    logging.info(f"Analyzing single image: {image_path}")
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": api_key,
-    }
-
-    encoded_image = encode_image(image_path)
-    payload = create_payload(encoded_image)
-
+async def analyze_single_image_gpt4(
+    image_path: str, api_key: str, endpoint: str
+) -> Dict[str, Any]:
+    """Analyze a single image using GPT-4-OMNI model."""
     try:
-        response = requests.post(endpoint, headers=headers, json=payload)
-        response.raise_for_status()
-        logging.info(f"Image analysis successful for: {image_path}")
-        return response.json()["choices"][0]["message"]["content"]
-    except requests.RequestException as e:
-        logging.error(f"Failed to make the request for {image_path}. Error: {e}")
-        return f"Failed to make the request for {image_path}. Error: {e}"
-    except KeyError:
-        logging.error(
-            f"Unexpected response format for {image_path}. Full response: {response.json()}"
+        logging.info(f"Analyzing image with GPT-4: {image_path}")
+        encoded_image = encode_image(image_path)
+        logging.info("Image encoded successfully for GPT-4")
+
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": api_key,
+        }
+        payload = create_gpt4_payload(encoded_image)
+        logging.info(f"Making request to GPT-4 endpoint: {endpoint}")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                endpoint, headers=headers, json=payload
+            ) as response:
+                logging.info(f"GPT-4 API Response status: {response.status}")
+                response_json = await response.json()
+
+                if response.status != 200:
+                    error_msg = f"GPT-4 API error: {response_json.get('error', 'Unknown error')}"
+                    logging.error(error_msg)
+                    return {"error": error_msg}
+
+                analysis = response_json["choices"][0]["message"]["content"]
+                logging.info(f"GPT-4 analysis successful for {image_path}")
+                return {"analysis": analysis}
+    except Exception as e:
+        error_msg = (
+            f"Failed to analyze image with GPT-4 for {image_path}. Error: {str(e)}"
         )
-        return f"Unexpected response format for {image_path}. Full response: {response.json()}"
+        logging.error(error_msg)
+        return {"error": error_msg}
 
 
-def analyze_images(image_path: str) -> List[Dict[str, Any]]:
-    logging.info(f"Starting analysis for images in path: {image_path}")
-    API_KEY = os.environ.get("AZURE_LLM__MODELS__GPT_4_OMNI__API_KEY")
-    ENDPOINT = construct_endpoint_url()
+async def analyze_single_image_gemini(
+    image_path: str, gemini_handler: GeminiHandler
+) -> Dict[str, Any]:
+    """Analyze a single image using Gemini Pro model."""
+    try:
+        logging.info(f"Analyzing image with Gemini: {image_path}")
+        if not gemini_handler:
+            error_msg = "GeminiHandler instance is required for Gemini model"
+            logging.error(error_msg)
+            return {"error": error_msg}
 
-    if not API_KEY or not ENDPOINT:
-        logging.error("API_KEY or ENDPOINT environment variables are not set.")
-        raise ValueError("API_KEY or ENDPOINT environment variables are not set.")
+        if not gemini_handler.generative_model:
+            logging.info("Initializing Gemini model")
+            gemini_handler.initialize("gemini-pro")
 
-    result = analyze_single_image(image_path, API_KEY, ENDPOINT)
-    logging.info(f"Image analysis completed for: {image_path}")
-    return [{"filename": os.path.basename(image_path), "analysis": result}]
+        with open(image_path, "rb") as image_file:
+            image_data = image_file.read()
+            logging.info(f"Image read successfully for Gemini: {image_path}")
+
+        image_part = Part.from_data(data=image_data, mime_type="image/jpeg")
+        prompt = create_analysis_prompt()
+
+        logging.info("Making request to Gemini API")
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: gemini_handler.generative_model.generate_content(
+                [prompt, image_part], generation_config={"temperature": 0.1}
+            ),
+        )
+
+        logging.info(f"Image analysis successful for: {image_path}")
+        return {"analysis": response.text}
+    except Exception as e:
+        error_msg = (
+            f"Failed to analyze image with Gemini for {image_path}. Error: {str(e)}"
+        )
+        logging.error(error_msg)
+        return {"error": error_msg}
 
 
-def construct_endpoint_url():
-    logging.info("Constructing endpoint URL")
-    # Retrieve environment variables
-    base_url = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__ENDPOINT", "").rstrip("/")
-    deployment = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__DEPLOYMENT", "")
-    api_version = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__API_VERSION", "")
+async def analyze_images(
+    image_path: str,
+    model: str = "gpt4-omni",
+    gemini_handler: Optional[GeminiHandler] = None,
+) -> Dict[str, Any]:
+    """Analyze images using both GPT-4-OMNI and Gemini-1.5-pro-002 concurrently."""
+    try:
+        if not os.path.exists(image_path):
+            error_msg = f"Image file not found: {image_path}"
+            logging.error(error_msg)
+            return {"error": error_msg}
 
-    # Construct the endpoint URL
-    endpoint = f"{base_url}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        results = {}
+        tasks = []
 
-    return endpoint
+        # Add GPT-4 analysis task
+        if model in ["both", "gpt4-omni"]:
+            endpoint = construct_endpoint_url()
+            api_key = os.getenv("AZURE_API_KEY")
+            if not api_key:
+                error_msg = "AZURE_API_KEY environment variable not set"
+                logging.error(error_msg)
+                return {"error": error_msg}
+            tasks.append(analyze_single_image_gpt4(image_path, api_key, endpoint))
+
+        # Add Gemini analysis task
+        if model in ["both", "gemini"]:
+            if not gemini_handler:
+                error_msg = "GeminiHandler instance required for Gemini analysis"
+                logging.error(error_msg)
+                return {"error": error_msg}
+            tasks.append(analyze_single_image_gemini(image_path, gemini_handler))
+
+        # Run analyses concurrently
+        completed_tasks = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results
+        if model in ["both", "gpt4-omni"]:
+            gpt4_result = completed_tasks[0]
+            results["gpt4_analysis"] = (
+                gpt4_result["analysis"]
+                if "analysis" in gpt4_result
+                else gpt4_result["error"]
+            )
+
+        if model in ["both", "gemini"]:
+            gemini_result = completed_tasks[-1]
+            results["gemini_analysis"] = (
+                gemini_result["analysis"]
+                if "analysis" in gemini_result
+                else gemini_result["error"]
+            )
+
+        return results
+
+    except Exception as e:
+        error_msg = f"Error in analyze_images: {str(e)}"
+        logging.error(error_msg)
+        return {"error": error_msg}
 
 
-# if __name__ == "__main__":
-#     IMAGE_FOLDER = "processed_data/images/BYjxOmR.png"
-#     RESULT_PATH = "processed_data/image_analysis_results.json"
+def construct_endpoint_url() -> str:
+    """Construct the endpoint URL for GPT-4-OMNI model."""
+    deployment_name = os.getenv("AZURE_GPT4V_DEPLOYMENT_NAME", "gpt-4-vision-preview")
+    api_version = os.getenv("AZURE_API_VERSION", "2023-12-01-preview")
+    endpoint = os.getenv("AZURE_ENDPOINT")
 
-#     results = analyze_images(IMAGE_FOLDER)
+    if not endpoint:
+        raise ValueError("AZURE_ENDPOINT environment variable not set")
 
-#     Save the results to a JSON file
-#     with open(RESULT_PATH, "w", encoding="utf-8") as f:
-#         json.dump(results, f, ensure_ascii=False, indent=4)
-
-#     print(f"Image analysis results saved to {RESULT_PATH}")
+    return f"{endpoint}/openai/deployments/{deployment_name}/chat/completions?api-version={api_version}"

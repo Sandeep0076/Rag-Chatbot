@@ -8,6 +8,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, Dict
 
 import uvicorn
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -68,7 +69,8 @@ apscheduler_log.setLevel(logging.ERROR)
 
 configs = Config()
 gcs_handler = GCSHandler(configs)
-file_handler = FileHandler(configs, gcs_handler)
+gemini_handler = GeminiHandler(configs, gcs_handler)
+file_handler = FileHandler(configs, gcs_handler, gemini_handler)
 model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler)
 
@@ -151,10 +153,6 @@ async def start_scheduler(app: FastAPI):
 app = FastAPI(
     title=title, description=description, version="3.1.0", lifespan=start_scheduler
 )
-
-global gemini_handler
-gemini_handler = None
-# Global dictionary to store initialized chatbots
 
 # Initialize ChromaDBManager at app level
 chroma_manager = ChromaDBManager()
@@ -707,7 +705,7 @@ async def get_neighbors(query: NeighborsQuery, current_user=Depends(get_current_
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
-@app.post("/image/analyze")
+@app.post("/analyze-image", response_model=Dict[str, Any])
 async def analyze_image_endpoint(
     file: UploadFile = File(...), current_user=Depends(get_current_user)
 ):
@@ -717,7 +715,6 @@ async def analyze_image_endpoint(
     Handles file upload, temporary file creation, analysis, result saving, and error handling.
     """
     try:
-        # Get the file extension from the original filename
         file_extension = Path(file.filename).suffix
 
         # Create a temporary file with the original extension
@@ -728,7 +725,7 @@ async def analyze_image_endpoint(
             buffer.write(content)
 
         # Analyze the image
-        result = analyze_images(temp_file_path)
+        result = await analyze_images(temp_file_path)
 
         # Generate a unique filename for the result
         result_filename = f"image_analysis_{uuid.uuid4()}.json"
@@ -739,26 +736,22 @@ async def analyze_image_endpoint(
 
         # Save the result to a JSON file
         with open(result_file_path, "w", encoding="utf-8") as f:
-            json.dump({"analysis": result}, f, ensure_ascii=False, indent=4)
+            json.dump(result, f, ensure_ascii=False, indent=4)
 
-        # Clean up the temporary file
-        os.remove(temp_file_path)
-
-        return JSONResponse(
-            content={
-                "message": "Image analyzed successfully",
-                "result_file": result_filename,
-                "analysis": result,
-            }
-        )
+        return {
+            "message": "Image analysis completed successfully",
+            "result_file": result_filename,
+            "analysis": result,
+        }
 
     except Exception as e:
-        logging.error(f"Error in image analysis: {str(e)}")
+        logging.error(f"Error analyzing image: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error analyzing image: {str(e)}")
+    finally:
+        # Clean up temporary file
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
-        raise HTTPException(
-            status_code=500, detail=f"An error occurred during image analysis: {str(e)}"
-        )
+            logging.info(f"Cleaned up temporary file: {temp_file_path}")
 
 
 @app.delete("/delete")
