@@ -182,7 +182,7 @@ class FileHandler:
             self.gcs_handler.temp_metadata = metadata
 
             # If it's a new tabular file, prepare SQLite database
-            if is_tabular and not existing_file_id:
+            if (is_tabular or is_database) and not existing_file_id:
                 # Prepare SQLite database
 
                 metadata = {
