@@ -7,6 +7,7 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
@@ -226,7 +227,9 @@ async def upload_file(
     Made asynchronous to prevent blocking during long operations.
     """
     try:
-        file_id = str(uuid.uuid4())
+        # Generate file_id with UUID and current date
+        current_date = datetime.now().strftime("%Y%m%d")
+        file_id = f"{str(uuid.uuid4())}_{current_date}"
         original_filename = file.filename
         file_extension = os.path.splitext(original_filename)[1].lower()
 
