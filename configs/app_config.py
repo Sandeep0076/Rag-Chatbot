@@ -14,11 +14,6 @@ class ModelConfig(BaseModel):
 
 
 class AzureLLMConfig(BaseModel):
-    azure_llm_api_key: str
-    azure_llm_endpoint: str
-    azure_llm_api_version: str
-    azure_llm_deployment: str
-    azure_llm_model_name: str
     models: Dict[str, ModelConfig] = Field(default_factory=dict)
 
 
