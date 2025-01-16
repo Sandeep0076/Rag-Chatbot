@@ -1,8 +1,9 @@
 import json
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List
 
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot
 from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
@@ -76,12 +77,13 @@ class EmbeddingHandler:
         Ensures embeddings exist and are valid, creates only if necessary.
         """
         try:
-            # Instead of looking for file_info, check temp_metadata first
+            # Check temp_metadata first
             temp_metadata = self.gcs_handler.temp_metadata
             if not temp_metadata:
                 raise ValueError(f"No metadata found for file_id: {file_id}")
+            logging.info(f"temp_metadata: {temp_metadata}")
 
-            # Check embeddings status using the existing embeddings_exist function
+            # Check embeddings status
             gcs_status, local_status, all_valid = self.embeddings_exist(file_id)
 
             # If everything is valid, return immediately
@@ -101,66 +103,122 @@ class EmbeddingHandler:
                     "status": "downloaded",
                 }
 
-            # Only create new embeddings if they don't exist anywhere
-            if not gcs_status:
-                if not temp_file_path:
-                    original_filename = temp_metadata.get("original_filename")
-                    temp_file_path = f"local_data/{file_id}_{original_filename}"
+            # Create new embeddings
+            logging.info(f"Creating new embeddings for file_id: {file_id}")
 
-                if not os.path.exists(temp_file_path):
-                    raise FileNotFoundError(
-                        f"Source file not found at {temp_file_path}"
-                    )
+            # For images, pass both analysis files
+            # To DO
+            if temp_metadata.get("is_image"):
+                gpt4_path = temp_metadata.get("gpt4_analysis_path")
+                gemini_path = temp_metadata.get("gemini_analysis_path")
+                logging.info(f"Creating new embeddings for : {gpt4_path}")
+                logging.info(f"Creating new embeddings for : {gemini_path}")
+                if not gpt4_path or not gemini_path:
+                    raise ValueError("Missing analysis paths for image")
 
-                logging.info(f"Creating new embeddings for file_id: {file_id}")
                 return await self.create_and_upload_embeddings(
-                    file_id, temp_metadata.get("is_image", False), temp_file_path
+                    file_id, gpt4_path, second_file_path=gemini_path, is_image=True
                 )
-
-            return {
-                "message": "Embeddings status check completed",
-                "status": "checked",
-            }
+            else:
+                # For non-images, use single file path
+                return await self.create_and_upload_embeddings(
+                    file_id, temp_file_path, is_image=False
+                )
 
         except Exception as e:
             logging.error(f"Error in ensure_embeddings_exist: {str(e)}")
             raise
 
     async def create_and_upload_embeddings(
-        self, file_id: str, is_image: bool, temp_file_path: str
-    ):
+        self,
+        file_id: str,
+        temp_file_path: str,
+        second_file_path: str = None,
+        is_image: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Create and upload embeddings for a file.
+        For images, creates separate embeddings for GPT-4 and Gemini analyses.
+
+        Args:
+            file_id: Unique identifier for the file
+            temp_file_path: Path to the first analysis file (GPT-4 for images)
+            second_file_path: Path to the second analysis file (Gemini for images)
+            is_image: Whether the file is an image
+        """
         try:
-            # Get temporary metadata
-            temp_metadata = self.gcs_handler.temp_metadata
-            username = temp_metadata.get("username", "Unknown")
+            # Create base handler for text extraction
 
             base_handler = BaseRAGHandler(self.configs, self.gcs_handler)
-            text = base_handler.extract_text_from_file(temp_file_path)
-            if text.startswith("ERROR:"):
-                return {"message": text[7:], "status": "error"}
+            temp_metadata = self.gcs_handler.temp_metadata
+            # username = temp_metadata.get("username", "Unknown")
 
-            chunks = base_handler.split_text(text)
-            if not chunks:
-                return {
-                    "message": "No processable text found in the document.",
-                    "status": "error",
-                }
+            if is_image:
+                # For images, create separate chunks for each analysis
+                logging.info("Processing image analyses separately")
 
-            # Log the chunk sizes for debugging
-            for i, chunk in enumerate(chunks):
-                tokens = len(base_handler.simple_tokenize(chunk))
-                logging.info(f"Chunk {i}: {tokens} tokens")
+                # Extract text from GPT-4 analysis
+                gpt4_text = base_handler.extract_text_from_file(temp_file_path)
+                if gpt4_text.startswith("ERROR:"):
+                    raise Exception(
+                        f"Error extracting text from GPT-4 analysis: {gpt4_text[7:]}"
+                    )
+                gpt4_chunks = base_handler.split_text(gpt4_text)
+                if not gpt4_chunks:
+                    return {
+                        "message": "No processable text found in the document.",
+                        "status": "error",
+                    }
 
-            logging.info(f"Text extracted and split into {len(chunks)} chunks")
+                # Log chunk information
+                logging.info(f"GPT-4 analysis split into {len(gpt4_chunks)} chunks")
+                for i, chunk in enumerate(gpt4_chunks):
+                    tokens = len(base_handler.simple_tokenize(chunk))
+                    logging.info(f"GPT-4 Chunk {i}: {tokens} tokens")
+                # Create embeddings using respective models
+                azure_result = self._create_azure_embeddings(file_id, gpt4_chunks)
 
-            # Create embeddings
-            azure_result = self._create_azure_embeddings(
-                file_id,
-                chunks,
-                self.configs.azure_embedding.azure_embedding_api_key,
-                username,
-            )
-            gemini_result = self._create_gemini_embeddings(file_id, chunks, username)
+                # Extract text from Gemini analysis
+                if not second_file_path:
+                    raise Exception("Second analysis file path not provided for image")
+                gemini_text = base_handler.extract_text_from_file(second_file_path)
+                if gemini_text.startswith("ERROR:"):
+                    raise Exception(
+                        f"Error extracting text from Gemini analysis: {gemini_text[7:]}"
+                    )
+                gemini_chunks = base_handler.split_text(gemini_text)
+                if not gemini_chunks:
+                    return {
+                        "message": "No processable text found in the document.",
+                        "status": "error",
+                    }
+                logging.info(f"Gemini analysis split into {len(gemini_chunks)} chunks")
+                for i, chunk in enumerate(gemini_chunks):
+                    tokens = len(base_handler.simple_tokenize(chunk))
+                    logging.info(f"Gemini Chunk {i}: {tokens} tokens")
+
+                gemini_result = self._create_gemini_embeddings(file_id, gemini_chunks)
+
+            else:
+                # For non-image files, process normally with same chunks for both models
+                logging.info("Processing non-image file")
+                text = base_handler.extract_text_from_file(temp_file_path)
+                if text.startswith("ERROR:"):
+                    raise Exception(f"Error extracting text: {text[7:]}")
+
+                text_chunks = base_handler.split_text(text)
+                if not text_chunks:
+                    raise Exception("No processable text found in the document")
+
+                # Log chunk information
+                logging.info(f"Text split into {len(text_chunks)} chunks")
+                for i, chunk in enumerate(text_chunks):
+                    tokens = len(base_handler.simple_tokenize(chunk))
+                    logging.info(f"Chunk {i}: {tokens} tokens")
+
+                # Create embeddings using both models with same chunks
+                azure_result = self._create_azure_embeddings(file_id, text_chunks)
+                gemini_result = self._create_gemini_embeddings(file_id, text_chunks)
 
             try:
                 # Upload embeddings to GCS
@@ -175,6 +233,7 @@ class EmbeddingHandler:
                     },
                     "embeddings_status": "completed",
                     "azure_ready": True,
+                    "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
                 }
 
                 # Save file_info.json
@@ -213,9 +272,7 @@ class EmbeddingHandler:
                 "can_chat": False,
             }
 
-    def _create_azure_embeddings(
-        self, file_id: str, chunks: List[str], api_key: str, username: str
-    ):
+    def _create_azure_embeddings(self, file_id: str, chunks: List[str]):
         """Creates embeddings using Azure OpenAI."""
         logging.info("Generating Azure embeddings...")
         try:
@@ -239,7 +296,7 @@ class EmbeddingHandler:
             logging.error(f"Error creating Azure embeddings: {str(e)}", exc_info=True)
             raise
 
-    def _create_gemini_embeddings(self, file_id: str, chunks: List[str], username: str):
+    def _create_gemini_embeddings(self, file_id: str, chunks: List[str]):
         """Creates embeddings using Gemini model."""
         logging.info("Generating Gemini embeddings...")
         try:
