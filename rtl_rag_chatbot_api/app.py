@@ -527,7 +527,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             logging.info(f"File info not found for {query.file_id}")
             raise HTTPException(
                 status_code=400,
-                detail="File appears to be corrupted or empty. Please try uploading a different CSV file.",
+                detail="File appears to be corrupted or empty. Please try uploading a different file.",
             )
 
         model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"

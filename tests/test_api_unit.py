@@ -8,6 +8,8 @@ from httpx import AsyncClient
 
 from rtl_rag_chatbot_api.app import app
 
+from .test_resources import TestResourceManager
+
 # Initialize test client
 client = TestClient(app)
 
@@ -17,6 +19,16 @@ logger = logging.getLogger(__name__)
 
 # Mock files directory
 MOCK_FILES_DIR = os.path.join(os.path.dirname(__file__), "mock_files")
+
+
+@pytest.fixture(autouse=True, scope="session")
+def clear_test_resources():
+    """Fixture to clear test resources before any tests run."""
+    resource_manager = TestResourceManager()
+    resource_manager.clear_file_ids()  # Clear any existing file IDs before tests start
+    yield
+    # Optionally clear again after all tests complete
+    resource_manager.clear_file_ids()
 
 
 @pytest.fixture
@@ -114,11 +126,18 @@ def mock_image_analyzer():
         yield mock
 
 
+@pytest.fixture
+def resource_manager():
+    """Fixture providing TestResourceManager instance."""
+    return TestResourceManager()
+
+
 def test_chat_with_pdf(
     mock_files: dict,
     mock_gcs_handler: MagicMock,
     mock_chroma_manager: MagicMock,
     mock_pdf_processor: MagicMock,
+    resource_manager: TestResourceManager,
 ) -> None:
     """Test chat functionality with PDF files."""
     # Upload PDF file
@@ -131,6 +150,7 @@ def test_chat_with_pdf(
         )
         assert upload_response.status_code == 200
         file_id = upload_response.json()["file_id"]
+        resource_manager.store_file_id(file_id)
 
     # Test chat with PDF using GPT-4
     chat_data = {
@@ -160,7 +180,10 @@ def test_chat_with_pdf(
 
 
 def test_chat_with_csv(
-    mock_files: dict, mock_gcs_handler: MagicMock, mock_tabular_handler: MagicMock
+    mock_files: dict,
+    mock_gcs_handler: MagicMock,
+    mock_tabular_handler: MagicMock,
+    resource_manager: TestResourceManager,
 ) -> None:
     """Test chat functionality with CSV files."""
     # Upload CSV file
@@ -173,6 +196,7 @@ def test_chat_with_csv(
         )
         assert upload_response.status_code == 200
         file_id = upload_response.json()["file_id"]
+        resource_manager.store_file_id(file_id)
 
     # Test chat with CSV using GPT-4
     chat_data = {
@@ -208,7 +232,10 @@ def test_chat_with_csv(
 
 
 def test_chat_with_excel(
-    mock_files: dict, mock_gcs_handler: MagicMock, mock_tabular_handler: MagicMock
+    mock_files: dict,
+    mock_gcs_handler: MagicMock,
+    mock_tabular_handler: MagicMock,
+    resource_manager: TestResourceManager,
 ) -> None:
     """Test chat functionality with Excel files."""
     # Upload Excel file
@@ -227,6 +254,7 @@ def test_chat_with_excel(
         )
         assert upload_response.status_code == 200
         file_id = upload_response.json()["file_id"]
+        resource_manager.store_file_id(file_id)
 
     # Test chat with Excel using GPT-4
     chat_data = {
@@ -262,7 +290,10 @@ def test_chat_with_excel(
 
 
 def test_chat_with_db(
-    mock_files: dict, mock_gcs_handler: MagicMock, mock_tabular_handler: MagicMock
+    mock_files: dict,
+    mock_gcs_handler: MagicMock,
+    mock_tabular_handler: MagicMock,
+    resource_manager: TestResourceManager,
 ) -> None:
     """Test chat functionality with database files."""
     # Upload DB file
@@ -275,6 +306,7 @@ def test_chat_with_db(
         )
         assert upload_response.status_code == 200
         file_id = upload_response.json()["file_id"]
+        resource_manager.store_file_id(file_id)
 
     # Test chat with DB using GPT-4
     chat_data = {
@@ -314,6 +346,7 @@ def test_chat_with_image(
     mock_gcs_handler: MagicMock,
     mock_image_analyzer: MagicMock,
     mock_config: MagicMock,
+    resource_manager: TestResourceManager,
 ) -> None:
     """Test chat functionality with image files."""
     with patch("rtl_rag_chatbot_api.app.Config", return_value=mock_config):
@@ -327,6 +360,7 @@ def test_chat_with_image(
             )
             assert upload_response.status_code == 200
             file_id = upload_response.json()["file_id"]
+            resource_manager.store_file_id(file_id)
 
         # Test chat with image using GPT-
         chat_data = {
@@ -375,7 +409,7 @@ def test_info():
     assert "description" in response.json()
 
 
-def test_file_upload(mock_files: dict) -> None:
+def test_file_upload(mock_files: dict, resource_manager: TestResourceManager) -> None:
     """Test file upload functionality with a real CSV file."""
     # Upload CSV file
     with open(mock_files["csv"], "rb") as f:
@@ -393,6 +427,28 @@ def test_file_upload(mock_files: dict) -> None:
         assert "original_filename" in response.json()
         assert "is_image" in response.json()
         assert response.json()["is_image"] is False
+
+        # Store file ID for cleanup
+        resource_manager.store_file_id(response.json()["file_id"])
+
+
+def test_cleanup_test_resources(resource_manager: TestResourceManager):
+    """Cleanup test resources after all tests have completed."""
+    file_ids = resource_manager.get_all_file_ids()
+    if not file_ids:
+        return
+
+    # Delete both ChromaDB embeddings and GCS resources
+    response = client.request(
+        "DELETE",
+        "/delete",
+        json={
+            "file_ids": file_ids,
+            "include_gcs": True,  # Explicitly set to True to clean up GCS resources
+        },
+    )
+    assert response.status_code == 200
+    resource_manager.clear_file_ids()
 
 
 @pytest.mark.asyncio
