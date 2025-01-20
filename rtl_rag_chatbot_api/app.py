@@ -30,8 +30,6 @@ from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot as Chatbot
-
-# from rtl_rag_chatbot_api.chatbot.chatbot_creator import Chatbot
 from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.file_handler import FileHandler
@@ -39,6 +37,7 @@ from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
+from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
 from rtl_rag_chatbot_api.common.models import (
@@ -325,12 +324,19 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
         if not success:
             raise ValueError("Failed to prepare database from input file")
 
-        # Upload the SQLite database to GCS
-        gcs_handler.upload_to_gcs(
-            configs.gcp_resource.bucket_name,
-            source=db_path,
-            destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db",
-        )
+        # Encrypt the database before upload
+        encrypted_db_path = encrypt_file(db_path)
+        try:
+            # Upload the encrypted SQLite database to GCS
+            gcs_handler.upload_to_gcs(
+                configs.gcp_resource.bucket_name,
+                source=encrypted_db_path,
+                destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db.encrypted",
+            )
+        finally:
+            # Clean up encrypted file
+            if os.path.exists(encrypted_db_path):
+                os.remove(encrypted_db_path)
 
         # Update file_info.json with success status and file type
         metadata = {
