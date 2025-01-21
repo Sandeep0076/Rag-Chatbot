@@ -9,6 +9,8 @@ import google.auth
 import google.oauth2.credentials
 from google.cloud import storage
 
+from rtl_rag_chatbot_api.chatbot.utils.encryption import decrypt_file
+
 
 class GCSHandler:
     """
@@ -88,12 +90,30 @@ class GCSHandler:
             relative_path = blob.name[len(prefix) :]
             local_path = os.path.join("chroma_db", file_id, relative_path)
 
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            # Handle encrypted files
+            if relative_path == "tabular_data.db.encrypted":
+                # Download to temporary encrypted file
+                encrypted_path = local_path
+                local_path = os.path.join("chroma_db", file_id, "tabular_data.db")
 
-            # Download file
-            blob.download_to_filename(local_path)
-            logging.info(f"Downloaded {blob.name} to {local_path}")
+                # Ensure directory exists
+                os.makedirs(os.path.dirname(encrypted_path), exist_ok=True)
+
+                # Download and decrypt
+                blob.download_to_filename(encrypted_path)
+                try:
+                    decrypt_file(encrypted_path)
+                    logging.info(f"Decrypted {blob.name} to {local_path}")
+                finally:
+                    # Clean up encrypted file
+                    if os.path.exists(encrypted_path):
+                        os.remove(encrypted_path)
+                        logging.info(f"Cleaned up encrypted file {encrypted_path}")
+            else:
+                # Handle regular files
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                blob.download_to_filename(local_path)
+                logging.info(f"Downloaded {blob.name} to {local_path}")
 
         logging.info(f"Finished downloading all files for file ID: {file_id}")
 

@@ -165,25 +165,13 @@ class TabularDataHandler:
             session.close()
 
     def initialize_database(self, is_new_file: bool = True):
-        """Initialize database - either create new or download existing"""
+        """Initialize database - either create new or verify existing"""
         os.makedirs(self.data_dir, exist_ok=True)
 
-        if is_new_file:
-            if not os.path.exists(self.db_path):
-                return False
-        else:
-            # For existing files, download from GCS if not present locally
-            if not os.path.exists(self.db_path):
-                try:
-                    self.gcs_handler.download_files_from_folder_by_id(self.file_id)
-                    if not os.path.exists(self.db_path):
-                        logging.error(
-                            f"Failed to download database for file_id: {self.file_id}"
-                        )
-                        return False
-                except Exception as e:
-                    logging.error(f"Error downloading database: {str(e)}")
-                    return False
+        if not os.path.exists(self.db_path):
+            logging.error(f"Database file not found at: {self.db_path}")
+            return False
+
         return True
 
     def cleanup(self):

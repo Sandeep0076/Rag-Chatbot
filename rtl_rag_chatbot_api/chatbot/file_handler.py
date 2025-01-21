@@ -9,6 +9,7 @@ from fastapi import UploadFile
 
 from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
+from rtl_rag_chatbot_api.chatbot.utils.encryption import decrypt_file, encrypt_file
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
@@ -120,6 +121,110 @@ class FileHandler:
             f"Successfully wrote {model_name} analysis file. Size: {os.path.getsize(file_path)} bytes"
         )
 
+    async def _handle_new_tabular_data(
+        self,
+        file_id: str,
+        temp_file_path: str,
+        file_hash: str,
+        original_filename: str,
+        username: str,
+    ):
+        """Handle processing of new tabular data files"""
+        metadata = {
+            "file_id": file_id,
+            "file_hash": file_hash,
+            "original_filename": original_filename,
+            "is_tabular": True,
+            "is_image": False,
+            "username": username,
+            "embeddings_status": "completed",  # CSV files don't need embeddings
+        }
+
+        # Create data directory and prepare SQLite database
+        data_dir = f"./chroma_db/{file_id}"
+        db_path = os.path.join(data_dir, "tabular_data.db")
+        os.makedirs(data_dir, exist_ok=True)
+
+        # Prepare SQLite database
+        data_preparer = PrepareSQLFromTabularData(temp_file_path, data_dir)
+        data_preparer.run_pipeline()
+
+        # Upload metadata and encrypted database
+        try:
+            encrypted_db_path = encrypt_file(db_path)
+            try:
+                files_to_upload = {
+                    "metadata": (metadata, f"file-embeddings/{file_id}/file_info.json"),
+                    "database": (
+                        encrypted_db_path,
+                        f"file-embeddings/{file_id}/tabular_data.db.encrypted",
+                    ),
+                }
+                await asyncio.to_thread(
+                    self.gcs_handler.upload_to_gcs,
+                    self.configs.gcp_resource.bucket_name,
+                    files_to_upload,
+                )
+            finally:
+                if os.path.exists(encrypted_db_path):
+                    os.remove(encrypted_db_path)
+        except Exception as e:
+            logging.error(f"Error uploading metadata: {str(e)}")
+            raise
+
+        return {
+            "file_id": file_id,
+            "is_image": False,
+            "is_tabular": True,
+            "message": "File processed and ready for querying.",
+            "status": "success",
+            "temp_file_path": temp_file_path,
+        }
+
+    async def _handle_existing_tabular_data(
+        self, existing_file_id: str, original_filename: str, temp_file_path: str
+    ):
+        """Handle processing of existing tabular data files"""
+        data_dir = f"./chroma_db/{existing_file_id}"
+        os.makedirs(data_dir, exist_ok=True)
+
+        # Download and decrypt the database file
+        db_path = os.path.join(data_dir, "tabular_data.db")
+        encrypted_db_path = os.path.join(data_dir, "tabular_data.db.encrypted")
+
+        try:
+            # Download the encrypted database
+            self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
+
+            # Decrypt the database if it exists
+            if os.path.exists(encrypted_db_path):
+                decrypt_file(encrypted_db_path, db_path)
+                os.remove(encrypted_db_path)  # Clean up encrypted file
+            else:
+                logging.error(
+                    f"Encrypted database not found for file_id: {existing_file_id}"
+                )
+
+            # Initialize handler with decrypted database
+            handler = TabularDataHandler(self.configs, existing_file_id)
+            # metadata = self.gcs_handler.get_file_info(existing_file_id)
+            if handler.initialize_database(is_new_file=False):
+                return {
+                    "file_id": existing_file_id,
+                    "is_image": False,
+                    "is_tabular": True,
+                    "message": "File exists. Database ready for querying.",
+                    "status": "existing",
+                    "temp_file_path": None,
+                }
+        except Exception as e:
+            logging.error(f"Error processing existing database: {str(e)}")
+            if os.path.exists(encrypted_db_path):
+                os.remove(encrypted_db_path)
+            if os.path.exists(db_path):
+                os.remove(db_path)
+            raise
+
     async def process_file(
         self, file: UploadFile, file_id: str, is_image: bool, username: str
     ) -> dict:
@@ -183,77 +288,18 @@ class FileHandler:
 
             # If it's a new tabular file, prepare SQLite database
             if (is_tabular or is_database) and not existing_file_id:
-                # Prepare SQLite database
-
-                metadata = {
-                    "file_id": file_id,
-                    "file_hash": file_hash,
-                    "original_filename": original_filename,
-                    "is_tabular": True,
-                    "is_image": False,
-                    "username": username,
-                    "embeddings_status": "completed",  # CSV files don't need embeddings
-                }
-
-                # Create data directory and prepare SQLite database
-                data_dir = f"./chroma_db/{file_id}"
-                db_path = os.path.join(data_dir, "tabular_data.db")
-                os.makedirs(data_dir, exist_ok=True)
-
-                # Prepare SQLite database
-                data_preparer = PrepareSQLFromTabularData(temp_file_path, data_dir)
-                data_preparer.run_pipeline()
-
-                # Upload metadata immediately
-                try:
-                    files_to_upload = {
-                        "metadata": (
-                            metadata,
-                            f"file-embeddings/{file_id}/file_info.json",
-                        ),
-                        "database": (
-                            db_path,
-                            f"file-embeddings/{file_id}/tabular_data.db",
-                        ),
-                    }
-                    await asyncio.to_thread(
-                        self.gcs_handler.upload_to_gcs,
-                        self.configs.gcp_resource.bucket_name,
-                        files_to_upload,
-                    )
-                except Exception as e:
-                    logging.error(f"Error uploading metadata: {str(e)}")
-                    raise
-
-                return {
-                    "file_id": file_id,
-                    "is_image": is_image,
-                    "is_tabular": is_tabular,
-                    "message": "File processed and ready for querying.",
-                    "status": "success",
-                    "temp_file_path": temp_file_path,
-                }
+                return await self._handle_new_tabular_data(
+                    file_id, temp_file_path, file_hash, original_filename, username
+                )
 
             if existing_file_id:
                 logging.info(f"Found embeddings for: {original_filename}")
                 if is_tabular or is_database:
-                    # For tabular files, always prepare SQLite database with new file
-                    data_dir = f"./chroma_db/{existing_file_id}"
-                    os.makedirs(data_dir, exist_ok=True)
+                    return await self._handle_existing_tabular_data(
+                        existing_file_id, original_filename, temp_file_path
+                    )
 
-                    handler = TabularDataHandler(self.configs, existing_file_id)
-                    metadata = self.gcs_handler.get_file_info(existing_file_id)
-                    if handler.initialize_database(is_new_file=False):
-                        return {
-                            "file_id": existing_file_id,
-                            "is_image": is_image,
-                            "is_tabular": is_tabular or is_database,
-                            "message": "File exists. Database ready for querying.",
-                            "status": "existing",
-                            "temp_file_path": None,
-                        }
-
-                    # Check if local embeddings exist first
+                # Check if local embeddings exist first
                 azure_path = f"./chroma_db/{existing_file_id}/azure"
                 gemini_path = f"./chroma_db/{existing_file_id}/google"
                 local_exists = (
