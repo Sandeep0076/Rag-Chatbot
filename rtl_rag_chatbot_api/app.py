@@ -523,6 +523,9 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         - Maintains model instances in memory for subsequent queries
     """
     try:
+        logging.info(
+            f"Graphic generation flag is  {query.generate_visualization} for file {query.file_id}"
+        )
         if len(query.text) == 0:
             raise HTTPException(status_code=400, detail="Text array cannot be empty")
 

@@ -37,6 +37,13 @@ def handle_file_upload():
         "Select file type:", ["PDF", "CSV/Excel", "Database", "Image"], horizontal=True
     )
 
+    # Add Generate Visualization radio button
+    st.session_state.generate_visualization = st.radio(
+        "Generate Visualization",
+        options=[False, True],
+        index=0,  # Default to False
+    )
+
     is_image = st.session_state.file_type == "Image"
     file_types = {
         "Image": ["jpg", "png"],
@@ -145,6 +152,7 @@ def display_chat_interface():
                     "file_id": st.session_state.file_id,
                     "model_choice": st.session_state.model_choice,
                     "user_id": st.session_state.username,
+                    "generate_visualization": st.session_state.generate_visualization,
                 }
                 chat_response = requests.post(f"{API_URL}/file/chat", json=chat_payload)
 
@@ -214,6 +222,8 @@ def initialize_session_state():
         st.session_state.file_type = "PDF"
     if "uploaded_image" not in st.session_state:
         st.session_state.uploaded_image = None
+    if "generate_visualization" not in st.session_state:
+        st.session_state.generate_visualization = False
 
 
 def on_model_change():
