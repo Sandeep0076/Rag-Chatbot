@@ -2,13 +2,14 @@
 Main FastAPI application for the RAG PDF API.
 """
 
+
 import json
 import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import uvicorn
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -52,6 +53,7 @@ from rtl_rag_chatbot_api.common.models import (
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
+from rtl_rag_chatbot_api.common.prompts_storage import VISUALISATION_PROMPT
 from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
 
 # from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
@@ -491,6 +493,133 @@ async def create_embeddings(
         )
 
 
+def check_db_existence(
+    file_id: str, query: Query, configs: dict, initialized_models: dict
+) -> Tuple[str, bool, Any]:
+    """
+    Check if database exists and initialize tabular handler if needed.
+
+    Args:
+        file_id: The ID of the file to check
+        query: Query parameters including model choice
+        configs: Application configurations
+        initialized_models: Dictionary of initialized models
+
+    Returns:
+        Tuple containing:
+        - database path
+        - boolean indicating if it's a tabular database
+        - initialized model if tabular, None otherwise
+    """
+    db_path = f"./chroma_db/{file_id}/tabular_data.db"
+    is_tabular = os.path.exists(db_path)
+    model = None
+
+    if is_tabular:
+        logging.info("Initializing TabularDataHandler")
+        try:
+            model = TabularDataHandler(configs, query.file_id, query.model_choice)
+            model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
+            initialized_models[model_key] = model
+        except ValueError as ve:
+            logging.error(f"Error initializing TabularDataHandler: {str(ve)}")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The CSV file appears to be corrupted or contains no valid data. "
+                    "Please try uploading a different file."
+                ),
+            )
+
+    return db_path, is_tabular, model
+
+
+def initialize_rag_model(
+    query: Query,
+    configs: dict,
+    gcs_handler: Any,
+    file_info: dict,
+):
+    """
+    Initialize RAG model based on query parameters.
+
+    Args:
+        query: Query parameters including model choice
+        configs: Application configurations
+        gcs_handler: GCS handler instance
+        file_info: File information from GCS
+
+    Returns:
+        Initialized model instance
+    """
+    chroma_path = f"./chroma_db/{query.file_id}"
+    is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+    embedding_type = "google" if is_gemini else "azure"
+    model_path = os.path.join(chroma_path, embedding_type, "chroma.sqlite3")
+
+    # If local embeddings don't exist, check GCS
+    if not os.path.exists(model_path):
+        if not file_info.get("embeddings_status") == "completed":
+            raise HTTPException(
+                status_code=400,
+                detail="Embeddings are not ready yet. Please wait a moment.",
+            )
+        print("No local embeddings found, downloading from GCS")
+        gcs_handler.download_files_from_folder_by_id(query.file_id)
+
+    # Initialize model with ChromaDB
+    if is_gemini:
+        model = GeminiHandler(configs, gcs_handler)
+        model.initialize(
+            model=query.model_choice,
+            file_id=query.file_id,
+            embedding_type="google",
+            collection_name=f"rag_collection_{query.file_id}",
+            user_id=query.user_id,
+        )
+    else:
+        model = Chatbot(configs, gcs_handler)
+        model.initialize(
+            model_choice=query.model_choice,
+            file_id=query.file_id,
+            embedding_type="azure",
+            collection_name=f"rag_collection_{query.file_id}",
+            user_id=query.user_id,
+        )
+
+    return model
+
+
+def format_table_response(response: list[Any]) -> dict[str, Any]:
+    """
+    Format table response into markdown and structured data.
+
+    Args:
+        response: List containing headers and rows
+
+    Returns:
+        Dictionary containing formatted response
+    """
+    if len(response) > 1:
+        headers = response[0]
+        rows = response[1:]
+
+        # Create markdown table
+        table_str = "| " + " | ".join(str(h) for h in headers) + " |\n"
+        table_str += "|" + "|".join(["---" for _ in headers]) + "|\n"
+        for row in rows:
+            table_str += "| " + " | ".join(str(cell) for cell in row) + " |\n"
+
+        return {
+            "response": table_str,
+            "is_table": True,
+            "headers": headers,
+            "rows": rows,
+        }
+
+    return {"response": "No data found", "is_table": False}
+
+
 @app.post("/file/chat")
 async def chat(query: Query, current_user=Depends(get_current_user)):
     """
@@ -511,16 +640,6 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             - response (str): Model's answer to the query
             - For tabular data: Returns formatted markdown table if applicable
 
-    Raises:
-        HTTPException:
-            - 404: If file not found or model not initialized
-            - 500: For model initialization or query processing errors
-
-    Notes:
-        - Lazily initializes models on first use
-        - Handles model switching between Azure and Gemini
-        - Supports both RAG for documents and SQL querying for tabular data
-        - Maintains model instances in memory for subsequent queries
     """
     try:
         logging.info(
@@ -542,72 +661,20 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
         try:
             if not model:
-                db_path = f"./chroma_db/{query.file_id}/tabular_data.db"
-                if os.path.exists(db_path):
-                    logging.info("Initializing TabularDataHandler")
-                    try:
-                        model = TabularDataHandler(
-                            configs, query.file_id, query.model_choice
-                        )
-                        initialized_models[model_key] = model
-                    except ValueError as ve:
-                        logging.error(
-                            f"Error initializing TabularDataHandler: {str(ve)}"
-                        )
-                        raise HTTPException(
-                            status_code=400,
-                            detail=(
-                                "The CSV file appears to be corrupted or contains no valid data. "
-                                "Please try uploading a different file."
-                            ),
-                        )
-                else:
-                    chroma_path = f"./chroma_db/{query.file_id}"
-                    is_gemini = query.model_choice.lower() in [
-                        "gemini-flash",
-                        "gemini-pro",
-                    ]
-                    embedding_type = "google" if is_gemini else "azure"
-                    model_path = os.path.join(
-                        chroma_path, embedding_type, "chroma.sqlite3"
-                    )
-
-                    # If local embeddings don't exist, check GCS
-                    if not os.path.exists(model_path):
-                        if not file_info.get("embeddings_status") == "completed":
-                            raise HTTPException(
-                                status_code=400,
-                                detail="Embeddings are not ready yet. Please wait a moment.",
-                            )
-                        print("No local embeddings found, downloading from GCS")
-                        gcs_handler.download_files_from_folder_by_id(query.file_id)
-
-                    # Initialize model with ChromaDB
-                    if is_gemini:
-                        model = GeminiHandler(configs, gcs_handler)
-                        model.initialize(
-                            model=query.model_choice,
-                            file_id=query.file_id,
-                            embedding_type="google",
-                            collection_name=f"rag_collection_{query.file_id}",
-                            user_id=query.user_id,
-                        )
-                    else:
-                        model = Chatbot(configs, gcs_handler)
-                        model.initialize(
-                            model_choice=query.model_choice,
-                            file_id=query.file_id,
-                            embedding_type="azure",
-                            collection_name=f"rag_collection_{query.file_id}",
-                            user_id=query.user_id,
-                        )
-
+                db_path, is_tabular, model = check_db_existence(
+                    query.file_id, query, configs, initialized_models
+                )
+                if not is_tabular:
+                    model = initialize_rag_model(query, configs, gcs_handler, file_info)
                     initialized_models[model_key] = model
                     logging.info(
                         f"Model initialized: {query.file_id}, user: {query.user_id}, model: {query.model_choice}"
                     )
+            if query.generate_visualization:
+                current_question = query.text[-1] + VISUALISATION_PROMPT
 
-            current_question = query.text[-1]
+            else:
+                current_question = query.text[-1]
 
             # For GPT-3.5, skip previous messages to stay within token limits
             if query.model_choice.lower() == "gpt_3_5_turbo":
@@ -623,26 +690,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             response = model.get_answer(chat_context)
 
             if isinstance(response, list):
-                if len(response) > 1:
-                    headers = response[0]
-                    rows = response[1:]
-
-                    # Create markdown table
-                    table_str = "| " + " | ".join(str(h) for h in headers) + " |\n"
-                    table_str += "|" + "|".join(["---" for _ in headers]) + "|\n"
-                    for row in rows:
-                        table_str += (
-                            "| " + " | ".join(str(cell) for cell in row) + " |\n"
-                        )
-
-                    return {
-                        "response": table_str,
-                        "is_table": True,
-                        "headers": headers,
-                        "rows": rows,
-                    }
-                else:
-                    return {"response": "No data found", "is_table": False}
+                return format_table_response(response)
 
             return {"response": str(response), "is_table": False}
 
