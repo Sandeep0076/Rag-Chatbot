@@ -37,6 +37,9 @@ langchain-openai = "^0.1.6"
 matplotlib = "^3.7.1"
 seaborn = "^0.12.2"
 pandas = "^1.5.3"
+plotly = "^5.18.0"
+kaleido = "0.4.0rc5"
+
 
 
 cryptography = "^43.0.0"
