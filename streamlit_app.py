@@ -1,3 +1,4 @@
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 from PIL import Image
@@ -170,42 +171,11 @@ def display_chat_interface():
                             st.session_state.messages.append(ai_message)
 
                             with st.chat_message("assistant"):
-                                # Create Plotly figure based on chart data
-                                if chart_config["chart_type"].lower() == "line chart":
-                                    import plotly.graph_objects as go
-
-                                    fig = go.Figure()
-                                    for dataset in chart_config["data"]["datasets"]:
-                                        fig.add_trace(
-                                            go.Scatter(
-                                                x=dataset["x"],
-                                                y=dataset["y"],
-                                                name=dataset["label"],
-                                            )
-                                        )
-
-                                    fig.update_layout(
-                                        title=chart_config["title"],
-                                        xaxis_title=chart_config["labels"]["x"],
-                                        yaxis_title=chart_config["labels"]["y"],
-                                    )
-
-                                    st.plotly_chart(fig)
-                                else:
-                                    st.write(
-                                        "Unsupported chart type:",
-                                        chart_config["chart_type"],
-                                    )
-                        except KeyError:
-                            # If visualization data format is incorrect, display as text
-                            ai_message = {
-                                "role": "assistant",
-                                "content": str(chat_result),
-                            }
-                            st.session_state.messages.append(ai_message)
-                            with st.chat_message("assistant"):
-                                st.write(ai_message["content"])
-
+                                fig = plot_chart(chart_config)
+                                st.plotly_chart(fig)
+                        except Exception as e:
+                            st.error(f"Error creating chart: {str(e)}")
+                            st.write("Raw chart data:", chart_config)
                     # Handle regular text response
                     else:
                         ai_message = {
@@ -272,6 +242,151 @@ def initialize_model(model_choice):
             st.success(
                 f"Model {model_choice} selected. Please upload a file to initialize."
             )
+
+
+def create_line_chart(dataset, title, labels):
+    fig = go.Figure()
+    for data in dataset:
+        fig.add_trace(
+            go.Scatter(
+                x=data["x"], y=data["y"], name=data["label"], mode="lines+markers"
+            )
+        )
+    fig.update_layout(title=title, xaxis_title=labels["x"], yaxis_title=labels["y"])
+    return fig
+
+
+def create_bar_chart(data, title, labels, options=None):
+    fig = go.Figure()
+
+    # Handle simplified format (values/categories)
+    if "values" in data and "categories" in data:
+        fig.add_trace(go.Bar(x=data["categories"], y=data["values"], name="Value"))
+    # Handle datasets format
+    elif "datasets" in data:
+        for dataset in data["datasets"]:
+            fig.add_trace(go.Bar(x=dataset["x"], y=dataset["y"], name=dataset["label"]))
+    else:
+        raise ValueError(
+            "Invalid data format for bar chart. Must have either 'values' and 'categories' or 'datasets'"
+        )
+
+    if options and options.get("stacked", False):
+        fig.update_layout(barmode="stack")
+
+    fig.update_layout(title=title, xaxis_title=labels["x"], yaxis_title=labels["y"])
+    return fig
+
+
+def create_pie_chart(data, title):
+    fig = go.Figure(go.Pie(values=data["values"], labels=data["categories"], hole=0.3))
+    fig.update_layout(title=title)
+    return fig
+
+
+def create_scatter_plot(dataset, title, labels, is_3d=False):
+    fig = go.Figure()
+    for data in dataset:
+        if is_3d:
+            fig.add_trace(
+                go.Scatter3d(
+                    x=data["x"],
+                    y=data["y"],
+                    z=data["z"],
+                    name=data["label"],
+                    mode="markers",
+                )
+            )
+        else:
+            scatter_args = {
+                "x": data["x"],
+                "y": data["y"],
+                "name": data["label"],
+                "mode": "markers",
+            }
+            if "size" in data:  # For bubble charts
+                scatter_args["marker"] = {"size": data["size"]}
+            if "color" in data:
+                scatter_args["marker"] = scatter_args.get("marker", {})
+                scatter_args["marker"]["color"] = data["color"]
+
+            fig.add_trace(go.Scatter(**scatter_args))
+
+    layout_args = {"title": title}
+    if is_3d:
+        layout_args.update(
+            {
+                "scene": {
+                    "xaxis_title": labels["x"],
+                    "yaxis_title": labels["y"],
+                    "zaxis_title": labels["z"],
+                }
+            }
+        )
+    else:
+        layout_args.update({"xaxis_title": labels["x"], "yaxis_title": labels["y"]})
+
+    fig.update_layout(**layout_args)
+    return fig
+
+
+def create_heatmap(data, title, labels):
+    fig = go.Figure(
+        go.Heatmap(
+            z=data["matrix"],
+            x=data.get("x_categories"),
+            y=data.get("y_categories"),
+            colorscale=data.get("options", {}).get("color_palette", "Viridis"),
+        )
+    )
+    fig.update_layout(title=title, xaxis_title=labels["x"], yaxis_title=labels["y"])
+    return fig
+
+
+def create_box_plot(dataset, title, labels):
+    fig = go.Figure()
+    for data in dataset:
+        fig.add_trace(
+            go.Box(
+                x=data["x"] if "x" in data else None, y=data["y"], name=data["label"]
+            )
+        )
+    fig.update_layout(title=title, xaxis_title=labels["x"], yaxis_title=labels["y"])
+    return fig
+
+
+def create_histogram(data, title, labels):
+    fig = go.Figure(go.Histogram(x=data["values"], nbinsx=30))
+    fig.update_layout(title=title, xaxis_title=labels["x"], yaxis_title="Count")
+    return fig
+
+
+def plot_chart(chart_config):
+    """Create and return a plotly figure based on the chart configuration."""
+    chart_type = chart_config["chart_type"].lower()
+    title = chart_config["title"]
+    data = chart_config["data"]
+    labels = chart_config["labels"]
+    options = chart_config.get("options", {})
+
+    chart_creators = {
+        "line chart": lambda: create_line_chart(data["datasets"], title, labels),
+        "bar chart": lambda: create_bar_chart(data, title, labels, options),
+        "pie chart": lambda: create_pie_chart(data, title),
+        "scatter plot": lambda: create_scatter_plot(data["datasets"], title, labels),
+        "3d scatter plot": lambda: create_scatter_plot(
+            data["datasets"], title, labels, is_3d=True
+        ),
+        "bubble chart": lambda: create_scatter_plot(data["datasets"], title, labels),
+        "heatmap": lambda: create_heatmap(data, title, labels),
+        "box plot": lambda: create_box_plot(data["datasets"], title, labels),
+        "histogram": lambda: create_histogram(data, title, labels),
+    }
+
+    if chart_type not in chart_creators:
+        raise ValueError(f"Unsupported chart type: {chart_type}")
+
+    return chart_creators[chart_type]()
 
 
 def main():

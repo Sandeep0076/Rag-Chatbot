@@ -1,6 +1,9 @@
 VISUALISATION_PROMPT = """For the given context, generate a visualization of the data.
 Return the information in a structured JSON format that can be used to plot the data in a graph.
-If not chart type is given in context, then generate appropriate chart type based on context.
+If no chart type is given in context, then generate appropriate chart type based on context.
+
+CRITICAL: Return ONLY the JSON object. DO NOT wrap it in markdown code blocks (```json). DO NOT include any other text.
+
 Follow this schema strictly:
 
 {
@@ -8,73 +11,99 @@ Follow this schema strictly:
 Heatmap | 3D Scatter Plot | Surface Plot | Bubble Chart",
   "title": "Descriptive chart title",
   "data": {
-    // STRUCTURE DEPENDS ON CHART TYPE:
-    // For Line/Bar/Scatter/Box:
+    // For Line/Bar/Scatter/Box/Bubble Charts:
     "datasets": [
       {
-        "label": "Series 1 (required for multi-series)",
-        "x": [numeric_or_string_values], // REQUIRED
-        "y": [numeric_values],           // REQUIRED
-        "z": [numeric_values],           // For 3D only
-        "size": [numeric_values],        // For bubble charts
-        "color": [numeric_values]        // For color mapping
+        "label": "Series name",
+        "x": [numeric_or_string_values],  // For bar charts with categories, use the categories here
+        "y": [numeric_values],            // The actual values to plot
+        "z": [numeric_values],            // For 3D plots only
+        "size": [numeric_values],         // For bubble charts only
+        "color": [numeric_values]         // For color mapping
       }
     ],
 
-    // For Pie/Histogram:
-    "values": [numeric_values],          // REQUIRED
-    "categories": ["label1", "label2"],  // REQUIRED
+    // For Pie Charts and Simple Bar Charts ONLY:
+    "values": [numeric_values],           // The numeric values
+    "categories": [string_values],        // The category labels
 
     // For Heatmap:
-    "matrix": [[num, num], [num, num]],  // 2D numeric array REQUIRED
-    "x_categories": ["x1", "x2"],        // Column labels
-    "y_categories": ["y1", "y2"]         // Row labels
+    "matrix": [[num, num], [num, num]],   // 2D numeric array
+    "x_categories": [string_values],      // Column labels
+    "y_categories": [string_values]       // Row labels
   },
   "labels": {
-    "x": "X-axis label (required)",
-    "y": "Y-axis label (required)",
-    "z": "Z-axis label (for 3D)"         // Optional
+    "x": "X-axis label",
+    "y": "Y-axis label",
+    "z": "Z-axis label"                   // For 3D plots only
   },
   "options": {
-    "color_palette": "Viridis | Plotly | ...",
-    "stacked": True/False                // For bar charts
+    "color_palette": "Viridis",           // Optional
+    "stacked": false                      // For bar charts only
   }
 }
 
-**Critical Rules:**
-1. **Data Types:**
-   - All values must be real numbers (no placeholders like val1/Date1)
-   - Dates must be ISO strings ("2023-01-01"), not "Date1"
+**Critical Rules for Each Chart Type:**
 
-2. **Chart-Specific Requirements:**
-   - Pie Charts: MUST use "values" and "categories" (no datasets)
-   - 3D Plots: MUST include "z" values in datasets
-   - Heatmaps: MUST include "matrix" with numeric 2D array
-
-3. **Error Handling:**
-   - If insufficient data, return: {"error": "Insufficient data to plot"}
-   - Never include placeholder comments (e.g., // Replace with...)
-
-4. **Output Control:**
-   - No markdown formatting (only pure JSON)
-   - No trailing commas
-   - Return pure JSON only
-   - Use double quotes for strings
-   - Use True/False (uppercase) for booleans
-   - No trailing commas
-   - No comments in output
-
-**Examples:**
 1. Line Chart:
-```json
+   - MUST use "datasets" format
+   - Each dataset MUST have "x" and "y" arrays of equal length
+   - "x" can be dates or numbers
+
+2. Bar Chart:
+   - MUST use "datasets" format for multiple series
+   - For single series, can use either:
+     a) datasets: [{"label": "Data", "x": ["cat1", "cat2"], "y": [val1, val2]}]
+     b) simplified: {"values": [val1, val2], "categories": ["cat1", "cat2"]}
+
+3. Pie Chart:
+   - MUST use "values" and "categories" format
+   - MUST NOT use "datasets"
+   - Arrays must be of equal length
+
+4. Scatter/Bubble:
+   - MUST use "datasets" format
+   - Each dataset MUST have "x" and "y"
+   - Bubble charts MUST include "size"
+
+5. Heatmap:
+   - MUST use "matrix" format
+   - MUST include "x_categories" and "y_categories"
+
+6. Box Plot:
+   - MUST use "datasets" format
+   - Each dataset MUST have "y" values
+   - "x" is optional for categories
+
+7. Histogram:
+   - MUST use "values" array
+   - Categories are auto-generated
+
+Example Bar Chart Response:
 {
-  "chart_type": "Line Chart",
-  "title": "Apple Stock Prices",
+  "chart_type": "Bar Chart",
+  "title": "Sales by Region",
   "data": {
     "datasets": [{
-      "x": ["2023-01-01", "2023-02-01"],
-      "y": [150.2, 165.7]
+      "label": "Sales",
+      "x": ["North", "South", "East", "West"],
+      "y": [100, 150, 120, 180]
     }]
   },
-  "labels": {"x": "Date", "y": "Price (USD)"}
-}"""
+  "labels": {
+    "x": "Region",
+    "y": "Sales (USD)"
+  },
+  "options": {
+    "color_palette": "Viridis",
+    "stacked": false
+  }
+}
+
+Remember:
+- All numeric values must be real numbers
+- All arrays must have matching lengths
+- No placeholder values or comments in output
+- Use proper JSON format with double quotes
+- Use true/false (lowercase) for booleans
+"""

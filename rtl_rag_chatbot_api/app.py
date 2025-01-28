@@ -705,6 +705,10 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                             "False", "false"
                         )
                         response = response.strip()
+                        # Remove markdown code block markers if present
+                        response = (
+                            response.replace("```json", "").replace("```", "").strip()
+                        )
                         chart_config = json.loads(response)
                     else:
                         chart_config = response
