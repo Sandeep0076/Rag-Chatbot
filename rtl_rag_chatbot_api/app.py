@@ -853,6 +853,22 @@ async def get_gemini_response_stream(
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
+@app.get("/long-task")
+async def long_task():
+    """
+    This is an endpoint to simulate a long running task with time.sleep.
+    The app is configured to handle long running tasks with a timeout of 60 seconds.
+    Test is with a curl command:
+    - `curl -X GET "http://localhost:8080/long-task" --max-time 30` (wait 30s) which should return a timeout error.
+    - `curl -X GET "http://localhost:8080/long-task" --max-time 80` (wait 80s) which should return a success message.
+    """
+    import time
+
+    # simulate a long-running task (e.g., 70 seconds)
+    time.sleep(70)
+    return {"message": "Task completed"}
+
+
 def start():
     """
     Function to start the FastAPI application.
@@ -866,4 +882,5 @@ def start():
         reload=False,
         log_config="logging_config.json",
         log_level="info",
+        timeout_keep_alive=60,  # maximum time to keep connection alive
     )
