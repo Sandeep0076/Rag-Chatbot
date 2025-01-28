@@ -1,6 +1,3 @@
-import base64
-from io import BytesIO
-
 import requests
 import streamlit as st
 from PIL import Image
@@ -127,10 +124,6 @@ def display_chat_interface():
                     st.markdown(message["content"])
                 else:
                     st.write(message["content"])
-                if "chart_data" in message:
-                    image_data = base64.b64decode(message["chart_data"]["chart_data"])
-                    image = Image.open(BytesIO(image_data))
-                    st.image(image, caption=message["chart_data"]["chart_title"])
 
         user_input = st.chat_input("Enter your message")
 
@@ -159,44 +152,69 @@ def display_chat_interface():
                 if chat_response.status_code == 200:
                     chat_result = chat_response.json()
 
-                    # Display chat response
-                    ai_message = {
-                        "role": "assistant",
-                        "content": chat_result["response"],
-                    }
-                    if "chart_data" in chat_result:
-                        ai_message["chart_data"] = chat_result["chart_data"]
-                    st.session_state.messages.append(ai_message)
-
-                    with st.chat_message("assistant"):
-                        # Handle table formatting if response appears to be a markdown table
-                        if (
-                            isinstance(chat_result["response"], str)
-                            and "|" in chat_result["response"]
-                            and "\n" in chat_result["response"]
-                        ):
-                            st.markdown(chat_result["response"])
-                        else:
-                            st.markdown(chat_result["response"])
-                        st.markdown(f"Model: **{st.session_state.model_choice}**")
-                        if "chart_data" in chat_result:
-                            chart_data = chat_result["chart_data"]["chart_data"]
-                            image_data = base64.b64decode(chart_data)
-                            image = Image.open(BytesIO(image_data))
-                            st.image(
-                                image, caption=chat_result["chart_data"]["chart_title"]
-                            )
-
-                    # Display image in sidebar if it's an image file
+                    # Handle visualization data
                     if (
-                        st.session_state.file_type == "Image"
-                        and st.session_state.uploaded_image is not None
+                        st.session_state.generate_visualization
+                        and "chart_config" in chat_result
                     ):
-                        with st.sidebar:
-                            st.subheader("Uploaded Image:")
-                            img = Image.open(st.session_state.uploaded_image)
-                            st.image(img, use_column_width=True)
+                        try:
+                            chart_config = chat_result["chart_config"]
+                            # Create message for chat history
+                            ai_message = {
+                                "role": "assistant",
+                                "content": (
+                                    f"Generated {chart_config['chart_type']} "
+                                    f"visualization: {chart_config['title']}"
+                                ),
+                            }
+                            st.session_state.messages.append(ai_message)
 
+                            with st.chat_message("assistant"):
+                                # Create Plotly figure based on chart data
+                                if chart_config["chart_type"].lower() == "line chart":
+                                    import plotly.graph_objects as go
+
+                                    fig = go.Figure()
+                                    for dataset in chart_config["data"]["datasets"]:
+                                        fig.add_trace(
+                                            go.Scatter(
+                                                x=dataset["x"],
+                                                y=dataset["y"],
+                                                name=dataset["label"],
+                                            )
+                                        )
+
+                                    fig.update_layout(
+                                        title=chart_config["title"],
+                                        xaxis_title=chart_config["labels"]["x"],
+                                        yaxis_title=chart_config["labels"]["y"],
+                                    )
+
+                                    st.plotly_chart(fig)
+                                else:
+                                    st.write(
+                                        "Unsupported chart type:",
+                                        chart_config["chart_type"],
+                                    )
+                        except KeyError:
+                            # If visualization data format is incorrect, display as text
+                            ai_message = {
+                                "role": "assistant",
+                                "content": str(chat_result),
+                            }
+                            st.session_state.messages.append(ai_message)
+                            with st.chat_message("assistant"):
+                                st.write(ai_message["content"])
+
+                    # Handle regular text response
+                    else:
+                        ai_message = {
+                            "role": "assistant",
+                            "content": chat_result.get("response", str(chat_result)),
+                        }
+                        st.session_state.messages.append(ai_message)
+                        with st.chat_message("assistant"):
+                            st.write(ai_message["content"])
                 else:
                     st.error(f"Request failed: {chat_response.text}")
     else:

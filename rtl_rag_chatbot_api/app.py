@@ -692,6 +692,44 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             if isinstance(response, list):
                 return format_table_response(response)
 
+            if query.generate_visualization:
+                try:
+                    # Debug logging to see the response
+                    logging.info(f"Response type: {type(response)}")
+                    logging.info(f"Response content: {response}")
+
+                    # Parse the response string into a JSON object if it's a string
+                    if isinstance(response, str):
+                        # Replace Python boolean values with JSON boolean values
+                        response = response.replace("True", "true").replace(
+                            "False", "false"
+                        )
+                        response = response.strip()
+                        chart_config = json.loads(response)
+                    else:
+                        chart_config = response
+
+                    return JSONResponse(
+                        content={
+                            "chart_config": chart_config,  # Return chart_config directly
+                            "is_table": False,
+                        }
+                    )
+                except json.JSONDecodeError as je:
+                    logging.error(
+                        f"Invalid chart configuration JSON at position {je.pos}: {je.msg}"
+                    )
+                    logging.error(f"JSON string: {response}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid chart configuration format: {str(je)}",
+                    )
+                except Exception as e:
+                    logging.error(f"Error generating chart: {str(e)}")
+                    raise HTTPException(
+                        status_code=500, detail="Failed to generate chart"
+                    )
+
             return {"response": str(response), "is_table": False}
 
         finally:
