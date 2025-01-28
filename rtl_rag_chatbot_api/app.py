@@ -866,4 +866,5 @@ def start():
         reload=False,
         log_config="logging_config.json",
         log_level="info",
+        timeout_keep_alive=60,  # maximum time to keep connection alive
     )
