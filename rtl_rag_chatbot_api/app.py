@@ -189,13 +189,22 @@ app.add_middleware(
 app.add_route("/metrics", handle_metrics)
 
 
-@app.get("/health")
+@app.get("/internal/healthy")
 async def health():
     """
     Shows application health information.
     In the future this could do some actual checks.
     """
-    return {"status": "up"}
+    return {"status": "healthy"}
+
+
+@app.get("/internal/ready")
+async def ready():
+    """
+    Hit by readiness probes to check if the application is ready to serve traffic.
+    If the API is blocked, due to long running tasks, there is no traffic send to the pod.
+    """
+    return {"status": "ready"}
 
 
 @app.get("/info")

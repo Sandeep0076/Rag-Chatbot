@@ -1,7 +1,7 @@
 global:
   env: "test"
   port: 8080
-  probePath: /health
+  probePath: /internal/healthy
 
   vault:
     mount_path: "da/itowe/ci"
@@ -23,13 +23,19 @@ universal-helm-chart:
         cpu: 1000m
         memory: 4Gi
     livenessProbe:
-      failureThreshold: 5
       initialDelaySeconds: 15
-      periodSeconds: 60
-      timeoutSeconds: 30
+      periodSeconds: 600  # check every x seconds
+      timeoutSeconds: 60  # allow x seconds for a response
+      failureThreshold: 2
+      httpGet:
+        path: /internal/healthy
     readinessProbe:
       initialDelaySeconds: 15
       periodSeconds: 30
+      timeoutSeconds: 60
+      failureThreshold: 2
+      httpGet:
+        path: /internal/ready
   deployment:
     podLabels:
       app: rtl-rag-chatbot-api
