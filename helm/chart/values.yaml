@@ -25,8 +25,8 @@ universal-helm-chart:
     livenessProbe:
       failureThreshold: 5
       initialDelaySeconds: 15
-      periodSeconds: 30
-      timeoutSeconds: 5
+      periodSeconds: 60
+      timeoutSeconds: 30
     readinessProbe:
       initialDelaySeconds: 15
       periodSeconds: 30

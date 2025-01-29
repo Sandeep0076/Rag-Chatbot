@@ -864,8 +864,9 @@ async def long_task():
     """
     import time
 
-    # simulate a long-running task (e.g., 70 seconds)
-    time.sleep(70)
+    # simulate a long-running task (e.g., 50 seconds)
+    # the client should not receive a time out if the timeout_keep_alive is set to 60 seconds
+    time.sleep(50)
     return {"message": "Task completed"}
 
 
