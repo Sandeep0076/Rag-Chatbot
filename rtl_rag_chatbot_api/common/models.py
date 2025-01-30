@@ -51,6 +51,11 @@ class EmbeddingCreationRequest(BaseModel):
     is_image: bool = Field(..., description="Whether the file is an image or not")
 
 
+class EmbeddingsCheckRequest(BaseModel):
+    file_id: str
+    model_choice: str = Field(..., description="The chosen language model")
+
+
 class FileDeleteRequest(BaseModel):
     file_ids: List[str]
 

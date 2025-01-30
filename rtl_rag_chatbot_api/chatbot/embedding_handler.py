@@ -272,6 +272,45 @@ class EmbeddingHandler:
                 "can_chat": False,
             }
 
+    async def check_embeddings_exist(
+        self, file_id: str, model_choice: str
+    ) -> Dict[str, Any]:
+        """
+        Check if embeddings exist for a specific file and model.
+
+        Args:
+            file_id (str): The ID of the file to check
+            model_choice (str): The chosen model (e.g., 'gpt-4', 'gemini-pro')
+
+        Returns:
+            Dict containing:
+                - embeddings_exist (bool): Whether embeddings exist
+                - model_type (str): Type of model (azure/google)
+                - file_id (str): The checked file ID
+        """
+        try:
+            model_choice = model_choice.lower()
+            model_type = "azure" if "gpt" in model_choice else "google"
+            folder_name = "azure" if model_type == "azure" else "google"
+
+            # Check GCS for embeddings
+            gcs_prefix = f"file-embeddings/{file_id}/{folder_name}/"
+            blobs = list(self.gcs_handler.bucket.list_blobs(prefix=gcs_prefix))
+
+            embeddings_exist = len(blobs) > 0 and any(
+                blob.name.endswith("chroma.sqlite3") for blob in blobs
+            )
+
+            return {
+                "embeddings_exist": embeddings_exist,
+                "model_type": model_type,
+                "file_id": file_id,
+            }
+
+        except Exception as e:
+            logging.error(f"Error checking embeddings: {str(e)}")
+            raise Exception(f"Error checking embeddings: {str(e)}")
+
     def _create_azure_embeddings(self, file_id: str, chunks: List[str]):
         """Creates embeddings using Azure OpenAI."""
         logging.info("Generating Azure embeddings...")
