@@ -31,11 +31,15 @@ from starlette_exporter import PrometheusMiddleware, handle_metrics
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot as Chatbot
+from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
 from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.file_handler import FileHandler
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
-from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
+from rtl_rag_chatbot_api.chatbot.gemini_handler import (
+    GeminiHandler,
+    get_gemini_non_rag_response,
+)
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
@@ -520,7 +524,7 @@ def check_db_existence(
         try:
             model = TabularDataHandler(configs, query.file_id, query.model_choice)
             model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
-            initialized_models[model_key] = model
+            initialized_models[model_key] = {"model": model, "is_tabular": is_tabular}
         except ValueError as ve:
             logging.error(f"Error initializing TabularDataHandler: {str(ve)}")
             raise HTTPException(
@@ -620,6 +624,70 @@ def format_table_response(response: list[Any]) -> dict[str, Any]:
     return {"response": "No data found", "is_table": False}
 
 
+def handle_visualization(
+    response: Any,
+    query: Query,
+    is_tabular: bool,
+    configs: dict,
+) -> JSONResponse:
+    """
+    Handle visualization generation for chat responses.
+
+    Args:
+        response: The initial response from the model
+        query: The query object containing user request details
+        is_tabular: Whether the data is tabular
+        configs: Application configuration dictionary
+
+    Returns:
+        JSONResponse containing the chart configuration
+
+    Raises:
+        HTTPException: If visualization generation fails
+    """
+    try:
+        if is_tabular:
+            current_question = query.text[-1] + response + VISUALISATION_PROMPT
+            if query.model_choice.startswith("gemini"):
+                response = get_gemini_non_rag_response(
+                    configs, current_question, query.model_choice
+                )
+            else:
+                response = get_azure_non_rag_response(configs, current_question)
+
+        # Debug logging
+        logging.info(f"Response type: {type(response)}")
+        logging.info(f"Response content: {response}")
+
+        # Parse response into JSON
+        if isinstance(response, str):
+            response = response.replace("True", "true").replace("False", "false")
+            response = response.strip()
+            response = response.replace("```json", "").replace("```", "").strip()
+            chart_config = json.loads(response)
+        else:
+            chart_config = response
+
+        return JSONResponse(
+            content={
+                "chart_config": chart_config,
+                "is_table": False,
+            }
+        )
+    except json.JSONDecodeError as je:
+        logging.error(
+            f"Invalid chart configuration JSON at position {je.pos}: {je.msg}"
+        )
+        logging.error(f"JSON string: {response}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid chart configuration format: {str(je)}",
+        )
+    except Exception as e:
+        logging.error(f"Error generating chart: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to generate chart")
+
+
 @app.post("/file/chat")
 async def chat(query: Query, current_user=Depends(get_current_user)):
     """
@@ -657,7 +725,9 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             )
 
         model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
-        model = initialized_models.get(model_key)
+        model_info = initialized_models.get(model_key)
+        model = model_info["model"] if model_info else None
+        is_tabular = model_info["is_tabular"] if model_info else False
 
         try:
             if not model:
@@ -666,13 +736,16 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                 )
                 if not is_tabular:
                     model = initialize_rag_model(query, configs, gcs_handler, file_info)
-                    initialized_models[model_key] = model
-                    logging.info(
-                        f"Model initialized: {query.file_id}, user: {query.user_id}, model: {query.model_choice}"
-                    )
-            if query.generate_visualization:
-                current_question = query.text[-1] + VISUALISATION_PROMPT
+                initialized_models[model_key] = {
+                    "model": model,
+                    "is_tabular": is_tabular,
+                }
+                logging.info(
+                    f"Model initialized: {query.file_id}, user: {query.user_id}, model: {query.model_choice}"
+                )
 
+            if query.generate_visualization and not is_tabular:
+                current_question = query.text[-1] + VISUALISATION_PROMPT
             else:
                 current_question = query.text[-1]
 
@@ -686,53 +759,13 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                     if len(query.text) > 1
                     else current_question
                 )
-
             response = model.get_answer(chat_context)
 
             if isinstance(response, list):
                 return format_table_response(response)
 
             if query.generate_visualization:
-                try:
-                    # Debug logging to see the response
-                    logging.info(f"Response type: {type(response)}")
-                    logging.info(f"Response content: {response}")
-
-                    # Parse the response string into a JSON object if it's a string
-                    if isinstance(response, str):
-                        # Replace Python boolean values with JSON boolean values
-                        response = response.replace("True", "true").replace(
-                            "False", "false"
-                        )
-                        response = response.strip()
-                        # Remove markdown code block markers if present
-                        response = (
-                            response.replace("```json", "").replace("```", "").strip()
-                        )
-                        chart_config = json.loads(response)
-                    else:
-                        chart_config = response
-
-                    return JSONResponse(
-                        content={
-                            "chart_config": chart_config,  # Return chart_config directly
-                            "is_table": False,
-                        }
-                    )
-                except json.JSONDecodeError as je:
-                    logging.error(
-                        f"Invalid chart configuration JSON at position {je.pos}: {je.msg}"
-                    )
-                    logging.error(f"JSON string: {response}")
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Invalid chart configuration format: {str(je)}",
-                    )
-                except Exception as e:
-                    logging.error(f"Error generating chart: {str(e)}")
-                    raise HTTPException(
-                        status_code=500, detail="Failed to generate chart"
-                    )
+                return handle_visualization(response, query, is_tabular, configs)
 
             return {"response": str(response), "is_table": False}
 

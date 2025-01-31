@@ -66,12 +66,15 @@ def mock_gcs():
 @pytest.fixture
 def mock_gcs_handler():
     with patch("rtl_rag_chatbot_api.chatbot.gcs_handler.GCSHandler") as mock:
-        # Mock file info response
-        mock.return_value.get_file_info.return_value = {
-            "file_id": "test_file_123",
-            "embeddings_status": "completed",
-            "is_image": False,
-        }
+        # Create a mock get_file_info that returns info for any file_id
+        def get_file_info(file_id):
+            return {
+                "file_id": file_id,  # Use the actual file_id
+                "embeddings_status": "completed",
+                "is_image": False,
+            }
+
+        mock.return_value.get_file_info.side_effect = get_file_info
         yield mock
 
 
