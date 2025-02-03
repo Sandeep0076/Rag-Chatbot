@@ -45,6 +45,7 @@ from rtl_rag_chatbot_api.common.models import (
     CleanupRequest,
     DeleteRequest,
     EmbeddingCreationRequest,
+    EmbeddingsCheckRequest,
     FileUploadResponse,
     NeighborsQuery,
     Query,
@@ -497,6 +498,35 @@ async def create_embeddings(
                 "error": str(e),
                 "can_chat": False,
             },
+        )
+
+
+@app.post("/embeddings/check", response_model=Dict[str, Any])
+async def check_embeddings(
+    request: EmbeddingsCheckRequest, current_user=Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Check if embeddings exist for a specific file and model.
+
+    Args:
+        request (EmbeddingsCheckRequest): Request containing file_id and model_choice
+        current_user: Authenticated user information
+
+    Returns:
+        Dict containing:
+            - embeddings_exist (bool): Whether embeddings exist
+            - model_type (str): Type of model (azure/google)
+            - file_id (str): The checked file ID
+    """
+    try:
+        embedding_handler = EmbeddingHandler(configs, gcs_handler)
+        return await embedding_handler.check_embeddings_exist(
+            file_id=request.file_id, model_choice=request.model_choice
+        )
+    except Exception as e:
+        logging.error(f"Error checking embeddings: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error checking embeddings: {str(e)}"
         )
 
 
