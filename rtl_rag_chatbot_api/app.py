@@ -871,11 +871,11 @@ async def long_task():
     - `curl -X GET "http://localhost:8080/long-task" --max-time 30` (wait 30s) which should return a timeout error.
     - `curl -X GET "http://localhost:8080/long-task" --max-time 80` (wait 80s) which should return a success message.
     """
-    # import time
+    import time
 
     # simulate a long-running task (e.g., 50 seconds)
     # the client should not receive a time out if the timeout_keep_alive is set to 60 seconds
-    # time.sleep(50)
+    time.sleep(50)
     return {"message": "Task completed"}
 
 
@@ -892,4 +892,5 @@ def start():
         reload=False,
         log_config="logging_config.json",
         log_level="info",
+        timeout_keep_alive=60,  # maximum time to keep connection alive
     )
