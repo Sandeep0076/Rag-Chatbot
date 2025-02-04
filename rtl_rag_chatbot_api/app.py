@@ -190,13 +190,22 @@ app.add_middleware(
 app.add_route("/metrics", handle_metrics)
 
 
-@app.get("/health")
+@app.get("/internal/healthy")
 async def health():
     """
     Shows application health information.
     In the future this could do some actual checks.
     """
-    return {"status": "up"}
+    return {"status": "healthy"}
+
+
+@app.get("/internal/ready")
+async def ready():
+    """
+    Hit by readiness probes to check if the application is ready to serve traffic.
+    If the API is blocked, due to long running tasks, there is no traffic send to the pod.
+    """
+    return {"status": "ready"}
 
 
 @app.get("/info")
@@ -894,8 +903,9 @@ async def long_task():
     """
     import time
 
-    # simulate a long-running task (e.g., 70 seconds)
-    time.sleep(70)
+    # simulate a long-running task (e.g., 50 seconds)
+    # the client should not receive a time out if the timeout_keep_alive is set to 60 seconds
+    time.sleep(50)
     return {"message": "Task completed"}
 
 

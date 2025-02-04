@@ -15,6 +15,7 @@ universal-helm-chart:
       prometheus.io/probe-scheme: https
       prometheus.io/probe-module: http_3xx_ssl_verify_iap_header
       kyverno.io/require-iap-monitoring-annotations: "ignore"
+    timeoutSec: 120
   deployment:
     scaleDown: true
     # switch back to 2 or 1 replica in dev after release
