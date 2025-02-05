@@ -694,10 +694,6 @@ def handle_visualization(
             else:
                 response = get_azure_non_rag_response(configs, current_question)
 
-        # Debug logging
-        logging.info(f"Response type: {type(response)}")
-        logging.info(f"Response content: {response}")
-
         # Parse response into JSON
         if isinstance(response, str):
             response = response.replace("True", "true").replace("False", "false")
