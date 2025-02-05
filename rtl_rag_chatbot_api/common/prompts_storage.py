@@ -1,4 +1,5 @@
-VISUALISATION_PROMPT = """For the given context, generate a visualization of the data.
+VISUALISATION_PROMPT = """For the given context, generate a visualization of the data. If the context is list,
+dictionary, json or tabularform and have more than 50 rows or columns, then take first 50 rows or columns only.
 Return the information in a structured JSON format that can be used to plot the data in a graph.
 If no chart type is given in context, then generate appropriate chart type based on context.
 
@@ -7,7 +8,7 @@ CRITICAL: Return ONLY the JSON object. DO NOT wrap it in markdown code blocks (`
 Follow this schema strictly:
 
 {
-  "chart_type": "Line Chart | Bar Chart | Pie Chart | Scatter Plot | Histogram | Box Plot | \
+  "chart_type": "Line Chart | Bar Chart | Pie Chart | Scatter Plot | Histogram | Box Plot |
 Heatmap | 3D Scatter Plot | Surface Plot | Bubble Chart",
   "title": "Descriptive chart title",
   "data": {
@@ -106,4 +107,6 @@ Remember:
 - No placeholder values or comments in output
 - Use proper JSON format with double quotes
 - Use true/false (lowercase) for booleans
+- If the context is list, dictionary, json or tabularform and have more than 50 rows or columns,
+then take first 50 rows or columns only.
 """

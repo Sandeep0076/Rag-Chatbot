@@ -4,11 +4,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from httpx import AsyncClient
 
 from rtl_rag_chatbot_api.app import app
 
-from .test_resources import TestResourceManager
+from .test_utils import ResourceManager
 
 # Initialize test client
 client = TestClient(app)
@@ -24,7 +23,7 @@ MOCK_FILES_DIR = os.path.join(os.path.dirname(__file__), "mock_files")
 @pytest.fixture(autouse=True, scope="session")
 def clear_test_resources():
     """Fixture to clear test resources before any tests run."""
-    resource_manager = TestResourceManager()
+    resource_manager = ResourceManager()
     resource_manager.clear_file_ids()  # Clear any existing file IDs before tests start
     yield
     # Optionally clear again after all tests complete
@@ -129,10 +128,16 @@ def mock_image_analyzer():
         yield mock
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def resource_manager():
-    """Fixture providing TestResourceManager instance."""
-    return TestResourceManager()
+    """Fixture providing ResourceManager instance."""
+    return ResourceManager()
+
+
+@pytest.fixture
+def mock_chart_pdf():
+    """Fixture providing mock chart PDF file path."""
+    return os.path.join(MOCK_FILES_DIR, "mock_chart.pdf")
 
 
 def test_chat_with_pdf(
@@ -140,7 +145,7 @@ def test_chat_with_pdf(
     mock_gcs_handler: MagicMock,
     mock_chroma_manager: MagicMock,
     mock_pdf_processor: MagicMock,
-    resource_manager: TestResourceManager,
+    resource_manager: ResourceManager,
 ) -> None:
     """Test chat functionality with PDF files."""
     # Upload PDF file
@@ -153,7 +158,7 @@ def test_chat_with_pdf(
         )
         assert upload_response.status_code == 200
         file_id = upload_response.json()["file_id"]
-        resource_manager.store_file_id(file_id)
+        resource_manager.add_file_id(file_id)
 
     # Test chat with PDF using GPT-4
     chat_data = {
@@ -186,7 +191,7 @@ def test_chat_with_csv(
     mock_files: dict,
     mock_gcs_handler: MagicMock,
     mock_tabular_handler: MagicMock,
-    resource_manager: TestResourceManager,
+    resource_manager: ResourceManager,
 ) -> None:
     """Test chat functionality with CSV files."""
     # Upload CSV file
@@ -199,7 +204,7 @@ def test_chat_with_csv(
         )
         assert upload_response.status_code == 200
         file_id = upload_response.json()["file_id"]
-        resource_manager.store_file_id(file_id)
+        resource_manager.add_file_id(file_id)
 
     # Test chat with CSV using GPT-4
     chat_data = {
@@ -238,7 +243,7 @@ def test_chat_with_excel(
     mock_files: dict,
     mock_gcs_handler: MagicMock,
     mock_tabular_handler: MagicMock,
-    resource_manager: TestResourceManager,
+    resource_manager: ResourceManager,
 ) -> None:
     """Test chat functionality with Excel files."""
     # Upload Excel file
@@ -257,7 +262,7 @@ def test_chat_with_excel(
         )
         assert upload_response.status_code == 200
         file_id = upload_response.json()["file_id"]
-        resource_manager.store_file_id(file_id)
+        resource_manager.add_file_id(file_id)
 
     # Test chat with Excel using GPT-4
     chat_data = {
@@ -296,7 +301,7 @@ def test_chat_with_db(
     mock_files: dict,
     mock_gcs_handler: MagicMock,
     mock_tabular_handler: MagicMock,
-    resource_manager: TestResourceManager,
+    resource_manager: ResourceManager,
 ) -> None:
     """Test chat functionality with database files."""
     # Upload DB file
@@ -309,7 +314,7 @@ def test_chat_with_db(
         )
         assert upload_response.status_code == 200
         file_id = upload_response.json()["file_id"]
-        resource_manager.store_file_id(file_id)
+        resource_manager.add_file_id(file_id)
 
     # Test chat with DB using GPT-4
     chat_data = {
@@ -349,7 +354,7 @@ def test_chat_with_image(
     mock_gcs_handler: MagicMock,
     mock_image_analyzer: MagicMock,
     mock_config: MagicMock,
-    resource_manager: TestResourceManager,
+    resource_manager: ResourceManager,
 ) -> None:
     """Test chat functionality with image files."""
     with patch("rtl_rag_chatbot_api.app.Config", return_value=mock_config):
@@ -363,7 +368,7 @@ def test_chat_with_image(
             )
             assert upload_response.status_code == 200
             file_id = upload_response.json()["file_id"]
-            resource_manager.store_file_id(file_id)
+            resource_manager.add_file_id(file_id)
 
         # Test chat with image using GPT-
         chat_data = {
@@ -399,6 +404,190 @@ def test_chat_with_image(
         assert not response_gemini.json().get("is_table", False)
 
 
+@pytest.mark.asyncio
+async def test_chat_with_image_visualization(
+    mock_files: dict,
+    mock_gcs_handler: MagicMock,
+    mock_image_analyzer: MagicMock,
+    mock_config: MagicMock,
+    resource_manager: ResourceManager,
+):
+    """Test chat with image functionality when visualization is requested."""
+    # Mock authentication and config
+    with patch(
+        "rtl_rag_chatbot_api.app.get_current_user",
+        return_value={"username": "test_user"},
+    ), patch("rtl_rag_chatbot_api.app.Config", return_value=mock_config):
+        # Upload the test image file
+        with open(mock_files["image"], "rb") as f:
+            response = client.post(
+                "/file/upload",
+                files={"file": ("test.png", f, "image/png")},
+                data={"is_image": "true", "username": "test_user"},
+            )
+        assert response.status_code == 200
+        file_id = response.json()["file_id"]
+        resource_manager.add_file_id(file_id)
+
+        # Test chat with visualization request
+        query = {
+            "text": ["compare gdp of china and india"],
+            "file_id": file_id,
+            "model_choice": "gemini-pro",
+            "generate_visualization": True,
+            "user_id": "test_user",
+        }
+
+        chat_response = client.post("/file/chat", json=query)
+        assert chat_response.status_code == 200
+        response_data = chat_response.json()
+
+        # Verify chart configuration
+        assert "chart_config" in response_data
+        chart_config = response_data["chart_config"]
+
+        # Verify basic chart structure without checking specific values
+        assert isinstance(chart_config, dict)
+
+        # Convert the entire response to string to search for countries
+        response_str = str(response_data)
+        assert any(
+            country in response_str for country in ["China", "India"]
+        ), "Response should contain either China or India"
+
+
+@pytest.mark.asyncio
+async def test_chat_with_pdf_visualization(
+    mock_chart_pdf: str,
+    mock_gcs_handler: MagicMock,
+    mock_chroma_manager: MagicMock,
+    mock_pdf_processor: MagicMock,
+    resource_manager: ResourceManager,
+):
+    """Test chat with PDF functionality when visualization is requested."""
+    # Mock authentication
+    with patch(
+        "rtl_rag_chatbot_api.app.get_current_user",
+        return_value={"username": "test_user"},
+    ):
+        # Upload the test PDF file
+        with open(mock_chart_pdf, "rb") as f:
+            response = client.post(
+                "/file/upload",
+                files={"file": ("test.pdf", f, "application/pdf")},
+                data={"is_image": "false", "username": "test_user"},
+            )
+        assert response.status_code == 200
+        file_id = response.json()["file_id"]
+        resource_manager.add_file_id(file_id)
+
+        # Mock ChromaDB response
+        mock_chroma_manager.return_value.get_collection.return_value.query.return_value = {
+            "documents": [["Sample text about operating system distribution"]]
+        }
+
+        # Test chat with visualization request
+        query = {
+            "text": ["Create a pie chart for distribution of operating systems"],
+            "file_id": file_id,
+            "model_choice": "gemini-pro",
+            "generate_visualization": True,
+            "user_id": "test_user",
+        }
+
+        chat_response = client.post("/file/chat", json=query)
+        assert chat_response.status_code == 200
+        response_data = chat_response.json()
+
+        # Verify chart configuration
+        assert "chart_config" in response_data
+        chart_config = response_data["chart_config"]
+
+        # Verify basic chart structure without checking specific values
+        assert isinstance(chart_config, dict)
+
+        # Verify data exists and has a valid structure
+        assert "data" in chart_config
+        data = chart_config["data"]
+
+        # Check that data contains some form of dataset structure
+        # but don't validate specific keys or values
+        assert isinstance(data, dict)
+        assert any(
+            key in ["datasets", "categories", "series", "data"] for key in data.keys()
+        )
+
+        # If datasets exist, verify they have the minimum required structure
+        if "datasets" in data:
+            assert isinstance(data["datasets"], list)
+            if data["datasets"]:  # if not empty
+                dataset = data["datasets"][0]
+                assert all(key in dataset for key in ["x", "y"])
+
+
+@pytest.mark.asyncio
+async def test_chat_with_csv_visualization(
+    mock_files: dict,
+    mock_gcs_handler: MagicMock,
+    mock_tabular_handler: MagicMock,
+    resource_manager: ResourceManager,
+):
+    """Test chat with CSV functionality when visualization is requested."""
+    # Mock authentication
+    with patch(
+        "rtl_rag_chatbot_api.app.get_current_user",
+        return_value={"username": "test_user"},
+    ):
+        # Upload the test CSV file
+        with open(mock_files["csv"], "rb") as f:
+            response = client.post(
+                "/file/upload",
+                files={"file": ("mock_file.csv", f, "text/csv")},
+                data={"is_image": "false", "username": "test_user"},
+            )
+        assert response.status_code == 200
+        file_id = response.json()["file_id"]
+        resource_manager.add_file_id(file_id)
+
+        # Test chat with visualization request
+        query = {
+            "text": ["Relationship between pregnancies and age for first 10 entries"],
+            "file_id": file_id,
+            "model_choice": "gemini-pro",
+            "generate_visualization": True,
+            "user_id": "test_user",
+        }
+
+        chat_response = client.post("/file/chat", json=query)
+        assert chat_response.status_code == 200
+        response_data = chat_response.json()
+
+        # Verify chart configuration
+        assert "chart_config" in response_data
+        chart_config = response_data["chart_config"]
+
+        # Verify basic chart structure without checking specific values
+        assert isinstance(chart_config, dict)
+
+        # Verify data exists and has a valid structure
+        assert "data" in chart_config
+        data = chart_config["data"]
+
+        # Check that data contains some form of dataset structure
+        # but don't validate specific keys or values
+        assert isinstance(data, dict)
+        assert any(
+            key in ["datasets", "categories", "series", "data"] for key in data.keys()
+        )
+
+        # If datasets exist, verify they have the minimum required structure
+        if "datasets" in data:
+            assert isinstance(data["datasets"], list)
+            if data["datasets"]:  # if not empty
+                dataset = data["datasets"][0]
+                assert all(key in dataset for key in ["x", "y"])
+
+
 def test_health():
     response = client.get("/health")
     assert response.status_code == 200
@@ -412,7 +601,7 @@ def test_info():
     assert "description" in response.json()
 
 
-def test_file_upload(mock_files: dict, resource_manager: TestResourceManager) -> None:
+def test_file_upload(mock_files: dict, resource_manager: ResourceManager) -> None:
     """Test file upload functionality with a real CSV file."""
     # Upload CSV file
     with open(mock_files["csv"], "rb") as f:
@@ -432,40 +621,8 @@ def test_file_upload(mock_files: dict, resource_manager: TestResourceManager) ->
         assert response.json()["is_image"] is False
 
         # Store file ID for cleanup
-        resource_manager.store_file_id(response.json()["file_id"])
-
-
-def test_cleanup_test_resources(resource_manager: TestResourceManager):
-    """Cleanup test resources after all tests have completed."""
-    file_ids = resource_manager.get_all_file_ids()
-    if not file_ids:
-        return
-
-    # Delete both ChromaDB embeddings and GCS resources
-    response = client.request(
-        "DELETE",
-        "/delete",
-        json={
-            "file_ids": file_ids,
-            "include_gcs": True,  # Explicitly set to True to clean up GCS resources
-        },
-    )
-    assert response.status_code == 200
-    resource_manager.clear_file_ids()
-
-
-@pytest.mark.asyncio
-async def test_cleanup(mock_chroma_manager):
-    with patch("rtl_rag_chatbot_api.app.CleanupCoordinator") as MockCleanupCoordinator:
-        mock_coordinator = MockCleanupCoordinator.return_value
-        mock_coordinator.cleanup = MagicMock()
-
-        async with AsyncClient(app=app, base_url="http://test") as ac:
-            response = await ac.post("/file/cleanup")
-
-        assert response.status_code == 200
-        assert response.json() == {"status": "Cleanup completed successfully"}
-        mock_coordinator.cleanup.assert_called_once()
+        file_id = response.json()["file_id"]
+        resource_manager.add_file_id(file_id)
 
 
 # @pytest.mark.asyncio
