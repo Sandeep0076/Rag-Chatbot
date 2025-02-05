@@ -15,3 +15,4 @@ git_commits.txt
 .aider*
 version_doc/
 .cursorignore
+tests/test_file_ids.json

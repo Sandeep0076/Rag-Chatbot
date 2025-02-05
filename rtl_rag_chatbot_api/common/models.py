@@ -8,6 +8,9 @@ class Query(BaseModel):
     file_id: str
     model_choice: str = Field(..., description="The chosen language model")
     user_id: str
+    generate_visualization: bool = Field(
+        False, description="Whether to generate visualization"
+    )
     model_config = {"protected_namespaces": ()}
 
 

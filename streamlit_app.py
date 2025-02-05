@@ -1,6 +1,4 @@
-import base64
-from io import BytesIO
-
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 from PIL import Image
@@ -35,6 +33,13 @@ def handle_file_upload():
 
     st.session_state.file_type = st.radio(
         "Select file type:", ["PDF", "CSV/Excel", "Database", "Image"], horizontal=True
+    )
+
+    # Add Generate Visualization radio button
+    st.session_state.generate_visualization = st.radio(
+        "Generate Visualization",
+        options=[False, True],
+        index=0,  # Default to False
     )
 
     is_image = st.session_state.file_type == "Image"
@@ -120,10 +125,6 @@ def display_chat_interface():
                     st.markdown(message["content"])
                 else:
                     st.write(message["content"])
-                if "chart_data" in message:
-                    image_data = base64.b64decode(message["chart_data"]["chart_data"])
-                    image = Image.open(BytesIO(image_data))
-                    st.image(image, caption=message["chart_data"]["chart_title"])
 
         user_input = st.chat_input("Enter your message")
 
@@ -145,50 +146,45 @@ def display_chat_interface():
                     "file_id": st.session_state.file_id,
                     "model_choice": st.session_state.model_choice,
                     "user_id": st.session_state.username,
+                    "generate_visualization": st.session_state.generate_visualization,
                 }
                 chat_response = requests.post(f"{API_URL}/file/chat", json=chat_payload)
 
                 if chat_response.status_code == 200:
                     chat_result = chat_response.json()
 
-                    # Display chat response
-                    ai_message = {
-                        "role": "assistant",
-                        "content": chat_result["response"],
-                    }
-                    if "chart_data" in chat_result:
-                        ai_message["chart_data"] = chat_result["chart_data"]
-                    st.session_state.messages.append(ai_message)
-
-                    with st.chat_message("assistant"):
-                        # Handle table formatting if response appears to be a markdown table
-                        if (
-                            isinstance(chat_result["response"], str)
-                            and "|" in chat_result["response"]
-                            and "\n" in chat_result["response"]
-                        ):
-                            st.markdown(chat_result["response"])
-                        else:
-                            st.markdown(chat_result["response"])
-                        st.markdown(f"Model: **{st.session_state.model_choice}**")
-                        if "chart_data" in chat_result:
-                            chart_data = chat_result["chart_data"]["chart_data"]
-                            image_data = base64.b64decode(chart_data)
-                            image = Image.open(BytesIO(image_data))
-                            st.image(
-                                image, caption=chat_result["chart_data"]["chart_title"]
-                            )
-
-                    # Display image in sidebar if it's an image file
+                    # Handle visualization data
                     if (
-                        st.session_state.file_type == "Image"
-                        and st.session_state.uploaded_image is not None
+                        st.session_state.generate_visualization
+                        and "chart_config" in chat_result
                     ):
-                        with st.sidebar:
-                            st.subheader("Uploaded Image:")
-                            img = Image.open(st.session_state.uploaded_image)
-                            st.image(img, use_column_width=True)
+                        try:
+                            chart_config = chat_result["chart_config"]
+                            # Create message for chat history
+                            ai_message = {
+                                "role": "assistant",
+                                "content": (
+                                    f"Generated {chart_config['chart_type']} "
+                                    f"visualization: {chart_config['title']}"
+                                ),
+                            }
+                            st.session_state.messages.append(ai_message)
 
+                            with st.chat_message("assistant"):
+                                fig = plot_chart(chart_config)
+                                st.plotly_chart(fig)
+                        except Exception as e:
+                            st.error(f"Error creating chart: {str(e)}")
+                            st.write("Raw chart data:", chart_config)
+                    # Handle regular text response
+                    else:
+                        ai_message = {
+                            "role": "assistant",
+                            "content": chat_result.get("response", str(chat_result)),
+                        }
+                        st.session_state.messages.append(ai_message)
+                        with st.chat_message("assistant"):
+                            st.write(ai_message["content"])
                 else:
                     st.error(f"Request failed: {chat_response.text}")
     else:
@@ -214,6 +210,8 @@ def initialize_session_state():
         st.session_state.file_type = "PDF"
     if "uploaded_image" not in st.session_state:
         st.session_state.uploaded_image = None
+    if "generate_visualization" not in st.session_state:
+        st.session_state.generate_visualization = False
 
 
 def on_model_change():
@@ -244,6 +242,151 @@ def initialize_model(model_choice):
             st.success(
                 f"Model {model_choice} selected. Please upload a file to initialize."
             )
+
+
+def create_line_chart(dataset, title, labels):
+    fig = go.Figure()
+    for data in dataset:
+        fig.add_trace(
+            go.Scatter(
+                x=data["x"], y=data["y"], name=data["label"], mode="lines+markers"
+            )
+        )
+    fig.update_layout(title=title, xaxis_title=labels["x"], yaxis_title=labels["y"])
+    return fig
+
+
+def create_bar_chart(data, title, labels, options=None):
+    fig = go.Figure()
+
+    # Handle simplified format (values/categories)
+    if "values" in data and "categories" in data:
+        fig.add_trace(go.Bar(x=data["categories"], y=data["values"], name="Value"))
+    # Handle datasets format
+    elif "datasets" in data:
+        for dataset in data["datasets"]:
+            fig.add_trace(go.Bar(x=dataset["x"], y=dataset["y"], name=dataset["label"]))
+    else:
+        raise ValueError(
+            "Invalid data format for bar chart. Must have either 'values' and 'categories' or 'datasets'"
+        )
+
+    if options and options.get("stacked", False):
+        fig.update_layout(barmode="stack")
+
+    fig.update_layout(title=title, xaxis_title=labels["x"], yaxis_title=labels["y"])
+    return fig
+
+
+def create_pie_chart(data, title):
+    fig = go.Figure(go.Pie(values=data["values"], labels=data["categories"], hole=0.3))
+    fig.update_layout(title=title)
+    return fig
+
+
+def create_scatter_plot(dataset, title, labels, is_3d=False):
+    fig = go.Figure()
+    for data in dataset:
+        if is_3d:
+            fig.add_trace(
+                go.Scatter3d(
+                    x=data["x"],
+                    y=data["y"],
+                    z=data["z"],
+                    name=data["label"],
+                    mode="markers",
+                )
+            )
+        else:
+            scatter_args = {
+                "x": data["x"],
+                "y": data["y"],
+                "name": data["label"],
+                "mode": "markers",
+            }
+            if "size" in data:  # For bubble charts
+                scatter_args["marker"] = {"size": data["size"]}
+            if "color" in data:
+                scatter_args["marker"] = scatter_args.get("marker", {})
+                scatter_args["marker"]["color"] = data["color"]
+
+            fig.add_trace(go.Scatter(**scatter_args))
+
+    layout_args = {"title": title}
+    if is_3d:
+        layout_args.update(
+            {
+                "scene": {
+                    "xaxis_title": labels["x"],
+                    "yaxis_title": labels["y"],
+                    "zaxis_title": labels["z"],
+                }
+            }
+        )
+    else:
+        layout_args.update({"xaxis_title": labels["x"], "yaxis_title": labels["y"]})
+
+    fig.update_layout(**layout_args)
+    return fig
+
+
+def create_heatmap(data, title, labels):
+    fig = go.Figure(
+        go.Heatmap(
+            z=data["matrix"],
+            x=data.get("x_categories"),
+            y=data.get("y_categories"),
+            colorscale=data.get("options", {}).get("color_palette", "Viridis"),
+        )
+    )
+    fig.update_layout(title=title, xaxis_title=labels["x"], yaxis_title=labels["y"])
+    return fig
+
+
+def create_box_plot(dataset, title, labels):
+    fig = go.Figure()
+    for data in dataset:
+        fig.add_trace(
+            go.Box(
+                x=data["x"] if "x" in data else None, y=data["y"], name=data["label"]
+            )
+        )
+    fig.update_layout(title=title, xaxis_title=labels["x"], yaxis_title=labels["y"])
+    return fig
+
+
+def create_histogram(data, title, labels):
+    fig = go.Figure(go.Histogram(x=data["values"], nbinsx=30))
+    fig.update_layout(title=title, xaxis_title=labels["x"], yaxis_title="Count")
+    return fig
+
+
+def plot_chart(chart_config):
+    """Create and return a plotly figure based on the chart configuration."""
+    chart_type = chart_config["chart_type"].lower()
+    title = chart_config["title"]
+    data = chart_config["data"]
+    labels = chart_config["labels"]
+    options = chart_config.get("options", {})
+
+    chart_creators = {
+        "line chart": lambda: create_line_chart(data["datasets"], title, labels),
+        "bar chart": lambda: create_bar_chart(data, title, labels, options),
+        "pie chart": lambda: create_pie_chart(data, title),
+        "scatter plot": lambda: create_scatter_plot(data["datasets"], title, labels),
+        "3d scatter plot": lambda: create_scatter_plot(
+            data["datasets"], title, labels, is_3d=True
+        ),
+        "bubble chart": lambda: create_scatter_plot(data["datasets"], title, labels),
+        "heatmap": lambda: create_heatmap(data, title, labels),
+        "box plot": lambda: create_box_plot(data["datasets"], title, labels),
+        "histogram": lambda: create_histogram(data, title, labels),
+    }
+
+    if chart_type not in chart_creators:
+        raise ValueError(f"Unsupported chart type: {chart_type}")
+
+    return chart_creators[chart_type]()
 
 
 def main():
