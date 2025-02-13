@@ -13,16 +13,9 @@ from typing import Any, Dict, Tuple
 
 import uvicorn
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import (
-    BackgroundTasks,
-    Body,
-    Depends,
-    FastAPI,
-    File,
-    Form,
-    HTTPException,
-    UploadFile,
-)
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, File, Form, HTTPException
+from fastapi import Query as QueryParam
+from fastapi import UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import create_engine
@@ -1029,6 +1022,54 @@ async def long_task():
     # the client should not receive a time out if the timeout_keep_alive is set to 60 seconds
     time.sleep(50)
     return {"message": "Task completed"}
+
+
+@app.delete("/delete-google-embeddings")
+async def delete_google_embeddings(current_user=Depends(get_current_user)):
+    """
+    Delete all Google embeddings from the GCS bucket.
+    This endpoint removes only the 'google' folders within each file ID directory in file-embeddings.
+
+    Returns:
+        dict: A message indicating the number of file IDs processed
+    """
+    try:
+        gcs_handler = GCSHandler(Config())
+        result = gcs_handler.delete_google_embeddings()
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete Google embeddings: {str(e)}"
+        )
+
+
+@app.get("/find-file-by-name")
+def find_file_by_name(
+    filename: str = QueryParam(..., description="Original filename to search for"),
+    current_user=Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Find a file_id by searching through all file_info.json files for a matching original_filename.
+
+    Args:
+        filename (str): The original filename to search for
+        current_user: Authenticated user information
+
+    Returns:
+        dict: Dictionary containing:
+            - file_id (Optional[str]): The file ID if found, null otherwise
+            - found (bool): Whether the file was found
+    """
+    try:
+        gcs_handler = GCSHandler(configs)
+        file_id = gcs_handler.find_file_by_original_name(filename)
+
+        return {"file_id": file_id, "found": file_id is not None}
+    except Exception as e:
+        logging.error(f"Error in find_file_by_name: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Error searching for file: {str(e)}"
+        )
 
 
 def start():

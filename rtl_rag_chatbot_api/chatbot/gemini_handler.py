@@ -188,7 +188,7 @@ def get_gemini_non_rag_response(config, prompt: str, model_choice: str) -> str:
         }
 
         # Add system message to enforce direct responses
-        system_prompt = config.system_prompt_plain_llm + "\nUSER QUERY:\n"
+        system_prompt = config.chatbot.system_prompt_plain_llm + "\nUSER QUERY:\n"
 
         full_prompt = system_prompt + prompt
 

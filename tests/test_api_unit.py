@@ -49,6 +49,17 @@ def mock_config():
     mock_config.gemini.model_pro = "gemini-pro"
     mock_config.gemini.model_pro_vision = "gemini-pro-vision"
     mock_config.gemini.api_key = "test-api-key"
+
+    # Add chatbot configuration
+    mock_config.chatbot = MagicMock()
+    mock_config.chatbot.system_prompt_plain_llm = (
+        "You are a helpful assistant that provides accurate and relevant "
+        "information based on the given data."
+    )
+    mock_config.chatbot.system_prompt_rag_llm = (
+        "You are a helpful assistant that provides accurate and relevant "
+        "information based on the retrieved context."
+    )
     return mock_config
 
 
@@ -589,9 +600,9 @@ async def test_chat_with_csv_visualization(
 
 
 def test_health():
-    response = client.get("/health")
+    response = client.get("/internal/healthy")
     assert response.status_code == 200
-    assert response.json() == {"status": "up"}
+    assert response.json() == {"status": "healthy"}
 
 
 def test_info():
