@@ -267,8 +267,11 @@ async def upload_file(
                 },
             )
 
-        # Create embeddings for PDF and Image files in background
-        elif file_extension == ".pdf" or is_image:
+        # Create embeddings for PDF, Image, and Text files in background
+        elif file_extension in [".pdf", ".txt", ".doc", ".docx"] or is_image:
+            logging.info(
+                f"Creating embeddings for file: {original_filename} with extension {file_extension}"
+            )
             if result["status"] != "existing":  # Only create embeddings for new files
                 background_tasks.add_task(
                     create_embeddings_background,
@@ -278,6 +281,7 @@ async def upload_file(
                     configs=configs,
                     SessionLocal=SessionLocal,
                 )
+                logging.info(f"Added embedding creation task for file: {file_id}")
 
         # Clean up temporary file in background
         if temp_file_path and os.path.exists(temp_file_path):

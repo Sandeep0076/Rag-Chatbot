@@ -32,7 +32,9 @@ def handle_file_upload():
         return
 
     st.session_state.file_type = st.radio(
-        "Select file type:", ["PDF", "CSV/Excel", "Database", "Image"], horizontal=True
+        "Select file type:",
+        ["PDF", "Text", "CSV/Excel", "Database", "Image"],
+        horizontal=True,
     )
 
     # Add Generate Visualization radio button
@@ -48,6 +50,7 @@ def handle_file_upload():
         "CSV/Excel": ["xlsx", "xls", "csv"],
         "Database": ["db", "sqlite"],
         "PDF": ["pdf"],
+        "Text": ["txt", "doc", "docx"],
     }[st.session_state.file_type]
 
     # Display help text for database files
