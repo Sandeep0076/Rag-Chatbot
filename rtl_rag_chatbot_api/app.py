@@ -1028,23 +1028,23 @@ async def long_task():
     return {"message": "Task completed"}
 
 
-@app.delete("/delete-google-embeddings")
-async def delete_google_embeddings(current_user=Depends(get_current_user)):
-    """
-    Delete all Google embeddings from the GCS bucket.
-    This endpoint removes only the 'google' folders within each file ID directory in file-embeddings.
+# @app.delete("/delete-google-embeddings")
+# async def delete_google_embeddings(current_user=Depends(get_current_user)):
+#     """
+#     Delete all Google embeddings from the GCS bucket.
+#     This endpoint removes only the 'google' folders within each file ID directory in file-embeddings.
 
-    Returns:
-        dict: A message indicating the number of file IDs processed
-    """
-    try:
-        gcs_handler = GCSHandler(Config())
-        result = gcs_handler.delete_google_embeddings()
-        return result
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to delete Google embeddings: {str(e)}"
-        )
+#     Returns:
+#         dict: A message indicating the number of file IDs processed
+#     """
+#     try:
+#         gcs_handler = GCSHandler(Config())
+#         result = gcs_handler.delete_google_embeddings()
+#         return result
+#     except Exception as e:
+#         raise HTTPException(
+#             status_code=500, detail=f"Failed to delete Google embeddings: {str(e)}"
+#         )
 
 
 @app.get("/find-file-by-name")
