@@ -39,6 +39,7 @@ def mock_files() -> dict:
         "excel": os.path.join(MOCK_FILES_DIR, "mock_file.xlsx"),
         "image": os.path.join(MOCK_FILES_DIR, "mock_file.png"),
         "db": os.path.join(MOCK_FILES_DIR, "mock_file.sqlite"),
+        "text": os.path.join(MOCK_FILES_DIR, "mock_txt.txt"),
     }
 
 
@@ -597,6 +598,53 @@ async def test_chat_with_csv_visualization(
             if data["datasets"]:  # if not empty
                 dataset = data["datasets"][0]
                 assert all(key in dataset for key in ["x", "y"])
+
+
+def test_chat_with_doc(
+    mock_files: dict,
+    mock_gcs_handler: MagicMock,
+    mock_chroma_manager: MagicMock,
+    mock_pdf_processor: MagicMock,
+    resource_manager: ResourceManager,
+) -> None:
+    """Test chat functionality with text document files."""
+    # Upload text file
+    with open(mock_files["text"], "rb") as f:
+        files = {"file": ("mock_txt.txt", f, "text/plain")}
+        upload_response = client.post(
+            "/file/upload",
+            files=files,
+            data={"is_image": "false", "username": "test_user"},
+        )
+        assert upload_response.status_code == 200
+        file_id = upload_response.json()["file_id"]
+        resource_manager.add_file_id(file_id)
+
+    # Test chat with text document using GPT-4
+    chat_data = {
+        "text": ["How many mangoes are there in Garden"],
+        "file_id": file_id,
+        "model_choice": "gpt_4o_mini",
+        "user_id": "test_user",
+    }
+    response = client.post("/file/chat", json=chat_data)
+    assert response.status_code == 200
+    assert "response" in response.json()
+    assert "50" in response.json()["response"]
+    assert not response.json().get("is_table", False)
+
+    # Test chat with text document using Gemini Pro
+    chat_data_gemini = {
+        "text": ["How many mangoes are there in Garden"],
+        "file_id": file_id,
+        "model_choice": "gemini-pro",
+        "user_id": "test_user",
+    }
+    response_gemini = client.post("/file/chat", json=chat_data_gemini)
+    assert response_gemini.status_code == 200
+    assert "response" in response_gemini.json()
+    assert "50" in response_gemini.json()["response"]
+    assert not response_gemini.json().get("is_table", False)
 
 
 def test_health():
