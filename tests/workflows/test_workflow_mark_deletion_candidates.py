@@ -5,7 +5,7 @@ from sqlalchemy import and_, create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from workflows.db.helpers import iso8601_timestamp_now
+from workflows.db.helpers import datetime_from_iso8601_timestamp, iso8601_timestamp_now
 from workflows.db.tables import Base, User
 from workflows.workflow import (
     get_users,
@@ -123,12 +123,12 @@ def test_mark_deletion_candidates(
 
         # query for the users who should be marked for deletion
         user = session.query(User).filter(User.email == "user2@example.com").first()
-        assert (
-            user.wf_deletion_candidate is True
-        ), "User 2 should be marked for deletion."
-        assert (
-            user.wf_deletion_timestamp == mock_datetime_now
-        ), "User 2 should have the correct deletion timestamp."
+        assert user.wf_deletion_candidate is True, (
+            "User 2 should be marked for deletion."
+        )
+        assert user.wf_deletion_timestamp == mock_datetime_now, (
+            "User 2 should have the correct deletion timestamp."
+        )
 
         # assert that other users are not marked for deletion
         for user in session.query(User).filter(
@@ -141,9 +141,9 @@ def test_mark_deletion_candidates(
                 User.email != "user6@example.com",
             )
         ):
-            assert (
-                user.wf_deletion_candidate is False
-            ), f"{user.email} should not be marked for deletion."
+            assert user.wf_deletion_candidate is False, (
+                f"{user.email} should not be marked for deletion."
+            )
 
 
 @patch("workflows.workflow.get_db_session")
@@ -175,4 +175,7 @@ def test_already_marked_users(
         assert user5.wf_deletion_candidate is True
         # user5 already marked and timestamp must keep its value
         assert user5.wf_deletion_timestamp != iso8601_timestamp_now
-        assert user5.wf_deletion_timestamp == "2024-08-01T08:00:00.000Z"
+        assert (
+            datetime_from_iso8601_timestamp(iso8601_timestamp_now())
+            - datetime_from_iso8601_timestamp(user5.wf_deletion_timestamp)
+        ).days > 28, "User 5's deletion timestamp should be older than 4 weeks."

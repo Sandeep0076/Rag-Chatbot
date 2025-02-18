@@ -3,11 +3,10 @@ INSERT INTO User (id, email, name) VALUES ('user1_id', 'user1@example.com', 'Use
 INSERT INTO User (id, email, name) VALUES ('user2_id', 'user2@example.com', 'User 2');
 INSERT INTO User (id, email, name) VALUES ('user3_id', 'user3@example.com', 'User 3');
 -- user marked as deletion candidate, but should not be deleted because timestamp is lower than 4 week
--- TODO The date being fixed here might cause problems in future
-INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user4_id', 'user4@example.com', 'User 4', True, '2024-09-27T08:00:00.000Z');
+INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user4_id', 'user4@example.com', 'User 4', True, TIMESTAMP_LESS_THAN_4_WEEKS);
 -- user marked and timestamp older than 4 weeks
-INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user5_id', 'user5@example.com', 'User 5', True, '2024-08-01T08:00:00.000Z');
-INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user6_id', 'user6@example.com', 'User 6', True, '2024-08-04T08:00:00.000Z');
+INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user5_id', 'user5@example.com', 'User 5', True, TIMESTAMP_MORE_THAN_4_WEEKS);
+INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user6_id', 'user6@example.com', 'User 6', True, TIMESTAMP_MORE_THAN_4_WEEKS);
 
 -- Insert Models
 INSERT INTO Model (id, name, maxLength, tokenLimit) VALUES ('model1_id', 'GPT-4', 2048, 4096);
