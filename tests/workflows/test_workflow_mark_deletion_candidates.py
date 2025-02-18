@@ -123,12 +123,12 @@ def test_mark_deletion_candidates(
 
         # query for the users who should be marked for deletion
         user = session.query(User).filter(User.email == "user2@example.com").first()
-        assert user.wf_deletion_candidate is True, (
-            "User 2 should be marked for deletion."
-        )
-        assert user.wf_deletion_timestamp == mock_datetime_now, (
-            "User 2 should have the correct deletion timestamp."
-        )
+        assert (
+            user.wf_deletion_candidate is True
+        ), "User 2 should be marked for deletion."
+        assert (
+            user.wf_deletion_timestamp == mock_datetime_now
+        ), "User 2 should have the correct deletion timestamp."
 
         # assert that other users are not marked for deletion
         for user in session.query(User).filter(
@@ -141,9 +141,9 @@ def test_mark_deletion_candidates(
                 User.email != "user6@example.com",
             )
         ):
-            assert user.wf_deletion_candidate is False, (
-                f"{user.email} should not be marked for deletion."
-            )
+            assert (
+                user.wf_deletion_candidate is False
+            ), f"{user.email} should not be marked for deletion."
 
 
 @patch("workflows.workflow.get_db_session")
