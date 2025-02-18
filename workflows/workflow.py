@@ -3,14 +3,16 @@ import inspect
 import logging
 import os
 from contextlib import contextmanager
-from typing import Dict
+from typing import Dict, List
 
 from sqlalchemy import and_, create_engine, distinct
 from sqlalchemy.orm import sessionmaker
 
 import workflows.db.helpers as db_helpers
 import workflows.msgraph as msgraph
+from workflows.app_config import config
 from workflows.db.tables import Conversation, Folder, Message, User
+from workflows.gcs.helpers import delete_embeddings, file_present_in_gcp
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s/%(funcName)s - %(message)s"
@@ -45,7 +47,9 @@ def get_users():
 
 
 def get_users_deletion_candicates():
-    """"""
+    """
+    Returns a list of users marked as deletion candidates in database which are marked for more than 4 weeks.
+    """
     with get_db_session() as session:
         # get all users
         users = (
@@ -67,9 +71,8 @@ def get_users_deletion_candicates():
         return filtered_users
 
 
-def get_deletion_condidates_fileids():
+def get_deletion_condidates_fileids(candidates: List[User]):
     """"""
-    candidates = get_users_deletion_candicates()
 
     with get_db_session() as session:
         user_file_ids = (
@@ -81,7 +84,9 @@ def get_deletion_condidates_fileids():
             .all()
         )
 
-        log.info(f"Found {len(user_file_ids)} file ids for embeddings deletion.")
+        log.info(f"Found {len(user_file_ids)} file ids to delete embeddings for.")
+
+        return user_file_ids
 
 
 def is_new_deletion_candidate(user: User, account_statuses: Dict = {}) -> bool:
@@ -139,6 +144,18 @@ def delete_candidate_user_embeddings():
     """ """
     # 1. Get the list of users marked for deletion from the chatbot database
     users = get_users_deletion_candicates()
+    files_ids = get_deletion_condidates_fileids(users)
+
+    for file_id in files_ids:
+        # e.g. chatbot-storage-dev-gcs-eu/file-embeddings/07806aff-478b-4a45-8725-9bac7935975e
+
+        if not file_present_in_gcp(
+            bucket_prefix=f"{config.gcp.embeddings_root_folder}/{file_id}",
+        ):
+            log.warning(f"Embeddings not found for file id '{file_id}'")
+            continue
+
+        delete_embeddings(file_id)
 
 
 def delete_candidate_user_data():
