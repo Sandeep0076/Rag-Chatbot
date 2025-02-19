@@ -16,3 +16,5 @@ git_commits.txt
 version_doc/
 .cursorignore
 tests/test_file_ids.json
+env_variables.txt
+workflows/env_varaibles.txt

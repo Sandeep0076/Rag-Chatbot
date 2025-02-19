@@ -113,10 +113,7 @@ class AzureChatbot(BaseRAGHandler):
 
             else:
                 logging.info("Using default model block")
-                system_message = (
-                    "You are a helpful assistant. Use the following context to answer the question "
-                    "completely and accurately."
-                )
+                system_message = self.configs.chatbot.system_prompt_rag_llm
                 context = "\n".join(relevant_docs) if relevant_docs else ""
                 messages = [
                     {"role": "system", "content": system_message},

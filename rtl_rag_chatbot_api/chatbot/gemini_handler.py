@@ -120,9 +120,8 @@ class GeminiHandler(BaseRAGHandler):
 
             # Construct the prompt with context
             context = "\n".join(relevant_docs[:3])  # Use top 3 most relevant documents
-            prompt = f"""Based on the following context, answer the question.
-            If the answer cannot be found in the context, say so.
-            Never include any disclaimers about training data or model capabilities in your response
+            prompt = f"""{self.configs.chatbot.system_prompt_rag_llm}
+            Elaborate the answer based on the context provided.
             Context:
             {context}
 
@@ -189,10 +188,7 @@ def get_gemini_non_rag_response(config, prompt: str, model_choice: str) -> str:
         }
 
         # Add system message to enforce direct responses
-        system_prompt = (
-            "You are an agent proficient in the domain in which question is asked about.\n"
-            "USER QUERY:\n"
-        )
+        system_prompt = config.chatbot.system_prompt_plain_llm + "\nUSER QUERY:\n"
 
         full_prompt = system_prompt + prompt
 

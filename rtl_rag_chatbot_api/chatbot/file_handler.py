@@ -239,8 +239,14 @@ class FileHandler:
 
             # Determine file type
             file_extension = os.path.splitext(original_filename)[1].lower()
+            logging.info(f"Processing file with extension: {file_extension}")
+
             is_tabular = file_extension in [".csv", ".xlsx", ".xls"]
             is_database = file_extension in [".db", ".sqlite", ".sqlite3"]
+            is_text = file_extension in [".txt", ".doc", ".docx"]
+
+            if is_text:
+                logging.info(f"Detected text file: {original_filename}")
 
             # Check for existing file
             existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
