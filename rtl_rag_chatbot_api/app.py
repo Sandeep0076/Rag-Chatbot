@@ -267,6 +267,31 @@ async def upload_file(
                 },
             )
 
+        is_supported_file = (
+            file_extension in [".pdf", ".txt", ".doc", ".docx"] or is_image
+        )
+        if is_supported_file and result["status"] == "existing":
+            google_result = await embedding_handler.check_embeddings_exist(
+                file_id, "gemini-pro"
+            )
+            azure_result = await embedding_handler.check_embeddings_exist(
+                file_id, "gpt_4_omni"
+            )
+            if (
+                not google_result["embeddings_exist"]
+                or not azure_result["embeddings_exist"]
+            ):
+                gcs_handler.delete_embeddings(file_id)
+            background_tasks.add_task(
+                create_embeddings_background,
+                file_id=file_id,
+                temp_file_path=temp_file_path,
+                embedding_handler=embedding_handler,
+                configs=configs,
+                SessionLocal=SessionLocal,
+            )
+            logging.info(f"Creating new missing embeddings for file: {file_id}")
+
         # Create embeddings for PDF, Image, and Text files in background
         elif file_extension in [".pdf", ".txt", ".doc", ".docx"] or is_image:
             logging.info(

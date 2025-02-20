@@ -8,6 +8,7 @@ import aiofiles
 from fastapi import UploadFile
 
 from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
+from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.utils.encryption import decrypt_file, encrypt_file
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
@@ -314,9 +315,23 @@ class FileHandler:
                     and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
                     and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
                 )
+                # Todo
+                embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
+                google_result = await embedding_handler.check_embeddings_exist(
+                    file_id, "gemini-pro"
+                )
+                azure_result = await embedding_handler.check_embeddings_exist(
+                    file_id, "gpt_4_omni"
+                )
 
-                if not local_exists:
-                    self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
+                if (
+                    google_result["embeddings_exist"]
+                    and azure_result["embeddings_exist"]
+                ):
+                    if not local_exists:
+                        self.gcs_handler.download_files_from_folder_by_id(
+                            existing_file_id
+                        )
 
                 # For images, we only need the embeddings to chat
                 if is_image:
