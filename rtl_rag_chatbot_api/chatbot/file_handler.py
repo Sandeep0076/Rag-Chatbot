@@ -251,6 +251,16 @@ class FileHandler:
 
             # Check for existing file
             existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
+            if existing_file_id:
+                logging.info(f"Existing file found with hash: {existing_file_id}")
+                # file_id = existing_file_id
+                embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
+                google_result = await embedding_handler.check_embeddings_exist(
+                    existing_file_id, "gemini-pro"
+                )
+                azure_result = await embedding_handler.check_embeddings_exist(
+                    existing_file_id, "gpt_4_omni"
+                )
 
             # Create necessary directories
             os.makedirs("local_data", exist_ok=True)
@@ -266,8 +276,21 @@ class FileHandler:
             del file_content
 
             # Process based on file type
-            analysis_files = []
-            if is_image and not existing_file_id:
+            if (
+                existing_file_id
+                and is_image
+                and (
+                    not google_result["embeddings_exist"]
+                    or not azure_result["embeddings_exist"]
+                )
+            ):
+                analysis_files = []
+                await self._handle_image_analysis(
+                    existing_file_id, temp_file_path, analysis_files
+                )
+
+            elif is_image and not existing_file_id:
+                analysis_files = []
                 await self._handle_image_analysis(
                     file_id, temp_file_path, analysis_files
                 )
@@ -314,14 +337,6 @@ class FileHandler:
                     and os.path.exists(gemini_path)
                     and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
                     and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
-                )
-                # Todo
-                embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
-                google_result = await embedding_handler.check_embeddings_exist(
-                    file_id, "gemini-pro"
-                )
-                azure_result = await embedding_handler.check_embeddings_exist(
-                    file_id, "gpt_4_omni"
                 )
 
                 if (
