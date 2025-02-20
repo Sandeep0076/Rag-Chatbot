@@ -195,38 +195,9 @@ class GCSHandler:
                 if blob.name.endswith("/file_info.json"):
                     file_info = json.loads(blob.download_as_bytes().decode("utf-8"))
                     if file_info.get("file_hash") == file_hash:
-                        file_id = file_info.get("file_id")
+                        return file_info.get("file_id")
 
-                        # Check if both google and azure embeddings exist
-                        google_prefix = f"file-embeddings/{file_id}/google/"
-                        azure_prefix = f"file-embeddings/{file_id}/azure/"
-
-                        google_blobs = list(
-                            self.bucket.list_blobs(prefix=google_prefix)
-                        )
-                        azure_blobs = list(self.bucket.list_blobs(prefix=azure_prefix))
-
-                        google_exists = len(google_blobs) > 0 and any(
-                            blob.name.endswith("chroma.sqlite3")
-                            for blob in google_blobs
-                        )
-                        azure_exists = len(azure_blobs) > 0 and any(
-                            blob.name.endswith("chroma.sqlite3") for blob in azure_blobs
-                        )
-
-                        if google_exists and azure_exists:
-                            return file_id
-                        else:
-                            logging.info(
-                                f"File found but missing embeddings for file_id: {file_id}"
-                            )
-                            # Delete any existing embeddings as they are incomplete
-                            self.delete_embeddings(file_id)
-                            continue
-
-            logging.info(
-                f"No file found with hash: {file_hash} or missing required embeddings"
-            )
+            logging.info(f"No file found with hash: {file_hash}")
             return None
         except Exception as e:
             logging.error(f"Error in find_existing_file_by_hash: {str(e)}")
