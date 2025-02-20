@@ -15,6 +15,6 @@ git_commits.txt
 .aider*
 version_doc/
 .cursorignore
+git push origin --delete AIP-531
 tests/test_file_ids.json
-env_variables.txt
-workflows/env_varaibles.txt
+env_varaibles.txt
