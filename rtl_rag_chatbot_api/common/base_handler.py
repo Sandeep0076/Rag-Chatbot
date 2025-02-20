@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List
 
 import pytesseract
+from docx import Document
 from pdf2image import convert_from_path
 from pdfminer.high_level import extract_text
 
@@ -21,7 +22,9 @@ class BaseRAGHandler:
     def __init__(self, configs, gcs_handler):
         self.configs = configs
         self.gcs_handler = gcs_handler
-        self.max_tokens = 2000  # Default chunk size
+        # Use chunk size from config instead of hardcoded value
+        self.max_tokens = configs.chatbot.chunk_size_limit
+        self.chunk_overlap = configs.chatbot.max_chunk_overlap
         self.file_id = None
         self.embedding_type = None
         self.user_id = None
@@ -29,7 +32,7 @@ class BaseRAGHandler:
         self.embedding_model = None
         self.chroma_manager = ChromaDBManager()
 
-        # Model-specific token limits
+        # Model-specific token limits for response generation (not chunking)
         self.MODEL_TOKEN_LIMITS = {
             "gpt_3_5_turbo": 8000,
             "gpt_4": 32000,
@@ -112,7 +115,7 @@ class BaseRAGHandler:
         Create embeddings for text chunks and store them in ChromaDB with batch processing.
 
         Processes text chunks into embeddings while handling token limits and batch sizes.
-        Supports both Azure and Gemini embedding models with different token limits.
+        Uses configured chunk size (chunk_size_limit) for optimal RAG performance.
         Implements automatic chunk splitting for oversized text segments.
 
         Args:
@@ -122,7 +125,6 @@ class BaseRAGHandler:
 
         Returns:
             str: Status string ('completed' on success)
-
         """
         try:
             # Get collection with explicit subfolder path
@@ -142,21 +144,18 @@ class BaseRAGHandler:
                 uuid.uuid4()
             )  # Generate a unique ID for embeddings folder
 
-            max_tokens = (
-                self.AZURE_MAX_TOKENS
-                if subfolder == "azure"
-                else self.GEMINI_MAX_TOKENS
-            )
+            # Use configured chunk size for optimal RAG performance
+            max_chunk_size = self.max_tokens
 
             for i in range(0, total_chunks):
                 chunk = chunks[i]
                 chunk_tokens = len(self.simple_tokenize(chunk))
 
-                if chunk_tokens > max_tokens:
-                    sub_chunks = self.split_large_chunk(chunk, max_tokens)
+                if chunk_tokens > max_chunk_size:
+                    sub_chunks = self.split_large_chunk(chunk, max_chunk_size)
                     for sub_idx, sub_chunk in enumerate(sub_chunks):
                         sub_chunk_tokens = len(self.simple_tokenize(sub_chunk))
-                        if sub_chunk_tokens <= max_tokens:
+                        if sub_chunk_tokens <= max_chunk_size:
                             batch_to_process.append(sub_chunk)
                             batch_ids.append(f"{embedding_id}_{i}_sub{sub_idx}")
                 else:
@@ -210,18 +209,66 @@ class BaseRAGHandler:
         logging.info(f"{self.collection_name} collection is being used")
 
     def extract_text_from_file(self, file_path: str) -> str:
-        """Extract text from various file types."""
+        """Extract text from various file types including PDF, TXT, DOC, and DOCX."""
         _, file_extension = os.path.splitext(file_path)
+        file_extension = file_extension.lower()
 
-        if file_extension.lower() == ".pdf":
-            return self.extract_text_from_pdf(file_path)
-        else:
-            try:
-                with open(file_path, "r", encoding="utf-8") as file:
-                    return file.read()
-            except UnicodeDecodeError:
-                with open(file_path, "rb") as file:
-                    return file.read().decode("utf-8", errors="ignore")
+        logging.info(
+            f"Extracting text from file: {file_path} with extension {file_extension}"
+        )
+
+        try:
+            if file_extension == ".pdf":
+                return self.extract_text_from_pdf(file_path)
+            elif file_extension in [".doc", ".docx"]:
+                return self.extract_text_from_doc(file_path)
+            elif file_extension == ".txt":
+                return self.extract_text_from_txt(file_path)
+            else:
+                logging.warning(
+                    f"Unsupported file type: {file_extension}. Attempting generic text extraction."
+                )
+                return self.extract_text_from_txt(file_path)
+        except Exception as e:
+            error_msg = f"Error extracting text from {file_path}: {str(e)}"
+            logging.error(error_msg)
+            return f"ERROR: {error_msg}"
+
+    def extract_text_from_txt(self, file_path: str) -> str:
+        """Extract text from TXT files with proper encoding handling."""
+        logging.info(f"Extracting text from TXT file: {file_path}")
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
+                text = file.read()
+                logging.info(
+                    f"Successfully extracted {len(text)} characters from TXT file"
+                )
+                return text
+        except UnicodeDecodeError:
+            logging.warning(
+                "UTF-8 decoding failed, attempting with 'utf-8' and ignore errors"
+            )
+            with open(file_path, "rb") as file:
+                text = file.read().decode("utf-8", errors="ignore")
+                logging.info(
+                    f"Successfully extracted {len(text)} characters from TXT file using fallback encoding"
+                )
+                return text
+
+    def extract_text_from_doc(self, file_path: str) -> str:
+        """Extract text from DOC/DOCX files using python-docx."""
+        logging.info(f"Extracting text from DOC/DOCX file: {file_path}")
+        try:
+            doc = Document(file_path)
+            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+            logging.info(
+                f"Successfully extracted {len(text)} characters from DOC/DOCX file"
+            )
+            return text
+        except Exception as e:
+            error_msg = f"Failed to extract text from DOC/DOCX: {str(e)}"
+            logging.error(error_msg)
+            return f"ERROR: {error_msg}"
 
     def extract_text_from_pdf(self, file_path: str) -> str:
         """Extract text from PDF using pdfminer or OCR if necessary."""
@@ -241,18 +288,17 @@ class BaseRAGHandler:
                     word_count = len(text.split())
 
                     if word_count == 0:
-                        return (
-                            "ERROR: Unable to extract text from this PDF. The file might be scanned,"
-                            "corrupted, or password-protected. "
-                            "Please try a different PDF file."
+                        error_msg = (
+                            "Unable to extract text from this PDF. "
+                            "The file might be scanned, corrupted, or password-protected."
                         )
+                        logging.error(error_msg)
+                        return f"ERROR: {error_msg}"
 
                 except Exception as ocr_error:
-                    logging.error(f"OCR extraction failed: {str(ocr_error)}")
-                    return (
-                        "ERROR: Unable to process this PDF. The file might be corrupted or in an unsupported format. "
-                        "Please try a different PDF file."
-                    )
+                    error_msg = f"OCR extraction failed: {str(ocr_error)}"
+                    logging.error(error_msg)
+                    return f"ERROR: {error_msg}"
 
             logging.info(
                 f"Text extraction completed successfully. Word count: {word_count}"
@@ -321,47 +367,31 @@ class BaseRAGHandler:
 
     def split_large_chunk(self, chunk: str, max_tokens: int) -> List[str]:
         """Split a large chunk into smaller pieces based on token limit."""
-        sentences = re.split(r"(?<=[.!?])\s+", chunk)
-        sub_chunks = []
-        current_sub_chunk = []
-        current_tokens = 0
+        words = chunk.split()
+        current_chunk = []
+        chunks = []
+        current_length = 0
+        overlap_tokens = int(max_tokens * self.chunk_overlap)  # Use configured overlap
 
-        for sentence in sentences:
-            sentence_tokens = len(self.simple_tokenize(sentence))
+        for word in words:
+            word_length = len(self.simple_tokenize(word))
+            if current_length + word_length > max_tokens:
+                if current_chunk:  # Only add if we have something
+                    chunks.append(" ".join(current_chunk))
+                    # Keep overlap_tokens worth of words for context
+                    current_chunk = (
+                        current_chunk[-overlap_tokens:] if overlap_tokens > 0 else []
+                    )
+                    current_length = sum(
+                        len(self.simple_tokenize(w)) for w in current_chunk
+                    )
+            current_chunk.append(word)
+            current_length += word_length
 
-            # If a single sentence exceeds max tokens, split it further
-            if sentence_tokens > max_tokens:
-                words = sentence.split()
-                temp_chunk = []
-                temp_tokens = 0
+        if current_chunk:  # Add the last chunk if it exists
+            chunks.append(" ".join(current_chunk))
 
-                for word in words:
-                    word_tokens = len(self.simple_tokenize(word))
-                    if temp_tokens + word_tokens > max_tokens:
-                        sub_chunks.append(" ".join(temp_chunk))
-                        temp_chunk = [word]
-                        temp_tokens = word_tokens
-                    else:
-                        temp_chunk.append(word)
-                        temp_tokens += word_tokens
-
-                if temp_chunk:
-                    sub_chunks.append(" ".join(temp_chunk))
-                continue
-
-            if current_tokens + sentence_tokens > max_tokens:
-                if current_sub_chunk:
-                    sub_chunks.append(" ".join(current_sub_chunk))
-                current_sub_chunk = [sentence]
-                current_tokens = sentence_tokens
-            else:
-                current_sub_chunk.append(sentence)
-                current_tokens += sentence_tokens
-
-        if current_sub_chunk:
-            sub_chunks.append(" ".join(current_sub_chunk))
-
-        return sub_chunks
+        return chunks
 
     def upload_embeddings_to_gcs(self, file_id: str, subfolder: str):
         """Upload embeddings to Google Cloud Storage."""

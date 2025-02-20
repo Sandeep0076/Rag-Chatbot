@@ -157,7 +157,7 @@ async def analyze_single_image_gemini(
 
         if not gemini_handler.generative_model:
             logging.info("Initializing Gemini model")
-            gemini_handler.initialize("gemini-pro")
+            gemini_handler.initialize("gemini-flash")
 
         with open(image_path, "rb") as image_file:
             image_data = image_file.read()
@@ -190,7 +190,7 @@ async def analyze_images(
     model: str = "gpt4-omni",
     gemini_handler: Optional[GeminiHandler] = None,
 ) -> Dict[str, Any]:
-    """Analyze images using both GPT-4-OMNI and Gemini-1.5-pro-002 concurrently."""
+    """Analyze images using both GPT-4-OMNI and Gemini-2 Flash concurrently."""
     try:
         if not os.path.exists(image_path):
             error_msg = f"Image file not found: {image_path}"
