@@ -1,11 +1,8 @@
-class User(BaseModel):
-    id: str
-    email: str
-    name: str
-    wf_deletion_candidate: bool = default(False)
-    wf_deletion_timestamp: Optional[datetime]
-    conversations: List[Conversation]
-    folders: List[Folder]
+from datetime import datetime
+from time import timezone
+from typing import Any, List, Optional
+
+from pydantic import BaseModel, Field
 
 
 class Message(BaseModel):
@@ -46,5 +43,15 @@ class Folder(BaseModel):
     user: Any
     userId: str
     name: str
-    isRoot: bool = default(False)
+    isRoot: bool = False
     conversations: List[Conversation]
+
+
+class User(BaseModel):
+    id: str
+    email: str
+    name: str
+    wf_deletion_candidate: bool = False
+    wf_deletion_timestamp: Optional[datetime]
+    conversations: List[Conversation]
+    folders: List[Folder]
