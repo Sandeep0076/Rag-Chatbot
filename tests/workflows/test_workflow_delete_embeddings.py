@@ -1,11 +1,11 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from workflows.db.tables import Base, Conversation, Folder, Message, User
+from workflows.db.tables import Base
 from workflows.workflow import (
     delete_candidate_user_embeddings,
     get_deletion_condidates_fileids,
