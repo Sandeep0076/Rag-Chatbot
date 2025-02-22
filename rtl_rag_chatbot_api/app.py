@@ -282,15 +282,15 @@ async def upload_file(
                 or not azure_result["embeddings_exist"]
             ):
                 gcs_handler.delete_embeddings(file_id)
-            background_tasks.add_task(
-                create_embeddings_background,
-                file_id=file_id,
-                temp_file_path=temp_file_path,
-                embedding_handler=embedding_handler,
-                configs=configs,
-                SessionLocal=SessionLocal,
-            )
-            logging.info(f"Creating new missing embeddings for file: {file_id}")
+                background_tasks.add_task(
+                    create_embeddings_background,
+                    file_id=file_id,
+                    temp_file_path=temp_file_path,
+                    embedding_handler=embedding_handler,
+                    configs=configs,
+                    SessionLocal=SessionLocal,
+                )
+                logging.info(f"Creating new missing embeddings for file: {file_id}")
 
         # Create embeddings for PDF, Image, and Text files in background
         elif file_extension in [".pdf", ".txt", ".doc", ".docx"] or is_image:

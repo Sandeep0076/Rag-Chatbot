@@ -248,7 +248,6 @@ class FileHandler:
 
             if is_text:
                 logging.info(f"Detected text file: {original_filename}")
-
             # Check for existing file
             existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
             if existing_file_id:
@@ -275,26 +274,6 @@ class FileHandler:
                 await buffer.write(file_content)
             del file_content
 
-            # Process based on file type
-            if (
-                existing_file_id
-                and is_image
-                and (
-                    not google_result["embeddings_exist"]
-                    or not azure_result["embeddings_exist"]
-                )
-            ):
-                analysis_files = []
-                await self._handle_image_analysis(
-                    existing_file_id, temp_file_path, analysis_files
-                )
-
-            elif is_image and not existing_file_id:
-                analysis_files = []
-                await self._handle_image_analysis(
-                    file_id, temp_file_path, analysis_files
-                )
-
             # Prepare metadata for new file
             metadata = {
                 "is_image": is_image,
@@ -305,7 +284,21 @@ class FileHandler:
                 "file_id": file_id,
             }
 
-            if is_image and analysis_files:
+            # Process based on file type
+            if is_image and (
+                not existing_file_id
+                or (
+                    existing_file_id
+                    and (
+                        not google_result["embeddings_exist"]
+                        or not azure_result["embeddings_exist"]
+                    )
+                )
+            ):
+                analysis_files = []
+                await self._handle_image_analysis(
+                    file_id, temp_file_path, analysis_files
+                )
                 metadata.update(
                     {
                         "gpt4_analysis_path": analysis_files[0],
