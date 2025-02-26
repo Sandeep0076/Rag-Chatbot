@@ -28,7 +28,7 @@ def file_present_in_gcp(bucket_prefix: str) -> bool:
     return True if len(list(blobs)) > 0 else False
 
 
-def delete_embeddings(self, file_id: str):
+def delete_embeddings(file_id: str):
     """
     Deletes all embeddings associated with a file_id from GCS.
 

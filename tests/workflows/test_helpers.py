@@ -1,7 +1,17 @@
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from workflows.app_config import config
 from workflows.db.helpers import filter_older_than_4_weeks
+from workflows.gcs.helpers import delete_embeddings
+
+
+@pytest.fixture
+def mock_log():
+    with patch("workflows.gcs.helpers.log") as mock_log:
+        yield mock_log
 
 
 @patch("workflows.db.helpers.datetime_from_iso8601_timestamp")
@@ -37,3 +47,55 @@ def test_filter_older_than_4_weeks(
     assert (
         filtered_users[0].email == "user1@example.com"
     )  # only user1 should be in the filtered list
+
+
+@patch("workflows.gcs.helpers.bucket.list_blobs")
+def test_delete_embeddings(mock_list_blobs, mock_log):
+    # Setup mock blobs
+    mock_blob1 = MagicMock()
+    mock_blob1.name = "embedding1"
+    mock_blob2 = MagicMock()
+    mock_blob2.name = "embedding2"
+    mock_list_blobs.return_value = [mock_blob1, mock_blob2]
+
+    # Call the function
+    delete_embeddings("file1")
+
+    # Assertions
+    mock_list_blobs.assert_called_once_with(
+        prefix=f"{config.gcp.embeddings_root_folder}/file1/"
+    )
+    assert mock_blob1.delete.call_count == 1
+    assert mock_blob2.delete.call_count == 1
+
+    # Ensure no error logs are written
+    mock_log.error.assert_not_called()
+
+    # Ensure logs are written
+    mock_log.info.assert_any_call("Deleted blob: embedding1")
+    mock_log.info.assert_any_call("Deleted blob: embedding2")
+    mock_log.info.assert_any_call(
+        "Successfully deleted all embeddings for file_id: file1"
+    )
+
+
+@patch("workflows.gcs.helpers.bucket.list_blobs")
+def test_delete_embeddings_with_exception(mock_list_blobs, mock_log):
+    # Setup mock blobs
+    mock_blob1 = MagicMock()
+    mock_blob1.name = "embeddings/file1/embedding1"
+    mock_blob1.delete.side_effect = Exception("Deletion error")
+    mock_list_blobs.return_value = [mock_blob1]
+
+    delete_embeddings("test_file_id")
+
+    # Assertions
+    mock_list_blobs.assert_called_once_with(
+        prefix=f"{config.gcp.embeddings_root_folder}/test_file_id/"
+    )
+    assert mock_blob1.delete.call_count == 1
+
+    # Ensure log error was triggered
+    mock_log.error.assert_any_call(
+        f"Error deleting blob {mock_blob1.name}: Deletion error"
+    )
