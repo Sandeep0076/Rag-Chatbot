@@ -28,7 +28,7 @@ def test_db_session():
         db = TestingSessionLocal()
 
         # Read SQL statements from a file
-        with open("tests/workflows/test-data.sql", "r") as f:
+        with open("tests/workflows/test-data.sql.runtime", "r") as f:
             sql_commands = f.read().split(";")
 
         Base.metadata.drop_all(bind=db.get_bind())

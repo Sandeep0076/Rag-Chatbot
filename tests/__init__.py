@@ -31,7 +31,7 @@ def replace_timestamps_in_test_sql_file():
     )
 
     # Write the modified contents back to the file
-    with open(sql_file_path, "w") as file:
+    with open(f"{sql_file_path}.runtime", "w") as file:
         file.write(file_data)
 
 
