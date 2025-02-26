@@ -57,16 +57,16 @@ def mock_log():
 
 
 def test_user_count_deletion_candidates(test_db_session):
-    """Test to ensure that there are 5 users in the User table."""
+    """Test to ensure that there are 8 users in the User table."""
 
     with test_db_session as db:
         user_count = db.query(
             User
         ).count()  # Query the number of users in the User table
-        assert user_count == 6, f"Expected 6 users, but found {user_count}"
+        assert user_count == 8, f"Expected 8 users, but found {user_count}"
 
         deletion_candidates = db.query(User).filter(User.wf_deletion_candidate).count()
-        assert deletion_candidates == 3
+        assert deletion_candidates == 5
 
 
 @patch("workflows.workflow.get_db_session")
@@ -82,9 +82,9 @@ def test_all_deletion_candidates_gone(mock_get_db_session, mock_log, test_db_ses
 
     # check the database for changes
     with test_db_session as db:
-        # 2 deleted, 1 left
+        # 2 deleted, 3 left
         delete_candidate_users = db.query(User).filter(User.wf_deletion_candidate).all()
-        assert len(delete_candidate_users) == 1
+        assert len(delete_candidate_users) == 3
 
 
 @patch("workflows.workflow.get_db_session")
@@ -99,7 +99,7 @@ def test_deletion_successful_logging(mock_get_db_session, mock_log, test_db_sess
     expected_calls = [
         # log reports about how many users to delete
         call(
-            "Found 3 deletion candidates, 2 of them marked older than 4 weeks: user5@example.com, user6@example.com"
+            "Found 5 deletion candidates, 2 of them marked older than 4 weeks: user5@example.com, user6@example.com"
         ),
         # log reports about user5
         call("Loading user data for user5@example.com"),
@@ -166,19 +166,19 @@ def test_no_else_data_deleted(mock_get_db_session, mock_log, test_db_session):
     with test_db_session as db:
         # conversations left
         conversations = db.query(Conversation).all()
-        assert len(conversations) == 8
+        assert len(conversations) == 10
 
         # messages left
         messages = db.query(Message).all()
-        assert len(messages) == 7
+        assert len(messages) == 12
 
         # folders left
         folders = db.query(Folder).all()
-        assert len(folders) == 4
+        assert len(folders) == 6
 
         # users left
         users = db.query(User).all()
-        assert len(users) == 4
+        assert len(users) == 6
 
 
 # Helper function to raise the exception

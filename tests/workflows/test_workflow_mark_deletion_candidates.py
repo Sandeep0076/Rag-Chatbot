@@ -67,7 +67,7 @@ def test_workflow_get_users(mock_get_db_session, test_db_session):
     mock_get_db_session.return_value.__enter__.return_value = test_db_session
 
     users = get_users()
-    assert len(users) == 6
+    assert len(users) == 8
 
 
 @patch("workflows.workflow.get_db_session")
@@ -136,9 +136,11 @@ def test_mark_deletion_candidates(
                 User.email != "user2@example.com",
                 User.email != "user4@example.com",
                 # already marked before test
-                User.email != "user5@example.com",
                 # already marked before test
+                User.email != "user5@example.com",
                 User.email != "user6@example.com",
+                User.email != "user7@example.com",
+                User.email != "user8@example.com",
             )
         ):
             assert (
