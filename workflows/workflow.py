@@ -2,6 +2,7 @@ import argparse
 import inspect
 import logging
 import os
+import sys
 from contextlib import contextmanager
 from typing import Dict, List
 
@@ -15,7 +16,9 @@ from workflows.db.tables import Conversation, Folder, Message, User
 from workflows.gcs.helpers import delete_embeddings, file_present_in_gcp
 
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s/%(funcName)s - %(message)s"
+    stream=sys.stdout,
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s/%(funcName)s - %(message)s",
 )
 log = logging.getLogger(__name__)
 

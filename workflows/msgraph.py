@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 
 import msal
 import requests
@@ -12,7 +13,9 @@ SCOPE = ["https://graph.microsoft.com/.default"]
 GRAPH_API_ENDPOINT = "https://graph.microsoft.com/v1.0"
 
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    stream=sys.stdout,
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
 log = logging.getLogger(__name__)
 
