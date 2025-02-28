@@ -112,11 +112,16 @@ def is_new_deletion_candidate(user: User, account_statuses: Dict = {}) -> bool:
 
 
 def mark_deletion_candidates():
-    """"""
+    """
+    Workflow to mark users as deletion candidates.
+    """
+    log.info("Starting marking of deletion candidates.")
+
     # 1. get the list of users from the chatbot database
     users = get_users()
 
     # 2. get account info from azure graph for all users
+    log.info("Getting account statuses from Azure Graph for all users.")
     user_emails = [user.email for user in users]
     account_statuses = {
         user_email: msgraph.is_user_account_enabled(user_email)
@@ -142,9 +147,15 @@ def mark_deletion_candidates():
         # commit changes to the database
         session.commit()
 
+    log.info("Workflow step marking of deletion candidates completed.")
+
 
 def delete_candidate_user_embeddings():
-    """ """
+    """
+    Workflow to delete user embeddings for those marked as deletion candidates.
+    """
+    log.info("Starting deletion of user embeddings.")
+
     # 1. Get the list of users marked for deletion from the chatbot database
     users = get_users_deletion_candicates()
     files_ids = get_deletion_condidates_fileids(users)
@@ -160,11 +171,15 @@ def delete_candidate_user_embeddings():
 
         delete_embeddings(file_id)
 
+    log.info("Workflow step deletion of user embeddings completed.")
+
 
 def delete_candidate_user_data():
     """
     Workflow to delete user data for those marked as deletion candidates.
     """
+    log.info("Starting deletion of user data.")
+
     # 1. Get the list of users marked for deletion from the chatbot database
     users = get_users_deletion_candicates()
 
@@ -222,6 +237,8 @@ def delete_candidate_user_data():
                 session.rollback()
                 log.error(f"Failed to delete data for user {user.email}: {e}")
 
+    log.info("Workflow step deletion of user data completed.")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -238,6 +255,7 @@ if __name__ == "__main__":
 
     # dynamically map the task name to a function
     try:
+        log.info(f"Program invoked with workflow step argument: '{args.task}'")
         method = globals()[args.task]
         if callable(method):
             # check how many arguments the method expects
@@ -251,7 +269,6 @@ if __name__ == "__main__":
             # call the method with the right number of arguments
             elif args.args and num_params == len(args.args):
                 val = method(*args.args)
-                print(val)
             elif args.args and num_params != len(args.args):
                 print(
                     f"Task '{args.task}' requires {num_params} arguments, but {len(args.args)} were provided."
@@ -259,7 +276,6 @@ if __name__ == "__main__":
             else:
                 # call method with no arguments if none are required
                 val = method()
-                print(val)
         else:
             print(f"'{args.task}' is not a valid callable method.")
     except KeyError:
