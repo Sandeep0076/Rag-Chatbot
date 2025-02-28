@@ -3,10 +3,12 @@ import inspect
 import logging
 import os
 import sys
+import time
 from contextlib import contextmanager
 from typing import Dict, List
 
 from sqlalchemy import and_, create_engine, distinct
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 import workflows.db.helpers as db_helpers
@@ -31,12 +33,31 @@ def get_db_session():
     Returns:
         Session: SQLAlchemy session.
     """
-
     engine = create_engine(os.getenv("DATABASE_URL", ""))
     Session = sessionmaker(bind=engine)
-    db_session = Session()
+
+    attempts = 0
+    max_attempts = 10
+
+    while attempts < max_attempts:
+        # Try to establish a connection to the database
+        try:
+            attempts += 1
+            db_session = Session()
+            # Try to execute a simple query to check the connection
+            db_session.execute("SELECT 1")
+            break
+        except OperationalError:
+            log.warning("Database connection failed. Retrying in 5 seconds...")
+            time.sleep(5)
+        finally:
+            db_session.close()
+
     try:
+        db_session = Session()
         yield db_session
+    except Exception as e:
+        log.error(f"Database not reachable: {e}")
     finally:
         db_session.close()
 
