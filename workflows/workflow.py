@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager
 from typing import Dict, List
 
-from sqlalchemy import and_, create_engine, distinct
+from sqlalchemy import and_, create_engine, distinct, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
@@ -45,7 +45,7 @@ def get_db_session():
             attempts += 1
             db_session = Session()
             # Try to execute a simple query to check the connection
-            db_session.execute("SELECT 1")
+            db_session.execute(text("SELECT 1"))
             break
         except OperationalError:
             log.warning("Database connection failed. Retrying in 5 seconds...")
