@@ -98,6 +98,7 @@ def test_deletion_successful_logging(mock_get_db_session, mock_log, test_db_sess
 
     expected_calls = [
         # log reports about how many users to delete
+        call("Starting deletion of user data."),
         call(
             "Found 5 deletion candidates, 2 of them marked older than 4 weeks: user5@example.com, user6@example.com"
         ),
@@ -109,6 +110,7 @@ def test_deletion_successful_logging(mock_get_db_session, mock_log, test_db_sess
         call("Loading user data for user6@example.com"),
         call("About to delete: 0 messages, 0 conversations, 0 folders."),
         call("Successfully deleted data for user user6@example.com."),
+        call("Workflow step deletion of user data completed."),
     ]
 
     assert mock_log.info.call_args_list == expected_calls
