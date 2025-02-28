@@ -180,7 +180,7 @@ app.add_middleware(
 app.add_middleware(
     CORSMiddleware,
     # Streamlit and NextJS localhost development
-    allow_origins=os.getenv("ALLOWED_ORIGIN").split(","),
+    allow_origins=os.getenv("ALLOWED_ORIGIN", "http://localhost:8080").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
