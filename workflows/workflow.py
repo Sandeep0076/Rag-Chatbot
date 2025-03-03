@@ -2,18 +2,25 @@ import argparse
 import inspect
 import logging
 import os
+import sys
+import time
 from contextlib import contextmanager
-from typing import Dict
+from typing import Dict, List
 
-from sqlalchemy import and_, create_engine
+from sqlalchemy import and_, create_engine, distinct, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 import workflows.db.helpers as db_helpers
 import workflows.msgraph as msgraph
+from workflows.app_config import config
 from workflows.db.tables import Conversation, Folder, Message, User
+from workflows.gcs.helpers import delete_embeddings, file_present_in_gcp
 
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s/%(funcName)s - %(message)s"
+    stream=sys.stdout,
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s/%(funcName)s - %(message)s",
 )
 log = logging.getLogger(__name__)
 
@@ -26,12 +33,31 @@ def get_db_session():
     Returns:
         Session: SQLAlchemy session.
     """
-
     engine = create_engine(os.getenv("DATABASE_URL", ""))
     Session = sessionmaker(bind=engine)
-    db_session = Session()
+
+    attempts = 0
+    max_attempts = 10
+
+    while attempts < max_attempts:
+        # Try to establish a connection to the database
+        try:
+            attempts += 1
+            db_session = Session()
+            # Try to execute a simple query to check the connection
+            db_session.execute(text("SELECT 1"))
+            break
+        except OperationalError:
+            log.warning("Database connection failed. Retrying in 5 seconds...")
+            time.sleep(5)
+        finally:
+            db_session.close()
+
     try:
+        db_session = Session()
         yield db_session
+    except Exception as e:
+        log.error(f"Database not reachable: {e}")
     finally:
         db_session.close()
 
@@ -45,7 +71,9 @@ def get_users():
 
 
 def get_users_deletion_candicates():
-    """"""
+    """
+    Returns a list of users marked as deletion candidates in database which are marked for more than 4 weeks.
+    """
     with get_db_session() as session:
         # get all users
         users = (
@@ -65,6 +93,24 @@ def get_users_deletion_candicates():
         )
 
         return filtered_users
+
+
+def get_deletion_condidates_fileids(candidates: List[User]):
+    """"""
+
+    with get_db_session() as session:
+        user_file_ids = (
+            session.query(distinct(Conversation.fileId))
+            .filter(
+                Conversation.userEmail.in_(list(map(lambda u: u.email, candidates))),
+                Conversation.fileId.isnot(None),
+            )
+            .all()
+        )
+
+        log.info(f"Found {len(user_file_ids)} file ids to delete embeddings for.")
+
+        return user_file_ids
 
 
 def is_new_deletion_candidate(user: User, account_statuses: Dict = {}) -> bool:
@@ -87,11 +133,16 @@ def is_new_deletion_candidate(user: User, account_statuses: Dict = {}) -> bool:
 
 
 def mark_deletion_candidates():
-    """"""
+    """
+    Workflow to mark users as deletion candidates.
+    """
+    log.info("Starting marking of deletion candidates.")
+
     # 1. get the list of users from the chatbot database
     users = get_users()
 
     # 2. get account info from azure graph for all users
+    log.info("Getting account statuses from Azure Graph for all users.")
     user_emails = [user.email for user in users]
     account_statuses = {
         user_email: msgraph.is_user_account_enabled(user_email)
@@ -117,11 +168,39 @@ def mark_deletion_candidates():
         # commit changes to the database
         session.commit()
 
+    log.info("Workflow step marking of deletion candidates completed.")
+
+
+def delete_candidate_user_embeddings():
+    """
+    Workflow to delete user embeddings for those marked as deletion candidates.
+    """
+    log.info("Starting deletion of user embeddings.")
+
+    # 1. Get the list of users marked for deletion from the chatbot database
+    users = get_users_deletion_candicates()
+    files_ids = get_deletion_condidates_fileids(users)
+
+    for file_id in files_ids:
+        # e.g. chatbot-storage-dev-gcs-eu/file-embeddings/07806aff-478b-4a45-8725-9bac7935975e
+
+        if not file_present_in_gcp(
+            bucket_prefix=f"{config.gcp.embeddings_root_folder}/{file_id}",
+        ):
+            log.warning(f"Embeddings not found for file id '{file_id}'")
+            continue
+
+        delete_embeddings(file_id)
+
+    log.info("Workflow step deletion of user embeddings completed.")
+
 
 def delete_candidate_user_data():
     """
     Workflow to delete user data for those marked as deletion candidates.
     """
+    log.info("Starting deletion of user data.")
+
     # 1. Get the list of users marked for deletion from the chatbot database
     users = get_users_deletion_candicates()
 
@@ -179,6 +258,8 @@ def delete_candidate_user_data():
                 session.rollback()
                 log.error(f"Failed to delete data for user {user.email}: {e}")
 
+    log.info("Workflow step deletion of user data completed.")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -195,6 +276,7 @@ if __name__ == "__main__":
 
     # dynamically map the task name to a function
     try:
+        log.info(f"Program invoked with workflow step argument: '{args.task}'")
         method = globals()[args.task]
         if callable(method):
             # check how many arguments the method expects
@@ -208,7 +290,6 @@ if __name__ == "__main__":
             # call the method with the right number of arguments
             elif args.args and num_params == len(args.args):
                 val = method(*args.args)
-                print(val)
             elif args.args and num_params != len(args.args):
                 print(
                     f"Task '{args.task}' requires {num_params} arguments, but {len(args.args)} were provided."
@@ -216,7 +297,6 @@ if __name__ == "__main__":
             else:
                 # call method with no arguments if none are required
                 val = method()
-                print(val)
         else:
             print(f"'{args.task}' is not a valid callable method.")
     except KeyError:

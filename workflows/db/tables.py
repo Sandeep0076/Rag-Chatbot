@@ -64,6 +64,7 @@ class Conversation(Base):
         onupdate=func.now(),
         server_default=func.now(),
     )
+    fileId = Column(String, nullable=True)
 
     # Foreign keys:
     userEmail = mapped_column(ForeignKey("User.email"))

@@ -5,7 +5,7 @@ from sqlalchemy import and_, create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from workflows.db.helpers import iso8601_timestamp_now
+from workflows.db.helpers import datetime_from_iso8601_timestamp, iso8601_timestamp_now
 from workflows.db.tables import Base, User
 from workflows.workflow import (
     get_users,
@@ -29,7 +29,7 @@ def test_db_session():
         db = TestingSessionLocal()
 
         # Read SQL statements from a file
-        with open("tests/workflows/test-data.sql", "r") as f:
+        with open("tests/workflows/test-data.sql.runtime", "r") as f:
             sql_commands = f.read().split(";")
 
         Base.metadata.drop_all(bind=db.get_bind())
@@ -67,7 +67,7 @@ def test_workflow_get_users(mock_get_db_session, test_db_session):
     mock_get_db_session.return_value.__enter__.return_value = test_db_session
 
     users = get_users()
-    assert len(users) == 6
+    assert len(users) == 8
 
 
 @patch("workflows.workflow.get_db_session")
@@ -136,9 +136,11 @@ def test_mark_deletion_candidates(
                 User.email != "user2@example.com",
                 User.email != "user4@example.com",
                 # already marked before test
-                User.email != "user5@example.com",
                 # already marked before test
+                User.email != "user5@example.com",
                 User.email != "user6@example.com",
+                User.email != "user7@example.com",
+                User.email != "user8@example.com",
             )
         ):
             assert (
@@ -175,4 +177,7 @@ def test_already_marked_users(
         assert user5.wf_deletion_candidate is True
         # user5 already marked and timestamp must keep its value
         assert user5.wf_deletion_timestamp != iso8601_timestamp_now
-        assert user5.wf_deletion_timestamp == "2024-08-01T08:00:00.000Z"
+        assert (
+            datetime_from_iso8601_timestamp(iso8601_timestamp_now())
+            - datetime_from_iso8601_timestamp(user5.wf_deletion_timestamp)
+        ).days > 28, "User 5's deletion timestamp should be older than 4 weeks."
