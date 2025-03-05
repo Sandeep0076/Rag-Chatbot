@@ -44,6 +44,7 @@ from rtl_rag_chatbot_api.common.models import (
     DeleteRequest,
     EmbeddingCreationRequest,
     EmbeddingsCheckRequest,
+    FileDeleteRequest,
     FileUploadResponse,
     NeighborsQuery,
     Query,
@@ -946,7 +947,7 @@ async def analyze_image_endpoint(
 
 @app.delete("/delete")
 async def delete_resources(
-    request: DeleteRequest, current_user=Depends(get_current_user)
+    request: FileDeleteRequest, current_user=Depends(get_current_user)
 ):
     """
     Delete ChromaDB embeddings and associated resources for one or multiple files based on username.
