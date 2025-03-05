@@ -75,3 +75,4 @@ class CleanupRequest(BaseModel):
 class DeleteRequest(BaseModel):
     file_ids: Union[str, List[str]]  # Can be single ID or list of IDs
     include_gcs: bool = False
+    username: str

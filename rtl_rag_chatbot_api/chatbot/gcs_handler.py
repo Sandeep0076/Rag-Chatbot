@@ -251,6 +251,24 @@ class GCSHandler:
                 json.dumps(new_info), content_type="application/json"
             )
 
+    def update_username_list(self, file_id: str, username_list: list):
+        """Update the username list directly, replacing the existing list.
+
+        Args:
+            file_id (str): The ID of the file to update
+            username_list (list): The new list of usernames
+        """
+        blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
+        if blob.exists():
+            current_info = json.loads(blob.download_as_bytes().decode("utf-8"))
+            current_info["username"] = username_list
+            blob.upload_from_string(
+                json.dumps(current_info), content_type="application/json"
+            )
+            logging.info(
+                f"Updated username list for file_id {file_id}: {username_list}"
+            )
+
     def delete_embeddings(self, file_id: str):
         """
         Deletes all embeddings associated with a file_id from GCS.
