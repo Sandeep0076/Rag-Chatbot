@@ -816,7 +816,6 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                     if len(query.text) > 1
                     else current_question
                 )
-            breakpoint()
             response = model.get_answer(chat_context)
 
             if isinstance(response, list):
