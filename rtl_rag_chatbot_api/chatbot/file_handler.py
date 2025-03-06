@@ -137,7 +137,7 @@ class FileHandler:
             "original_filename": original_filename,
             "is_tabular": True,
             "is_image": False,
-            "username": username,
+            "username": [username],  # Store username as an array
             "embeddings_status": "completed",  # CSV files don't need embeddings
         }
 
@@ -279,7 +279,7 @@ class FileHandler:
                 "is_image": is_image,
                 "is_tabular": is_tabular or is_database,
                 "file_hash": file_hash,
-                "username": username,
+                "username": [username],  # Store username as an array
                 "original_filename": original_filename,
                 "file_id": file_id,
             }
@@ -317,6 +317,13 @@ class FileHandler:
 
             if existing_file_id:
                 logging.info(f"Found embeddings for: {original_filename}")
+
+                # Update file_info.json with the new username
+                self.gcs_handler.update_file_info(
+                    existing_file_id, {"username": username}
+                )
+                logging.info(f"Updated file_info.json with username: {username}")
+
                 if is_tabular or is_database:
                     return await self._handle_existing_tabular_data(
                         existing_file_id, original_filename, temp_file_path

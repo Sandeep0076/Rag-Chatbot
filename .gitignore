@@ -19,5 +19,5 @@ tests/test_file_ids.json
 tests/workflows/*.sql.runtime
 .coverage
 coverage.xml
-env_variables.txt
 workflows/env_varaibles.txt
+env_varaibles.txt

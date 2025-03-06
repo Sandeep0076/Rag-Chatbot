@@ -213,13 +213,60 @@ class GCSHandler:
         blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
         if blob.exists():
             current_info = json.loads(blob.download_as_bytes().decode("utf-8"))
+
+            # Handle username conversion to array if it exists in new_info
+            if "username" in new_info:
+                current_username = new_info["username"]
+
+                # If there's an existing username field in current_info
+                if "username" in current_info:
+                    existing_username = current_info["username"]
+
+                    # If existing username is already an array
+                    if isinstance(existing_username, list):
+                        # Add new username if not already in the list
+                        if current_username not in existing_username:
+                            existing_username.append(current_username)
+                        new_info["username"] = existing_username
+                    else:
+                        # Convert existing single username to array and add current username if different
+                        usernames = [existing_username]
+                        if current_username != existing_username:
+                            usernames.append(current_username)
+                        new_info["username"] = usernames
+                else:
+                    # No existing username, set as a single-item array
+                    new_info["username"] = [current_username]
+
             current_info.update(new_info)
             blob.upload_from_string(
                 json.dumps(current_info), content_type="application/json"
             )
         else:
+            # For new files, convert username to array if present
+            if "username" in new_info and not isinstance(new_info["username"], list):
+                new_info["username"] = [new_info["username"]]
+
             blob.upload_from_string(
                 json.dumps(new_info), content_type="application/json"
+            )
+
+    def update_username_list(self, file_id: str, username_list: list):
+        """Update the username list directly, replacing the existing list.
+
+        Args:
+            file_id (str): The ID of the file to update
+            username_list (list): The new list of usernames
+        """
+        blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
+        if blob.exists():
+            current_info = json.loads(blob.download_as_bytes().decode("utf-8"))
+            current_info["username"] = username_list
+            blob.upload_from_string(
+                json.dumps(current_info), content_type="application/json"
+            )
+            logging.info(
+                f"Updated username list for file_id {file_id}: {username_list}"
             )
 
     def delete_embeddings(self, file_id: str):
