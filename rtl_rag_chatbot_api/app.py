@@ -26,6 +26,7 @@ from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot as Chatbot
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
 from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
+from rtl_rag_chatbot_api.chatbot.data_visualization import detect_visualization_need
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.file_handler import FileHandler
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
@@ -52,7 +53,10 @@ from rtl_rag_chatbot_api.common.models import (
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
-from rtl_rag_chatbot_api.common.prompts_storage import VISUALISATION_PROMPT
+from rtl_rag_chatbot_api.common.prompts_storage import (
+    CHART_DETECTION_PROMPT,
+    VISUALISATION_PROMPT,
+)
 from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
 
 # from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
@@ -768,8 +772,25 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
     """
     try:
+        # Initialize visualization flag
+        generate_visualization = False
+
+        # Auto-detect if visualization is needed based on the query text
+        if len(query.text) > 0:
+            should_visualize_filter = detect_visualization_need(query.text[-1])
+            if should_visualize_filter:
+                question = CHART_DETECTION_PROMPT + query.text[-1]
+                # Using gemini-flash for visualization detection for faster response
+                response = get_gemini_non_rag_response(
+                    configs, question, "gemini-flash"
+                )
+                if response.lower() == "true" or "true" in response.lower():
+                    generate_visualization = True
+            else:
+                generate_visualization = should_visualize_filter
+
         logging.info(
-            f"Graphic generation flag is  {query.generate_visualization} for file {query.file_id}"
+            f"Graphic generation flag is {generate_visualization} for file {query.file_id}"
         )
         if len(query.text) == 0:
             raise HTTPException(status_code=400, detail="Text array cannot be empty")
@@ -802,7 +823,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                     f"Model initialized: {query.file_id}, user: {query.user_id}, model: {query.model_choice}"
                 )
 
-            if query.generate_visualization and not is_tabular:
+            if generate_visualization and not is_tabular:
                 current_question = query.text[-1] + VISUALISATION_PROMPT
             else:
                 current_question = query.text[-1]
@@ -822,7 +843,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             if isinstance(response, list):
                 return format_table_response(response)
 
-            if query.generate_visualization:
+            if generate_visualization:
                 return handle_visualization(response, query, is_tabular, configs)
 
             return {"response": str(response), "is_table": False}

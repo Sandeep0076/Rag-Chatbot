@@ -37,12 +37,8 @@ def handle_file_upload():
         horizontal=True,
     )
 
-    # Add Generate Visualization radio button
-    st.session_state.generate_visualization = st.radio(
-        "Generate Visualization",
-        options=[False, True],
-        index=0,  # Default to False
-    )
+    # Visualization is now automatically detected by the backend
+    # No need for a manual toggle
 
     is_image = st.session_state.file_type == "Image"
     file_types = {
@@ -156,11 +152,8 @@ def display_chat_interface():
                 if chat_response.status_code == 200:
                     chat_result = chat_response.json()
 
-                    # Handle visualization data
-                    if (
-                        st.session_state.generate_visualization
-                        and "chart_config" in chat_result
-                    ):
+                    # Handle visualization data - automatically detected by backend
+                    if "chart_config" in chat_result:
                         try:
                             chart_config = chat_result["chart_config"]
                             # Create message for chat history
@@ -213,6 +206,8 @@ def initialize_session_state():
         st.session_state.file_type = "PDF"
     if "uploaded_image" not in st.session_state:
         st.session_state.uploaded_image = None
+    # Visualization is now automatically detected by the backend
+    # The generate_visualization flag is still kept in session state for API compatibility
     if "generate_visualization" not in st.session_state:
         st.session_state.generate_visualization = False
 
