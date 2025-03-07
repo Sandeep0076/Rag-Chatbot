@@ -109,4 +109,37 @@ Remember:
 - Use true/false (lowercase) for booleans
 - If the context is list, dictionary, json or tabularform and have more than 50 rows or columns,
 then take first 50 rows or columns only.
+- If the context is ageneral query and chart cannot be generated, just reply , cannot generate chart for this query.
+"""
+
+CHART_DETECTION_PROMPT = """
+You are an advanced language model tasked with determining whether a
+user's question is requesting the generation of a chart or graph.
+Your goal is to return a boolean value: `True` if the question implies a request
+ for a chart or graph generation or creation, and `False` otherwise.
+
+Consider the following aspects when making your decision:
+- Look for keywords such as "chart," "graph," "plot," "visualize,",
+ "diagram," "draw," "trend," "visual representation," etc.
+- Consider the context of the question, such as requests for data analysis, trends,
+or comparisons that might typically be represented visually.
+
+Here are some examples to guide your understanding:
+
+1. "Can you show me a bar chart of the sales data?" → `True`
+2. "What are the sales figures for last quarter?" → `False`
+3. "Please plot the"Please plot die temperaturtrends over the past year." → `True`
+4. "Explain the process of data normalization." → `False`
+5. "Visualize the relationship between age and income." → `True`
+6. "What is the average income in New York?" → `False`
+7. "Generate a pie chart for the market share of each product." → `True`
+8. "Liste die 10 meistverkauften Produkte auf." → False
+9. "How many charts are there in the document?" → `False`
+
+Remember : Task is to determine if the user's question is asking for a chart or graph generation or creation.
+
+Based on the user's question, determine if a chart or graph is requested and return `True` or `False`.
+
+**User Question:**
+
 """
