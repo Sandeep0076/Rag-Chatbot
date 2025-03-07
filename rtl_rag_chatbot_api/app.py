@@ -772,6 +772,9 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
     """
     try:
+        # Initialize visualization flag
+        generate_visualization = False
+
         # Auto-detect if visualization is needed based on the query text
         if len(query.text) > 0:
             should_visualize_filter = detect_visualization_need(query.text[-1])
@@ -782,14 +785,12 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                     configs, question, "gemini-flash"
                 )
                 if response.lower() == "true" or "true" in response.lower():
-                    query.generate_visualization = True
-                else:
-                    query.generate_visualization = False
+                    generate_visualization = True
             else:
-                query.generate_visualization = should_visualize_filter
+                generate_visualization = should_visualize_filter
 
         logging.info(
-            f"Graphic generation flag is {query.generate_visualization} for file {query.file_id}"
+            f"Graphic generation flag is {generate_visualization} for file {query.file_id}"
         )
         if len(query.text) == 0:
             raise HTTPException(status_code=400, detail="Text array cannot be empty")
@@ -822,7 +823,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                     f"Model initialized: {query.file_id}, user: {query.user_id}, model: {query.model_choice}"
                 )
 
-            if query.generate_visualization and not is_tabular:
+            if generate_visualization and not is_tabular:
                 current_question = query.text[-1] + VISUALISATION_PROMPT
             else:
                 current_question = query.text[-1]
@@ -842,7 +843,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             if isinstance(response, list):
                 return format_table_response(response)
 
-            if query.generate_visualization:
+            if generate_visualization:
                 return handle_visualization(response, query, is_tabular, configs)
 
             return {"response": str(response), "is_table": False}
