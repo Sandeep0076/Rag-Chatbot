@@ -222,18 +222,15 @@ class GCSHandler:
                 if "username" in current_info:
                     existing_username = current_info["username"]
 
-                    # If existing username is already an array
-                    if isinstance(existing_username, list):
-                        # Add new username if not already in the list
-                        if current_username not in existing_username:
-                            existing_username.append(current_username)
-                        new_info["username"] = existing_username
-                    else:
-                        # Convert existing single username to array and add current username if different
-                        usernames = [existing_username]
-                        if current_username != existing_username:
-                            usernames.append(current_username)
-                        new_info["username"] = usernames
+                    if not isinstance(existing_username, list):
+                        # If existing username is not already an array, convert to list
+                        existing_username = [existing_username]
+
+                    # append user to list, no matter if it's already there
+                    # the number of times the user is listed in the array is equivalent to the
+                    # number of times they've uploaded the file
+                    existing_username.append(current_username)
+                    new_info["username"] = existing_username
                 else:
                     # No existing username, set as a single-item array
                     new_info["username"] = [current_username]
