@@ -44,6 +44,7 @@ from rtl_rag_chatbot_api.common.models import (
     DeleteRequest,
     EmbeddingCreationRequest,
     EmbeddingsCheckRequest,
+    FileDeleteRequest,
     FileUploadResponse,
     NeighborsQuery,
     Query,
@@ -724,7 +725,7 @@ def handle_visualization(
             chart_config = json.loads(response)
         else:
             chart_config = response
-
+        logging.info(f"Generated chart config: {chart_config}")
         return JSONResponse(
             content={
                 "chart_config": chart_config,
@@ -946,6 +947,88 @@ async def analyze_image_endpoint(
 
 @app.delete("/delete")
 async def delete_resources(
+    request: FileDeleteRequest, current_user=Depends(get_current_user)
+):
+    """
+    Delete ChromaDB embeddings and associated resources for one or multiple files based on username.
+
+    If the username is the only one in file_info.json, delete the embeddings.
+    If other usernames exist, update file_info.json to remove the username but keep the embeddings.
+
+    Args:
+        request (DeleteRequest): Request body containing:
+            - file_ids (Union[str, List[str]]): Single file ID or list of file IDs
+            - include_gcs (bool): Whether to include GCS cleanup (default: False)
+            - username (str): Username to check against file_info.json
+        current_user: Authenticated user information
+
+    Returns:
+        dict: Response containing status for each file ID
+    """
+    try:
+        # Convert single file_id to list for consistent processing
+        file_ids = (
+            [request.file_ids]
+            if isinstance(request.file_ids, str)
+            else request.file_ids
+        )
+
+        results = {}
+        for file_id in file_ids:
+            try:
+                # Get file_info.json to check usernames
+                file_info = gcs_handler.get_file_info(file_id)
+
+                if not file_info:
+                    results[file_id] = "Error: File info not found"
+                    continue
+
+                # Check if username exists in file_info
+                usernames = file_info.get("username", [])
+                if not isinstance(usernames, list):
+                    usernames = [usernames]
+
+                if request.username not in usernames:
+                    results[
+                        file_id
+                    ] = f"Error: Username {request.username} not found in file info"
+                    continue
+
+                # If username is the only one, delete the embeddings
+                if len(usernames) == 1 and usernames[0] == request.username:
+                    cleanup_coordinator = CleanupCoordinator(
+                        configs, SessionLocal, gcs_handler
+                    )
+                    cleanup_coordinator.cleanup_chroma_instance(
+                        file_id, include_gcs=request.include_gcs
+                    )
+                    results[file_id] = "Success: Embeddings deleted"
+                else:
+                    # Remove username from the list and update file_info.json
+                    usernames.remove(request.username)
+                    gcs_handler.update_username_list(file_id, usernames)
+                    results[file_id] = "Success: Username removed from file info"
+
+            except Exception as e:
+                results[file_id] = f"Error: {str(e)}"
+                logging.error({"file_id": file_id, "error": str(e)})
+
+        # If only one file_id was provided, maintain original response format
+        if isinstance(request.file_ids, str):
+            if "Success" in results[request.file_ids]:
+                return {"message": results[request.file_ids].replace("Success: ", "")}
+            else:
+                raise HTTPException(status_code=500, detail=results[request.file_ids])
+
+        # For multiple file_ids, return status of all operations
+        return {"results": results}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/delete_all_embeddings")
+async def delete_all_resources(
     request: DeleteRequest, current_user=Depends(get_current_user)
 ):
     """
