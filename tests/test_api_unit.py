@@ -424,7 +424,9 @@ async def test_chat_with_image_visualization(
     mock_config: MagicMock,
     resource_manager: ResourceManager,
 ):
-    """Test chat with image functionality when visualization is requested."""
+    """Test chat with image functionality when visualization is auto-detected from query text.
+    Verifies that image analysis queries containing visualization keywords trigger chart generation.
+    """
     # Mock authentication and config
     with patch(
         "rtl_rag_chatbot_api.app.get_current_user",
@@ -441,12 +443,11 @@ async def test_chat_with_image_visualization(
         file_id = response.json()["file_id"]
         resource_manager.add_file_id(file_id)
 
-        # Test chat with visualization request
+        # Test chat with visualization request (visualization need is auto-detected from query text)
         query = {
-            "text": ["Generate a chart compareing gdp of china and india"],
+            "text": ["Generate a chart comparing gdp of china and india"],
             "file_id": file_id,
             "model_choice": "gemini-pro",
-            "generate_visualization": True,
             "user_id": "test_user",
         }
 
@@ -476,7 +477,9 @@ async def test_chat_with_pdf_visualization(
     mock_pdf_processor: MagicMock,
     resource_manager: ResourceManager,
 ):
-    """Test chat with PDF functionality when visualization is requested."""
+    """Test chat with PDF functionality when visualization is auto-detected from query text.
+    Verifies that queries containing visualization keywords trigger chart generation.
+    """
     # Mock authentication
     with patch(
         "rtl_rag_chatbot_api.app.get_current_user",
@@ -498,12 +501,11 @@ async def test_chat_with_pdf_visualization(
             "documents": [["Sample text about operating system distribution"]]
         }
 
-        # Test chat with visualization request
+        # Test chat with visualization request (visualization need is auto-detected from query text)
         query = {
             "text": ["Create a pie chart for distribution of operating systems"],
             "file_id": file_id,
             "model_choice": "gemini-pro",
-            "generate_visualization": True,
             "user_id": "test_user",
         }
 
@@ -544,7 +546,9 @@ async def test_chat_with_csv_visualization(
     mock_tabular_handler: MagicMock,
     resource_manager: ResourceManager,
 ):
-    """Test chat with CSV functionality when visualization is requested."""
+    """Test chat with CSV functionality when visualization is auto-detected from query text.
+    Verifies that queries containing visualization keywords work correctly with tabular data.
+    """
     # Mock authentication
     with patch(
         "rtl_rag_chatbot_api.app.get_current_user",
@@ -561,14 +565,13 @@ async def test_chat_with_csv_visualization(
         file_id = response.json()["file_id"]
         resource_manager.add_file_id(file_id)
 
-        # Test chat with visualization request
+        # Test chat with visualization request (visualization need is auto-detected from query text)
         query = {
             "text": [
                 "Generate a chart for Relationship between pregnancies and age for first 10 entries"
             ],
             "file_id": file_id,
             "model_choice": "gemini-pro",
-            "generate_visualization": True,
             "user_id": "test_user",
         }
 
