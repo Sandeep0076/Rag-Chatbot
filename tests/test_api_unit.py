@@ -443,7 +443,7 @@ async def test_chat_with_image_visualization(
 
         # Test chat with visualization request
         query = {
-            "text": ["compare gdp of china and india"],
+            "text": ["Generate a chart compareing gdp of china and india"],
             "file_id": file_id,
             "model_choice": "gemini-pro",
             "generate_visualization": True,
@@ -563,7 +563,9 @@ async def test_chat_with_csv_visualization(
 
         # Test chat with visualization request
         query = {
-            "text": ["Relationship between pregnancies and age for first 10 entries"],
+            "text": [
+                "Generate a chart for Relationship between pregnancies and age for first 10 entries"
+            ],
             "file_id": file_id,
             "model_choice": "gemini-pro",
             "generate_visualization": True,
