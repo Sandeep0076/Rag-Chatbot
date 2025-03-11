@@ -274,14 +274,17 @@ class FileHandler:
                 await buffer.write(file_content)
             del file_content
 
-            # Prepare metadata for new file
+            # Determine the actual file_id to use - if an existing file is found, use that ID
+            actual_file_id = existing_file_id if existing_file_id else file_id
+
+            # Prepare metadata for file with consistent file_id
             metadata = {
                 "is_image": is_image,
                 "is_tabular": is_tabular or is_database,
                 "file_hash": file_hash,
                 "username": [username],  # Store username as an array
                 "original_filename": original_filename,
-                "file_id": file_id,
+                "file_id": actual_file_id,  # Always use the actual file_id (existing or new)
             }
 
             # Process based on file type
@@ -296,8 +299,9 @@ class FileHandler:
                 )
             ):
                 analysis_files = []
+                # Use the actual_file_id for image analysis to ensure consistency
                 await self._handle_image_analysis(
-                    file_id, temp_file_path, analysis_files
+                    actual_file_id, temp_file_path, analysis_files
                 )
                 metadata.update(
                     {
@@ -312,7 +316,11 @@ class FileHandler:
             # If it's a new tabular file, prepare SQLite database
             if (is_tabular or is_database) and not existing_file_id:
                 return await self._handle_new_tabular_data(
-                    file_id, temp_file_path, file_hash, original_filename, username
+                    actual_file_id,
+                    temp_file_path,
+                    file_hash,
+                    original_filename,
+                    username,
                 )
 
             if existing_file_id:
@@ -379,7 +387,7 @@ class FileHandler:
                 }
 
             return {
-                "file_id": file_id,
+                "file_id": actual_file_id,  # Always use the consistent file_id
                 "is_image": is_image,
                 "is_tabular": is_tabular,
                 "message": "File processed and ready for embedding creation."
