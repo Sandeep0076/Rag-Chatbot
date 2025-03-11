@@ -124,12 +124,25 @@ class AzureChatbot(BaseRAGHandler):
                 ]
                 max_tokens = 3000
 
-            response = self.llm_client.chat.completions.create(
-                model=self.model_config.deployment,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=max_tokens,
-            )
+            # Check if the model is o3 mini which requires different parameters
+            logging.info(f"Model deployment name: {self.model_config.deployment}")
+            # Check for o3-mini in the deployment name
+            if "o3-mini" in self.model_config.deployment.lower():
+                logging.info("Using o3 mini specific parameters")
+                response = self.llm_client.chat.completions.create(
+                    model=self.model_config.deployment,
+                    messages=messages,
+                    max_completion_tokens=50000,
+                    stop=None,
+                    stream=False,
+                )
+            else:
+                response = self.llm_client.chat.completions.create(
+                    model=self.model_config.deployment,
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=max_tokens,
+                )
 
             return response.choices[0].message.content
 
@@ -178,16 +191,31 @@ def get_azure_non_rag_response(
             {"role": "user", "content": query},
         ]
 
-        response = llm_client.chat.completions.create(
-            model=configs.azure_llm.models[model_choice].deployment,
-            messages=messages,
-            temperature=configs.llm_hyperparams.temperature,
-            max_tokens=configs.llm_hyperparams.max_tokens,
-            top_p=configs.llm_hyperparams.top_p,
-            frequency_penalty=configs.llm_hyperparams.frequency_penalty,
-            presence_penalty=configs.llm_hyperparams.presence_penalty,
-            stop=configs.llm_hyperparams.stop,
+        # Check if the model is o3 mini which requires different parameters
+        logging.info(
+            f"Non-RAG model deployment name: {configs.azure_llm.models[model_choice].deployment}"
         )
+        # Check for o3-mini in the deployment name
+        if "o3-mini" in configs.azure_llm.models[model_choice].deployment.lower():
+            logging.info("Using o3 mini specific parameters for non-RAG response")
+            response = llm_client.chat.completions.create(
+                model=configs.azure_llm.models[model_choice].deployment,
+                messages=messages,
+                max_completion_tokens=configs.llm_hyperparams.max_tokens,
+                stop=configs.llm_hyperparams.stop,
+                stream=False,
+            )
+        else:
+            response = llm_client.chat.completions.create(
+                model=configs.azure_llm.models[model_choice].deployment,
+                messages=messages,
+                temperature=configs.llm_hyperparams.temperature,
+                max_tokens=configs.llm_hyperparams.max_tokens,
+                top_p=configs.llm_hyperparams.top_p,
+                frequency_penalty=configs.llm_hyperparams.frequency_penalty,
+                presence_penalty=configs.llm_hyperparams.presence_penalty,
+                stop=configs.llm_hyperparams.stop,
+            )
 
         return response.choices[0].message.content.strip()
 
