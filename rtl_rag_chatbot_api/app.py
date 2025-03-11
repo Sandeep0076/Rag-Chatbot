@@ -239,16 +239,17 @@ async def upload_file(
     Made asynchronous to prevent blocking during long operations.
     """
     try:
-        # Generate file_id with UUID
-        file_id = str(uuid.uuid4())
+        # Generate temporary file_id with UUID - will be replaced if file already exists
+        temp_file_id = str(uuid.uuid4())
         original_filename = file.filename
         file_extension = os.path.splitext(original_filename)[1].lower()
 
         # Process the file upload asynchronously
-        result = await file_handler.process_file(file, file_id, is_image, username)
-        file_id = result[
-            "file_id"
-        ]  # Use the file_id from result in case it's an existing file
+        # We pass temp_file_id which will be used only if this is a new file
+        result = await file_handler.process_file(file, temp_file_id, is_image, username)
+        # Use the file_id from result - this will be either the existing file_id if file exists,
+        # or the temp_file_id if it's a new file
+        file_id = result["file_id"]
         temp_file_path = result["temp_file_path"]
 
         # Handle CSV/Excel/Database files in background
@@ -286,14 +287,25 @@ async def upload_file(
                 not google_result["embeddings_exist"]
                 or not azure_result["embeddings_exist"]
             ):
+                # Get the existing file_info.json to preserve username list
+                existing_file_info = gcs_handler.get_file_info(file_id)
+                existing_username_list = existing_file_info.get("username", [])
+                existing_file_id = existing_file_info.get(
+                    "file_id", file_id
+                )  # Keep the same file_id
+
+                # Delete the embeddings
                 gcs_handler.delete_embeddings(file_id)
+
+                # Add task to create new embeddings
                 background_tasks.add_task(
                     create_embeddings_background,
-                    file_id=file_id,
+                    file_id=file_id,  # Use the existing file_id
                     temp_file_path=temp_file_path,
                     embedding_handler=embedding_handler,
                     configs=configs,
                     SessionLocal=SessionLocal,
+                    username_list=existing_username_list,  # Pass the preserved username list
                 )
                 logging.info(f"Creating new missing embeddings for file: {file_id}")
 
@@ -426,13 +438,44 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
 
 
 async def create_embeddings_background(
-    file_id: str, temp_file_path: str, embedding_handler, configs, SessionLocal
+    file_id: str,
+    temp_file_path: str,
+    embedding_handler,
+    configs,
+    SessionLocal,
+    username_list=None,
 ):
-    """Background task for creating embeddings."""
+    """Background task for creating embeddings.
+
+    Args:
+        file_id: The ID of the file to create embeddings for
+        temp_file_path: Path to the temporary file
+        embedding_handler: Handler for creating embeddings
+        configs: Application configuration
+        SessionLocal: Database session factory
+        username_list: Optional list of usernames to preserve in file_info.json
+    """
     try:
+        # Create embeddings
         embedding_result = await embedding_handler.ensure_embeddings_exist(
             file_id=file_id, temp_file_path=temp_file_path
         )
+
+        # If embeddings were created successfully and we have a username list to preserve
+        if embedding_result["status"] != "error" and username_list:
+            try:
+                # Initialize GCS handler
+                gcs_handler = GCSHandler(configs)
+
+                # Update the file_info.json with the preserved username list
+                gcs_handler.update_username_list(file_id, username_list)
+                logging.info(
+                    f"Updated username list for file_id {file_id} with preserved usernames"
+                )
+            except Exception as update_error:
+                logging.error(f"Error updating username list: {str(update_error)}")
+
+        # Handle errors in embedding creation
         if embedding_result["status"] == "error":
             logging.error(
                 f"Error creating embeddings for {file_id}: {embedding_result['message']}"
