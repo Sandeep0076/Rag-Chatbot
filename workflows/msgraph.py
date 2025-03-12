@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 
 import msal
 import requests
@@ -10,9 +11,12 @@ CLIENT_SECRET = os.getenv("WF_CLIENT_SECRET")
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 SCOPE = ["https://graph.microsoft.com/.default"]
 GRAPH_API_ENDPOINT = "https://graph.microsoft.com/v1.0"
+BATCH_URL = f"{GRAPH_API_ENDPOINT}/$batch"
 
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    stream=sys.stdout,
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
 log = logging.getLogger(__name__)
 
@@ -28,14 +32,17 @@ def get_access_token():
 
 
 def is_user_account_enabled(user_email):
-    """"""
+    """
+    Accesses the Microsoft Graph API to check if the user account is enabled.
+    """
     token = get_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     # graph API query to get user details
     log.info("Sending request to get user details")
     user_response = requests.get(
-        f"{GRAPH_API_ENDPOINT}/users/{user_email}?$select=accountEnabled,displayName,mail",
+        # filter follows a particular syntax, https://learn.microsoft.com/en-us/graph/filter-query-parameter?tabs=http
+        f"{GRAPH_API_ENDPOINT}/users?$filter=mail eq '{user_email}'&$select=accountEnabled,displayName,mail",
         headers=headers,
     )
 

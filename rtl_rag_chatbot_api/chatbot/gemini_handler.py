@@ -121,7 +121,7 @@ class GeminiHandler(BaseRAGHandler):
             # Construct the prompt with context
             context = "\n".join(relevant_docs[:3])  # Use top 3 most relevant documents
             prompt = f"""{self.configs.chatbot.system_prompt_rag_llm}
-            Elaborate the answer based on the context provided.
+            Elaborate the give detailed answer based on the context provided.
             Context:
             {context}
 

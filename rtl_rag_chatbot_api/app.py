@@ -26,6 +26,7 @@ from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot as Chatbot
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
 from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
+from rtl_rag_chatbot_api.chatbot.data_visualization import detect_visualization_need
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.file_handler import FileHandler
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
@@ -44,6 +45,7 @@ from rtl_rag_chatbot_api.common.models import (
     DeleteRequest,
     EmbeddingCreationRequest,
     EmbeddingsCheckRequest,
+    FileDeleteRequest,
     FileUploadResponse,
     NeighborsQuery,
     Query,
@@ -51,7 +53,10 @@ from rtl_rag_chatbot_api.common.models import (
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
-from rtl_rag_chatbot_api.common.prompts_storage import VISUALISATION_PROMPT
+from rtl_rag_chatbot_api.common.prompts_storage import (
+    CHART_DETECTION_PROMPT,
+    VISUALISATION_PROMPT,
+)
 from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
 
 # from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
@@ -234,16 +239,17 @@ async def upload_file(
     Made asynchronous to prevent blocking during long operations.
     """
     try:
-        # Generate file_id with UUID
-        file_id = str(uuid.uuid4())
+        # Generate temporary file_id with UUID - will be replaced if file already exists
+        temp_file_id = str(uuid.uuid4())
         original_filename = file.filename
         file_extension = os.path.splitext(original_filename)[1].lower()
 
         # Process the file upload asynchronously
-        result = await file_handler.process_file(file, file_id, is_image, username)
-        file_id = result[
-            "file_id"
-        ]  # Use the file_id from result in case it's an existing file
+        # We pass temp_file_id which will be used only if this is a new file
+        result = await file_handler.process_file(file, temp_file_id, is_image, username)
+        # Use the file_id from result - this will be either the existing file_id if file exists,
+        # or the temp_file_id if it's a new file
+        file_id = result["file_id"]
         temp_file_path = result["temp_file_path"]
 
         # Handle CSV/Excel/Database files in background
@@ -281,14 +287,25 @@ async def upload_file(
                 not google_result["embeddings_exist"]
                 or not azure_result["embeddings_exist"]
             ):
+                # Get the existing file_info.json to preserve username list
+                existing_file_info = gcs_handler.get_file_info(file_id)
+                existing_username_list = existing_file_info.get("username", [])
+                existing_file_id = existing_file_info.get(
+                    "file_id", file_id
+                )  # Keep the same file_id
+
+                # Delete the embeddings
                 gcs_handler.delete_embeddings(file_id)
+
+                # Add task to create new embeddings
                 background_tasks.add_task(
                     create_embeddings_background,
-                    file_id=file_id,
+                    file_id=file_id,  # Use the existing file_id
                     temp_file_path=temp_file_path,
                     embedding_handler=embedding_handler,
                     configs=configs,
                     SessionLocal=SessionLocal,
+                    username_list=existing_username_list,  # Pass the preserved username list
                 )
                 logging.info(f"Creating new missing embeddings for file: {file_id}")
 
@@ -421,13 +438,44 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
 
 
 async def create_embeddings_background(
-    file_id: str, temp_file_path: str, embedding_handler, configs, SessionLocal
+    file_id: str,
+    temp_file_path: str,
+    embedding_handler,
+    configs,
+    SessionLocal,
+    username_list=None,
 ):
-    """Background task for creating embeddings."""
+    """Background task for creating embeddings.
+
+    Args:
+        file_id: The ID of the file to create embeddings for
+        temp_file_path: Path to the temporary file
+        embedding_handler: Handler for creating embeddings
+        configs: Application configuration
+        SessionLocal: Database session factory
+        username_list: Optional list of usernames to preserve in file_info.json
+    """
     try:
+        # Create embeddings
         embedding_result = await embedding_handler.ensure_embeddings_exist(
             file_id=file_id, temp_file_path=temp_file_path
         )
+
+        # If embeddings were created successfully and we have a username list to preserve
+        if embedding_result["status"] != "error" and username_list:
+            try:
+                # Initialize GCS handler
+                gcs_handler = GCSHandler(configs)
+
+                # Update the file_info.json with the preserved username list
+                gcs_handler.update_username_list(file_id, username_list)
+                logging.info(
+                    f"Updated username list for file_id {file_id} with preserved usernames"
+                )
+            except Exception as update_error:
+                logging.error(f"Error updating username list: {str(update_error)}")
+
+        # Handle errors in embedding creation
         if embedding_result["status"] == "error":
             logging.error(
                 f"Error creating embeddings for {file_id}: {embedding_result['message']}"
@@ -724,7 +772,7 @@ def handle_visualization(
             chart_config = json.loads(response)
         else:
             chart_config = response
-
+        logging.info(f"Generated chart config: {chart_config}")
         return JSONResponse(
             content={
                 "chart_config": chart_config,
@@ -767,8 +815,25 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
     """
     try:
+        # Initialize visualization flag
+        generate_visualization = False
+
+        # Auto-detect if visualization is needed based on the query text
+        if len(query.text) > 0:
+            should_visualize_filter = detect_visualization_need(query.text[-1])
+            if should_visualize_filter:
+                question = CHART_DETECTION_PROMPT + query.text[-1]
+                # Using gemini-flash for visualization detection for faster response
+                response = get_gemini_non_rag_response(
+                    configs, question, "gemini-flash"
+                )
+                if response.lower() == "true" or "true" in response.lower():
+                    generate_visualization = True
+            else:
+                generate_visualization = should_visualize_filter
+
         logging.info(
-            f"Graphic generation flag is  {query.generate_visualization} for file {query.file_id}"
+            f"Graphic generation flag is {generate_visualization} for file {query.file_id}"
         )
         if len(query.text) == 0:
             raise HTTPException(status_code=400, detail="Text array cannot be empty")
@@ -801,7 +866,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                     f"Model initialized: {query.file_id}, user: {query.user_id}, model: {query.model_choice}"
                 )
 
-            if query.generate_visualization and not is_tabular:
+            if generate_visualization and not is_tabular:
                 current_question = query.text[-1] + VISUALISATION_PROMPT
             else:
                 current_question = query.text[-1]
@@ -821,7 +886,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             if isinstance(response, list):
                 return format_table_response(response)
 
-            if query.generate_visualization:
+            if generate_visualization:
                 return handle_visualization(response, query, is_tabular, configs)
 
             return {"response": str(response), "is_table": False}
@@ -946,6 +1011,88 @@ async def analyze_image_endpoint(
 
 @app.delete("/delete")
 async def delete_resources(
+    request: FileDeleteRequest, current_user=Depends(get_current_user)
+):
+    """
+    Delete ChromaDB embeddings and associated resources for one or multiple files based on username.
+
+    If the username is the only one in file_info.json, delete the embeddings.
+    If other usernames exist, update file_info.json to remove the username but keep the embeddings.
+
+    Args:
+        request (DeleteRequest): Request body containing:
+            - file_ids (Union[str, List[str]]): Single file ID or list of file IDs
+            - include_gcs (bool): Whether to include GCS cleanup (default: False)
+            - username (str): Username to check against file_info.json
+        current_user: Authenticated user information
+
+    Returns:
+        dict: Response containing status for each file ID
+    """
+    try:
+        # Convert single file_id to list for consistent processing
+        file_ids = (
+            [request.file_ids]
+            if isinstance(request.file_ids, str)
+            else request.file_ids
+        )
+
+        results = {}
+        for file_id in file_ids:
+            try:
+                # Get file_info.json to check usernames
+                file_info = gcs_handler.get_file_info(file_id)
+
+                if not file_info:
+                    results[file_id] = "Error: File info not found"
+                    continue
+
+                # Check if username exists in file_info
+                usernames = file_info.get("username", [])
+                if not isinstance(usernames, list):
+                    usernames = [usernames]
+
+                if request.username not in usernames:
+                    results[
+                        file_id
+                    ] = f"Error: Username {request.username} not found in file info"
+                    continue
+
+                # If username is the only one, delete the embeddings
+                if len(usernames) == 1 and usernames[0] == request.username:
+                    cleanup_coordinator = CleanupCoordinator(
+                        configs, SessionLocal, gcs_handler
+                    )
+                    cleanup_coordinator.cleanup_chroma_instance(
+                        file_id, include_gcs=request.include_gcs
+                    )
+                    results[file_id] = "Success: Embeddings deleted"
+                else:
+                    # Remove username from the list and update file_info.json
+                    usernames.remove(request.username)
+                    gcs_handler.update_username_list(file_id, usernames)
+                    results[file_id] = "Success: Username removed from file info"
+
+            except Exception as e:
+                results[file_id] = f"Error: {str(e)}"
+                logging.error({"file_id": file_id, "error": str(e)})
+
+        # If only one file_id was provided, maintain original response format
+        if isinstance(request.file_ids, str):
+            if "Success" in results[request.file_ids]:
+                return {"message": results[request.file_ids].replace("Success: ", "")}
+            else:
+                raise HTTPException(status_code=500, detail=results[request.file_ids])
+
+        # For multiple file_ids, return status of all operations
+        return {"results": results}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/delete_all_embeddings")
+async def delete_all_resources(
     request: DeleteRequest, current_user=Depends(get_current_user)
 ):
     """

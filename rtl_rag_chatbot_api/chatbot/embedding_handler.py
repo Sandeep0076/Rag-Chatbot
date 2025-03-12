@@ -224,6 +224,15 @@ class EmbeddingHandler:
                 # Upload embeddings to GCS
                 await self._upload_embeddings_to_gcs(file_id)
 
+                # Get metadata file_id if it exists to ensure consistency
+                metadata_file_id = (
+                    temp_metadata.get("file_id") if temp_metadata else None
+                )
+
+                # If metadata has a file_id that differs from the passed file_id, use the metadata one
+                # This ensures we always use the same file_id that's in the metadata
+                consistent_file_id = metadata_file_id if metadata_file_id else file_id
+
                 # Only create file_info.json after successful upload
                 file_info = {
                     **temp_metadata,  # Include original metadata
@@ -233,16 +242,17 @@ class EmbeddingHandler:
                     },
                     "embeddings_status": "completed",
                     "azure_ready": True,
+                    "file_id": consistent_file_id,  # Ensure file_id consistency
                     "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
                 }
 
-                # Save file_info.json
+                # Save file_info.json using the consistent file_id for the path
                 self.gcs_handler.upload_to_gcs(
                     self.configs.gcp_resource.bucket_name,
                     {
                         "metadata": (
                             file_info,
-                            f"file-embeddings/{file_id}/file_info.json",
+                            f"file-embeddings/{consistent_file_id}/file_info.json",
                         )
                     },
                 )
@@ -362,6 +372,19 @@ class EmbeddingHandler:
     async def _upload_embeddings_to_gcs(self, file_id: str):
         logging.info("Uploading embeddings to GCS...")
         try:
+            # Get the temp metadata which should already have the correct file_id
+            temp_metadata = self.gcs_handler.temp_metadata
+
+            # If we have temp_metadata and a file_id in it, use that to ensure consistency
+            if temp_metadata and "file_id" in temp_metadata:
+                metadata_file_id = temp_metadata.get("file_id")
+                if metadata_file_id != file_id:
+                    logging.warning(
+                        f"Metadata file_id {metadata_file_id} differs from passed file_id "
+                        f"{file_id}. Using metadata file_id."
+                    )
+                    file_id = metadata_file_id
+
             for model in ["azure", "google"]:
                 chroma_db_path = f"./chroma_db/{file_id}/{model}"
                 gcs_subfolder = f"file-embeddings/{file_id}/{model}"

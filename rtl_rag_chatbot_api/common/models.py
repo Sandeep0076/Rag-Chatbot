@@ -8,9 +8,6 @@ class Query(BaseModel):
     file_id: str
     model_choice: str = Field(..., description="The chosen language model")
     user_id: str
-    generate_visualization: bool = Field(
-        False, description="Whether to generate visualization"
-    )
     model_config = {"protected_namespaces": ()}
 
 
@@ -59,10 +56,6 @@ class EmbeddingsCheckRequest(BaseModel):
     model_choice: str = Field(..., description="The chosen language model")
 
 
-class FileDeleteRequest(BaseModel):
-    file_ids: List[str]
-
-
 class ChatRequest(BaseModel):
     model: str
     message: str
@@ -70,6 +63,12 @@ class ChatRequest(BaseModel):
 
 class CleanupRequest(BaseModel):
     is_manual: bool = True
+
+
+class FileDeleteRequest(BaseModel):
+    file_ids: Union[str, List[str]]  # Can be single ID or list of IDs
+    include_gcs: bool = False
+    username: str
 
 
 class DeleteRequest(BaseModel):

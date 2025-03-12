@@ -16,5 +16,8 @@ git_commits.txt
 version_doc/
 .cursorignore
 tests/test_file_ids.json
-env_variables.txt
+tests/workflows/*.sql.runtime
+.coverage
+coverage.xml
 workflows/env_varaibles.txt
+env_varaibles.txt
