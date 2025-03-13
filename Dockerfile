@@ -8,10 +8,16 @@ ENV PYTHONUNBUFFERED=true
 RUN adduser \
     --disabled-password \
     --uid 4711 \
-    worker \
-    && mkdir -p /code /opt/poetry /nltk_data \
+    worker
+RUN mkdir -p /code /opt/poetry /nltk_data \
     && chown -R worker:worker /code /opt/poetry /nltk_data \
-    && apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-deu poppler-utils netcat-traditional \
+    && apt-get update
+RUN apt-get install -y \
+    # required for chat with image
+    tesseract-ocr tesseract-ocr-deu \
+    poppler-utils netcat-traditional \
+    # requied for chat with doc(x) older formats
+    antiword \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /code
