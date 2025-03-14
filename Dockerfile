@@ -1,17 +1,23 @@
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                        Base - Stage                      │
 #  ╰──────────────────────────────────────────────────────────╯
-FROM europe-west1-docker.pkg.dev/mgr-platform-prod-khsu/image-hub/dockerhub/python:3.11-slim as base
+FROM europe-west1-docker.pkg.dev/mgr-platform-prod-khsu/image-hub/dockerhub/python:3.11-slim AS base
 ENV PYTHONUNBUFFERED=true
 
 # adding non root user "worker", with no password, uid needed for workflow
 RUN adduser \
     --disabled-password \
     --uid 4711 \
-    worker \
-    && mkdir -p /code /opt/poetry /nltk_data \
+    worker
+RUN mkdir -p /code /opt/poetry /nltk_data \
     && chown -R worker:worker /code /opt/poetry /nltk_data \
-    && apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-deu poppler-utils netcat-traditional \
+    && apt-get update
+RUN apt-get install -y \
+    # required for chat with image
+    tesseract-ocr tesseract-ocr-deu \
+    poppler-utils netcat-traditional \
+    # requied for chat with doc(x) older formats
+    antiword \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /code
@@ -19,7 +25,7 @@ WORKDIR /code
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                       Build - Stage                      │
 #  ╰──────────────────────────────────────────────────────────╯
-FROM base as build
+FROM base AS build
 
 ENV POETRY_HOME=/opt/poetry
 ENV POETRY_VIRTUALENVS_IN_PROJECT=true
@@ -49,7 +55,7 @@ RUN python -m nltk.downloader punkt -d /nltk_data
 #  ╭──────────────────────────────────────────────────────────╮
 #  │                     Runtime - Stage                      │
 #  ╰──────────────────────────────────────────────────────────╯
-FROM base as runtime
+FROM base AS runtime
 ENV PATH="/opt/poetry/bin:code/.venv/bin:$PATH"
 
 COPY --from=build /opt/poetry /opt/poetry

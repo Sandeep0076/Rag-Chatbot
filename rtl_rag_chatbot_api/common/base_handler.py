@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import List
 
 import pytesseract
-from docx import Document
 from pdf2image import convert_from_path
 from pdfminer.high_level import extract_text
 
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
+from rtl_rag_chatbot_api.common.text_extractor import TextExtractor
 
 logging.basicConfig(level=logging.INFO)
 
@@ -221,7 +221,8 @@ class BaseRAGHandler:
             if file_extension == ".pdf":
                 return self.extract_text_from_pdf(file_path)
             elif file_extension in [".doc", ".docx"]:
-                return self.extract_text_from_doc(file_path)
+                extractor = TextExtractor()
+                return extractor.extract_text_from_doc(file_path)
             elif file_extension == ".txt":
                 return self.extract_text_from_txt(file_path)
             else:
@@ -254,21 +255,6 @@ class BaseRAGHandler:
                     f"Successfully extracted {len(text)} characters from TXT file using fallback encoding"
                 )
                 return text
-
-    def extract_text_from_doc(self, file_path: str) -> str:
-        """Extract text from DOC/DOCX files using python-docx."""
-        logging.info(f"Extracting text from DOC/DOCX file: {file_path}")
-        try:
-            doc = Document(file_path)
-            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
-            logging.info(
-                f"Successfully extracted {len(text)} characters from DOC/DOCX file"
-            )
-            return text
-        except Exception as e:
-            error_msg = f"Failed to extract text from DOC/DOCX: {str(e)}"
-            logging.error(error_msg)
-            return f"ERROR: {error_msg}"
 
     def extract_text_from_pdf(self, file_path: str) -> str:
         """Extract text from PDF using pdfminer or OCR if necessary."""
