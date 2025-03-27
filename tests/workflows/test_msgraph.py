@@ -43,7 +43,7 @@ def test_is_user_account_enabled_success(mock_get_access_token, mock_requests_ge
     # Assertions
     assert result is True
     mock_requests_get.assert_called_once_with(
-        f"{GRAPH_API_ENDPOINT}/users/testuser@example.com?$select=accountEnabled,displayName,mail",
+        f"{GRAPH_API_ENDPOINT}/users?$filter=mail eq 'testuser@example.com'&$select=accountEnabled,displayName,mail",
         headers={
             "Authorization": "Bearer mocked_token",
             "Content-Type": "application/json",

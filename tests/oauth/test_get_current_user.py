@@ -86,6 +86,7 @@ async def test_get_current_user_missing_sub(
     assert exc_info.value.detail == "Could not validate credentials"
 
 
+@pytest.mark.asyncio
 @patch(
     "rtl_rag_chatbot_api.oauth.get_public_key.get_public_key", return_value=public_key
 )
