@@ -3,7 +3,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from workflows.app_config import config
 from workflows.db.helpers import filter_older_than_4_weeks
 from workflows.gcs.helpers import delete_embeddings
 
@@ -49,53 +48,128 @@ def test_filter_older_than_4_weeks(
     )  # only user1 should be in the filtered list
 
 
+@patch("workflows.gcs.helpers.bucket.blob")
+@patch("workflows.gcs.helpers.bucket.delete_blobs")
 @patch("workflows.gcs.helpers.bucket.list_blobs")
-def test_delete_embeddings(mock_list_blobs, mock_log):
-    # Setup mock blobs
-    mock_blob1 = MagicMock()
-    mock_blob1.name = "embedding1"
-    mock_blob2 = MagicMock()
-    mock_blob2.name = "embedding2"
-    mock_list_blobs.return_value = [mock_blob1, mock_blob2]
+def test_delete_embeddings__no_user_left(
+    mock_list_blobs, mock_delete_blobs, mock_blob, mock_log
+):
+    """
+    Test the delete_embeddings function when one user is present in file_info.json.
+    This should delete the user from file_info.json and eventually delete the blobs.
 
-    # Call the function
-    delete_embeddings("file1")
-
-    # Assertions
-    mock_list_blobs.assert_called_once_with(
-        prefix=f"{config.gcp.embeddings_root_folder}/file1/"
+    File structure in GCS:
+    file-embeddings/
+        embedding1/         <- folder to be deleted
+            azure/
+            google/
+            file_info.json  <- file to be updated (but eventually deleted)
+        embedding2/
+            ...
+    """
+    blob_prefix = "file-embeddings/embedding1"
+    # rebuild the gcs folder structure
+    mock_blob_azure_subfolder = MagicMock()
+    mock_blob_azure_subfolder.name = f"{blob_prefix}/azure"
+    mock_blob_google_subfolder = MagicMock()
+    mock_blob_google_subfolder.name = f"{blob_prefix}/google"
+    # mock file_info.json for embedding 1
+    mock_file_info_blob = MagicMock()
+    mock_file_info_blob.name = f"{blob_prefix}/file_info.json"
+    mock_file_info_blob.exists.return_value = True
+    mock_file_info_blob.download_as_text.return_value = (
+        '{"username": ["user1@example.com"]}'
     )
-    assert mock_blob1.delete.call_count == 1
-    assert mock_blob2.delete.call_count == 1
+    mock_blob.return_value = mock_file_info_blob
 
-    # Ensure no error logs are written
+    # mock list_blobs
+    blob_list = [
+        mock_blob_azure_subfolder,
+        mock_blob_google_subfolder,
+        mock_file_info_blob,
+    ]
+    mock_list_blobs.return_value = blob_list
+
+    # call function
+    delete_embeddings("embedding1", "user1@example.com")
+
+    # assertions
+    mock_blob.assert_called_once()
+    mock_file_info_blob.upload_from_string.assert_not_called()  # usernames empty, folder deleted
+    mock_delete_blobs.assert_called_once_with(blob_list)
+
+    # ensure no errors logged
     mock_log.error.assert_not_called()
 
     # Ensure logs are written
-    mock_log.info.assert_any_call("Deleted blob: embedding1")
-    mock_log.info.assert_any_call("Deleted blob: embedding2")
     mock_log.info.assert_any_call(
-        "Successfully deleted all embeddings for file_id: file1"
+        "Removed user1@example.com from file_info.json for file_id: embedding1"
+    )
+    mock_log.info.assert_any_call(
+        "Successfully deleted whole embeddings folder for file_id: embedding1"
     )
 
 
+@patch("workflows.gcs.helpers.bucket.blob")
+@patch("workflows.gcs.helpers.bucket.delete_blobs")
 @patch("workflows.gcs.helpers.bucket.list_blobs")
-def test_delete_embeddings_with_exception(mock_list_blobs, mock_log):
-    # Setup mock blobs
-    mock_blob1 = MagicMock()
-    mock_blob1.name = "embeddings/file1/embedding1"
-    mock_blob1.delete.side_effect = Exception("Deletion error")
-    mock_list_blobs.return_value = [mock_blob1]
+def test_delete_embeddings__users_left(
+    mock_list_blobs, mock_delete_blobs, mock_blob, mock_log
+):
+    """
+    Test the delete_embeddings function when multiple users are present in file_info.json.
+    This should delete the user from file_info.json and update it in the bucket.
+    The embeddings folder should not be deleted.
 
-    delete_embeddings("test_file_id")
-
-    # Assertions
-    mock_list_blobs.assert_called_once_with(
-        prefix=f"{config.gcp.embeddings_root_folder}/test_file_id/"
+    File structure in GCS:
+    file-embeddings/
+        embedding1/         <- folder to be deleted
+            azure/
+            google/
+            file_info.json  <- file to be updated, not deleted
+        embedding2/
+            ...
+    """
+    blob_prefix = "file-embeddings/embedding1"
+    # rebuild the gcs folder structure
+    mock_blob_azure_subfolder = MagicMock()
+    mock_blob_azure_subfolder.name = f"{blob_prefix}/azure"
+    mock_blob_google_subfolder = MagicMock()
+    mock_blob_google_subfolder.name = f"{blob_prefix}/google"
+    # mock file_info.json for embedding 1
+    mock_file_info_blob = MagicMock()
+    mock_file_info_blob.name = f"{blob_prefix}/file_info.json"
+    mock_file_info_blob.exists.return_value = True
+    mock_file_info_blob.download_as_text.return_value = (
+        '{"username": ["user1@example.com", "user2@example.com"]}'
     )
-    assert mock_blob1.delete.call_count == 1
+    mock_blob.return_value = mock_file_info_blob
 
-    # Ensure log error was triggered
-    mock_log.error.assert_any_call(
-        f"Error deleting blob {mock_blob1.name}: Deletion error"
+    # mock list_blobs
+    blob_list = [
+        mock_blob_azure_subfolder,
+        mock_blob_google_subfolder,
+        mock_file_info_blob,
+    ]
+    mock_list_blobs.return_value = blob_list
+
+    # call function
+    delete_embeddings("embedding1", "user1@example.com")
+
+    # assertions
+    mock_blob.assert_called_once()
+    mock_file_info_blob.upload_from_string.assert_called_once_with(
+        '{"username": ["user2@example.com"]}', content_type="application/json"
+    )  # one user left
+    mock_delete_blobs.assert_not_called()  # folder not deleted
+
+    # ensure no errors logged
+    mock_log.error.assert_not_called()
+
+    # Ensure logs are written
+    mock_log.info.assert_any_call(
+        "Removed user1@example.com from file_info.json for file_id: embedding1"
+    )
+    mock_log.info.assert_any_call(
+        "Updated file_info.json and removed user1@example.com from list for file_id: embedding1"
     )
