@@ -31,10 +31,11 @@ def file_present_in_gcp(bucket_prefix: str) -> bool:
 
 def delete_embeddings(file_id: str, user_email: str) -> None:
     """
-    Deletes all embeddings associated with a file_id from GCS.
+    Deletes all embeddings associated with a file_id associated to the given user_email from GCS.
 
     Args:
         file_id (str): The ID of the file whose embeddings should be deleted
+        user_email (str): The email of the user that is associated with the embedding
     """
     try:
         log.info(

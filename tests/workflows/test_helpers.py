@@ -60,10 +60,10 @@ def test_delete_embeddings__no_user_left(
 
     File structure in GCS:
     file-embeddings/
-        embedding1/         <- folder to be deleted
+        embedding1/         <- 2. folder to be deleted
             azure/
             google/
-            file_info.json  <- file to be updated (but eventually deleted)
+            file_info.json  <- 1. file to be updated (but eventually deleted)
         embedding2/
             ...
     """
@@ -123,10 +123,10 @@ def test_delete_embeddings__users_left(
 
     File structure in GCS:
     file-embeddings/
-        embedding1/         <- folder to be deleted
+        embedding1/         <- 2. folder to be deleted (but it's not, due to users left)
             azure/
             google/
-            file_info.json  <- file to be updated, not deleted
+            file_info.json  <- 1. file to be updated, not deleted
         embedding2/
             ...
     """
