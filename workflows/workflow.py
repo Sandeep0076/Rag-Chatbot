@@ -95,8 +95,10 @@ def get_users_deletion_candicates():
         return filtered_users
 
 
-def get_deletion_condidates_fileids(candidates: List[User]):
-    """"""
+def get_user_fileids(candidates: List[User]):
+    """
+    This function retrieves the file ids associated with the users passed into this function.
+    """
 
     with get_db_session() as session:
         user_file_ids = (

@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from workflows.db.tables import Base
 from workflows.workflow import (
     delete_candidate_user_embeddings,
-    get_deletion_condidates_fileids,
+    get_user_fileids,
     get_users_deletion_candicates,
 )
 
@@ -99,7 +99,7 @@ def test_deletion_condidates_fileids(
 
     # Call the function
     candidates = get_users_deletion_candicates()
-    file_ids = get_deletion_condidates_fileids(candidates)
+    file_ids = get_user_fileids(candidates)
     assert len(file_ids) == 2
 
 
