@@ -100,7 +100,7 @@ def get_deletion_condidates_fileids(candidates: List[User]):
 
     with get_db_session() as session:
         user_file_ids = (
-            session.query(distinct(Conversation.fileId))
+            session.query(distinct(Conversation.fileId), Conversation.userEmail)
             .filter(
                 Conversation.userEmail.in_(list(map(lambda u: u.email, candidates))),
                 Conversation.fileId.isnot(None),
@@ -110,6 +110,8 @@ def get_deletion_condidates_fileids(candidates: List[User]):
 
         log.info(f"Found {len(user_file_ids)} file ids to delete embeddings for.")
 
+        # returns a mapping of file ids to user emails
+        # e.g. [(file_id1, user_email1), (file_id2, user_email1), ...]
         return user_file_ids
 
 
@@ -178,19 +180,22 @@ def delete_candidate_user_embeddings():
     log.info("Starting deletion of user embeddings.")
 
     # 1. Get the list of users marked for deletion from the chatbot database
+    # 2. and get the list of file ids for each user
     users = get_users_deletion_candicates()
-    files_ids = get_deletion_condidates_fileids(users)
+    file_ids_by_user_emails = get_user_fileids(users)
 
-    for file_id in files_ids:
+    for file_id, user_email in file_ids_by_user_emails:
         # e.g. chatbot-storage-dev-gcs-eu/file-embeddings/07806aff-478b-4a45-8725-9bac7935975e
 
+        # 3. check if the file exists in GCP
+        # and delete the embeddings if they exist
         if not file_present_in_gcp(
             bucket_prefix=f"{config.gcp.embeddings_root_folder}/{file_id}",
         ):
             log.warning(f"Embeddings not found for file id '{file_id}'")
             continue
 
-        delete_embeddings(file_id)
+        delete_embeddings(file_id=file_id, user_email=user_email)
 
     log.info("Workflow step deletion of user embeddings completed.")
 
