@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from workflows.db.tables import Base
 from workflows.workflow import (
     delete_candidate_user_embeddings,
-    get_deletion_condidates_fileids,
+    get_user_fileids,
     get_users_deletion_candicates,
 )
 
@@ -69,7 +69,9 @@ def test_delete_candidate_user_embeddings(
     mock_delete_embeddings,
     test_db_session,
 ):
-    """"""
+    """
+    Tests whether the delete_candidate_user_embeddings calls the right functions.
+    """
     # Mock the get_db_session to return the in-memory test session
     mock_get_db_session.return_value = test_db_session
 
@@ -90,7 +92,10 @@ def test_delete_candidate_user_embeddings(
 def test_deletion_condidates_fileids(
     mock_get_db_session, mock_file_present_in_gcp, test_db_session
 ):
-    """"""
+    """
+    Tests whether the file ids are correctly returned for the deletion candidates.
+    The test_db_session fixture is used to mock the database session.
+    """
     # Mock the get_db_session to return the in-memory test session
     mock_get_db_session.return_value = test_db_session
 
@@ -99,7 +104,7 @@ def test_deletion_condidates_fileids(
 
     # Call the function
     candidates = get_users_deletion_candicates()
-    file_ids = get_deletion_condidates_fileids(candidates)
+    file_ids = get_user_fileids(candidates)
     assert len(file_ids) == 2
 
 
@@ -138,5 +143,5 @@ def test_deletion_condidates_fileids_FileNotFound(
 
     # Ensure the warning was logged
     mock_log.warning.assert_called_with(
-        "Embeddings not found for file id '('767703e0-8195-4345-914b-81bbaa0588b7',)'"
+        "Embeddings not found for file id '767703e0-8195-4345-914b-81bbaa0588b7'"
     )
