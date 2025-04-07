@@ -4,9 +4,10 @@ import time
 import uuid
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+import trafilatura
 from bs4 import BeautifulSoup
 
 # Selenium imports
@@ -103,8 +104,63 @@ class WebsiteHandler:
             print(f"Error converting {url} to PDF: {str(e)}")
             raise
 
+    def extract_content_with_trafilatura(
+        self, url: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Extract clean content from a URL using trafilatura.
+
+        Trafilatura is specialized in extracting main content from web pages,
+        removing boilerplate, navigation, ads, etc.
+
+        Args:
+            url: The URL to extract content from
+
+        Returns:
+            A tuple of (extracted_text, title) or (None, None) if extraction failed
+        """
+        try:
+            # Download the webpage content with proper headers
+            response = requests.get(
+                url, headers=self._get_browser_headers(), timeout=15, verify=False
+            )
+            response.raise_for_status()
+            html_content = response.text
+
+            # Get the title from the HTML using BeautifulSoup
+            soup = BeautifulSoup(html_content, "html.parser")
+            title = soup.title.text.strip() if soup.title else None
+
+            # Use the simplest possible call to trafilatura
+            # This is the most reliable approach based on their documentation
+            try:
+                # Try the simplest approach first
+                extracted_text = trafilatura.extract(html_content)
+
+                if not extracted_text:
+                    # If that fails, try with minimal parameters
+                    downloaded = trafilatura.fetch_url(url)
+                    if downloaded:
+                        extracted_text = trafilatura.extract(downloaded)
+            except Exception as e:
+                print(f"Trafilatura extraction error: {str(e)}")
+                extracted_text = None
+
+            # If we couldn't extract text, return None
+            if not extracted_text:
+                print(f"Trafilatura couldn't extract content from {url}")
+                return None, None
+
+            return extracted_text, title
+
+        except Exception as e:
+            print(f"Error extracting content with trafilatura from {url}: {str(e)}")
+            return None, None
+
     def get_text_from_url(self, url: str) -> str:
         """Extract text directly from a URL using requests and BeautifulSoup.
+
+        This is a legacy method kept for backward compatibility.
+        The preferred method is now extract_content_with_trafilatura.
 
         Args:
             url: The URL to extract text from
@@ -251,13 +307,221 @@ class WebsiteHandler:
 
         return all_documents
 
+    def _detect_language(self, text: str) -> str:
+        """Detect the language of the extracted text.
+
+        Currently supports basic detection for German vs. English.
+
+        Args:
+            text: The text to analyze
+
+        Returns:
+            Language code ('en' or 'de')
+        """
+        if not text or len(text) < 50:
+            return "en"  # Default to English for short texts
+
+        try:
+            # Use a simple heuristic for German detection
+            german_markers = [
+                "der",
+                "die",
+                "das",
+                "und",
+                "für",
+                "ist",
+                "nicht",
+                "mit",
+                "Sie",
+                "sind",
+            ]
+            text_lower = text.lower()
+            german_count = sum(
+                1 for word in german_markers if f" {word} " in text_lower
+            )
+
+            # If at least 3 German markers are found
+            if german_count >= 3:
+                return "de"
+        except Exception:
+            pass  # Ignore errors in language detection
+
+        return "en"  # Default to English
+
+    def _extract_with_trafilatura(
+        self, url: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Extract content using trafilatura.
+
+        Args:
+            url: The URL to extract from
+
+        Returns:
+            Tuple of (text, title) or (None, None) if extraction failed
+        """
+        print(f"Attempting trafilatura extraction for {url}...")
+
+        try:
+            text, title = self.extract_content_with_trafilatura(url)
+
+            # Validate extraction quality
+            if text and len(text.strip()) > 100:
+                print(f"Trafilatura extraction successful for {url}")
+                return text, title
+
+            raise ValueError("Trafilatura extraction returned insufficient content")
+        except Exception as e:
+            print(f"Trafilatura extraction failed: {str(e)}")
+            return None, None
+
+    def _extract_with_selenium(self, url: str) -> Tuple[Optional[str], Optional[str]]:
+        """Extract content using Selenium for JavaScript-heavy sites.
+
+        Args:
+            url: The URL to extract from
+
+        Returns:
+            Tuple of (text, title) or (None, None) if extraction failed
+        """
+        print(f"Attempting Selenium extraction for {url}...")
+
+        try:
+            text, title = self.get_text_with_selenium(url)
+
+            # Validate extraction quality
+            if text and len(text.strip()) > 100:
+                print(f"Selenium extraction successful for {url}")
+                return text, title
+
+            raise ValueError("Selenium extraction returned insufficient content")
+        except Exception as e:
+            print(f"Selenium extraction failed: {str(e)}")
+            return None, None
+
+    def _extract_with_beautifulsoup(
+        self, url: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Extract content using BeautifulSoup (legacy approach).
+
+        Args:
+            url: The URL to extract from
+
+        Returns:
+            Tuple of (text, title) or (None, None) if extraction failed
+        """
+        print(f"Attempting BeautifulSoup extraction for {url}...")
+
+        try:
+            # Get text using the legacy method
+            text = self.get_text_from_url(url)
+            title = None
+
+            # Validate extraction quality
+            if "Error fetching content" in text or len(text.strip()) < 100:
+                raise ValueError(
+                    "BeautifulSoup extraction returned insufficient content"
+                )
+
+            # Get title
+            try:
+                response = requests.get(
+                    url, headers=self._get_browser_headers(), timeout=10, verify=False
+                )
+                soup = BeautifulSoup(response.text, "html.parser")
+                title = soup.title.text if soup.title else None
+            except Exception:
+                # If title extraction fails, don't let it prevent text extraction
+                pass
+
+            print(f"BeautifulSoup extraction successful for {url}")
+            return text, title
+        except Exception as e:
+            print(f"BeautifulSoup extraction failed: {str(e)}")
+            return None, None
+
+    def _extract_with_pdf(self, url: str) -> Tuple[Optional[str], Optional[str]]:
+        """Extract content by converting to PDF first.
+
+        Args:
+            url: The URL to extract from
+
+        Returns:
+            Tuple of (text, title) or (None, None) if extraction failed
+        """
+        print(f"Attempting PDF conversion extraction for {url}...")
+        pdf_path = None
+
+        try:
+            # Convert to PDF
+            pdf_path = self.url_to_pdf(url)
+            text = None
+
+            # Extract text from PDF
+            if self.base_handler:
+                text = self.base_handler.extract_text_from_pdf(pdf_path)
+            else:
+                from pdfminer.high_level import extract_text
+
+                text = extract_text(pdf_path)
+
+            # Use domain as title
+            title = url.split("//")[-1].split("/")[0]
+
+            if text and len(text.strip()) > 100:
+                print(f"PDF conversion extraction successful for {url}")
+                return text, title
+
+            raise ValueError("PDF extraction returned insufficient content")
+        except Exception as e:
+            print(f"PDF conversion extraction failed: {str(e)}")
+            return None, None
+        finally:
+            # Clean up temporary PDF file
+            if pdf_path and os.path.exists(pdf_path):
+                os.remove(pdf_path)
+
+    def _create_document(
+        self, text: str, title: str, url: str, language: str = "en"
+    ) -> Document:
+        """Create a Document object with the extracted content and metadata.
+
+        Args:
+            text: The extracted text content
+            title: The title of the content
+            url: The source URL
+            language: The detected language code (default: 'en')
+
+        Returns:
+            A Document object with content and metadata
+        """
+        return Document(
+            page_content=text,
+            metadata={
+                "source": url,
+                "title": title if title else url,  # Use URL as fallback if no title
+                "language": language,
+            },
+        )
+
+    def _create_error_document(self, url: str, error: Exception) -> Document:
+        """Create a Document object for extraction errors.
+
+        Args:
+            url: The source URL that failed
+            error: The exception that occurred
+
+        Returns:
+            A Document object with error information
+        """
+        return Document(
+            page_content=f"Error fetching content: {str(error)}",
+            metadata={"source": url, "error": str(error)},
+        )
+
     def _get_vectorstore_from_url(self, url: str) -> List[Document]:
         """Internal implementation for fetching content from a single URL.
 
-        This method tries different approaches in the following order:
-        1. Direct text extraction with requests/BeautifulSoup
-        2. Selenium for JavaScript-heavy sites
-        3. PDF conversion as a last resort
+        This method tries different extraction strategies in sequence until one succeeds.
 
         Args:
             url: The URL to fetch content from
@@ -266,83 +530,36 @@ class WebsiteHandler:
             A list containing a Document with the page content and metadata
         """
         try:
-            text = None
-            title = None
+            # Try each extraction strategy in sequence
+            # Strategy 1: Trafilatura (best quality)
+            text, title = self._extract_with_trafilatura(url)
 
-            # Strategy 1: Try direct text extraction first
-            try:
-                text = self.get_text_from_url(url)
-                # If the text contains error messages or is very short, it likely failed
-                if "Error fetching content" in text or len(text.strip()) < 100:
-                    raise ValueError(
-                        "Direct text extraction failed or returned insufficient content"
-                    )
+            # Strategy 2: Selenium for JavaScript-heavy sites
+            if not text:
+                text, title = self._extract_with_selenium(url)
 
-                # Extract title using BeautifulSoup
-                response = requests.get(
-                    url, headers=self._get_browser_headers(), timeout=10, verify=False
-                )
-                soup = BeautifulSoup(response.text, "html.parser")
-                title = soup.title.text if soup.title else "No title"
+            # Strategy 3: BeautifulSoup (legacy approach)
+            if not text:
+                text, title = self._extract_with_beautifulsoup(url)
 
-            except Exception as e:
-                print(f"Direct extraction failed: {str(e)}. Trying Selenium...")
+            # Strategy 4: PDF conversion as last resort
+            if not text:
+                text, title = self._extract_with_pdf(url)
 
-                # Strategy 2: Try Selenium for JavaScript-heavy sites
-                try:
-                    text, title = self.get_text_with_selenium(url)
-                    if not text or len(text.strip()) < 100:
-                        raise ValueError(
-                            "Selenium extraction returned insufficient content"
-                        )
+            # If all extraction methods failed
+            if not text:
+                raise ValueError("All extraction methods failed")
 
-                except Exception as selenium_error:
-                    print(
-                        f"Selenium extraction failed: {str(selenium_error)}. Trying PDF conversion..."
-                    )
+            # Detect language
+            language = self._detect_language(text)
 
-                    # Strategy 3: Try PDF conversion as a last resort
-                    pdf_path = self.url_to_pdf(url)
-
-                    # Use the base_handler to extract text from the PDF if available
-                    if self.base_handler:
-                        text = self.base_handler.extract_text_from_pdf(pdf_path)
-                    else:
-                        # Fallback to using pdfminer directly if base_handler not available
-                        from pdfminer.high_level import extract_text
-
-                        text = extract_text(pdf_path)
-
-                    # Clean up the temporary PDF file
-                    if os.path.exists(pdf_path):
-                        os.remove(pdf_path)
-
-                    # Use URL as title if we don't have it from direct extraction
-                    title = url.split("//")[-1].split("/")[0]
-
-            # Create a Document object
-            document = Document(
-                page_content=text,
-                metadata={
-                    "source": url,
-                    "title": title,
-                    "language": "en",  # Default to English
-                },
-            )
-
-            result = [document]
-            print(result)
-            return result
+            # Create and return document
+            document = self._create_document(text, title, url, language)
+            return [document]
 
         except Exception as e:
             print(f"Error processing {url}: {str(e)}")
-            # Return a document with the error message
-            return [
-                Document(
-                    page_content=f"Error fetching content: {str(e)}",
-                    metadata={"source": url, "error": str(e)},
-                )
-            ]
+            return [self._create_error_document(url, e)]
 
 
 url1 = "https://en.wikipedia.org/wiki/API"
@@ -358,12 +575,12 @@ if __name__ == "__main__":
     try:
         # Test with a single URL
         print("\n=== Testing with a single URL ===")
-        single_result = handler.get_vectorstore_from_url(url6)
+        single_result = handler.get_vectorstore_from_url(url4)
         print(f"Single URL result: {len(single_result)} document processed")
         doc = single_result[0]
         print(f"Source: {doc.metadata['source']}")
         print(f"Title: {doc.metadata.get('title', 'No title')}")
-        print(f"Content (first 100 chars): {doc.page_content[:500]}...")
+        print(f"Content (first 500 chars): {doc.page_content[:2000]}...")
 
         # # Test with multiple URLs as separate arguments
         # print("\n=== Testing with multiple URLs as separate arguments ===")
