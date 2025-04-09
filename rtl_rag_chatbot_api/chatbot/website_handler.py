@@ -278,18 +278,28 @@ class WebsiteHandler:
         if not urls:
             raise ValueError("At least one URL must be provided")
 
+        # Clean up URLs to handle any potential newlines or formatting issues
+        cleaned_urls = []
+        for url_item in urls:
+            if not isinstance(url_item, str):
+                print(f"Warning: Skipping non-string URL: {url_item}")
+                continue
+
+            # Split by newlines in case multiple URLs are in a single string
+            if "\n" in url_item:
+                sub_urls = [u.strip() for u in url_item.split("\n") if u.strip()]
+                cleaned_urls.extend(sub_urls)
+            else:
+                cleaned_urls.append(url_item.strip())
+
         # If only one URL is provided, process it directly
-        if len(urls) == 1:
-            return self._get_vectorstore_from_url(urls[0])
+        if len(cleaned_urls) == 1:
+            return self._get_vectorstore_from_url(cleaned_urls[0])
 
         # For multiple URLs, process each one and combine results
         all_documents = []
 
-        for url in urls:
-            if not isinstance(url, str):
-                print(f"Warning: Skipping non-string URL: {url}")
-                continue
-
+        for url in cleaned_urls:
             try:
                 print(f"Processing URL: {url}")
                 documents = self._get_vectorstore_from_url(url)

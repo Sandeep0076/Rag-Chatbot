@@ -461,3 +461,126 @@ class FileHandler:
         return await asyncio.to_thread(
             self.gcs_handler.find_existing_file_by_hash, file_hash
         )
+
+    async def process_urls(
+        self,
+        urls: str,
+        username: str,
+        temp_file_id: str,
+        background_tasks,
+        embedding_handler=None,
+    ):
+        """
+        Process URLs from the input and create embeddings from their content.
+
+        Args:
+            urls (str): The URLs to process, separated by commas or newlines
+            username (str): The username of the user uploading the URLs
+            temp_file_id (str): A temporary file ID for the URL content
+            background_tasks: Background tasks queue for async processing
+            embedding_handler: Optional embedding handler instance
+
+        Returns:
+            dict: Dictionary containing file_id, status, and other metadata
+        """
+        from rtl_rag_chatbot_api.chatbot.website_handler import WebsiteHandler
+
+        # Handle both comma and newline separated URLs
+        urls_normalized = urls.replace("\n", ",")
+        url_list = [url.strip() for url in urls_normalized.split(",") if url.strip()]
+
+        if not url_list:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=400, detail="No valid URLs provided")
+
+        # Create a URL hash for all URLs combined
+        url_hash = self.calculate_url_hash(",".join(url_list))
+
+        # Check if we've already processed these URLs
+        existing_file_id = await self.find_existing_file_by_hash_async(url_hash)
+
+        if existing_file_id:
+            # Update the file info with the new username
+            self.gcs_handler.update_file_info(existing_file_id, {"username": username})
+            return {
+                "file_id": existing_file_id,
+                "status": "existing",
+                "message": "URLs already processed",
+                "is_image": False,
+                "is_tabular": False,
+                "original_filename": "url_content.txt",
+                "temp_file_path": None,
+            }
+
+        # Process the URLs and save content to a text file
+        website_handler = WebsiteHandler()
+
+        # Create directory if it doesn't exist
+        os.makedirs("local_data", exist_ok=True)
+
+        # Create a text file to store the extracted content
+        temp_file_path = f"local_data/{temp_file_id}_url_content.txt"
+
+        with open(temp_file_path, "w", encoding="utf-8") as f:
+            for i, url in enumerate(url_list):
+                # Add header for this URL with clear separation
+                f.write(f"This text is extracted from URL -- {url}\n\n")
+
+                # Extract content from the URL
+                try:
+                    documents = website_handler.get_vectorstore_from_url(url)
+                    if documents and len(documents) > 0:
+                        # Write the content to the file
+                        f.write(documents[0].page_content)
+                    else:
+                        f.write(f"Error: Could not extract content from {url}")
+                except Exception as e:
+                    f.write(f"Error extracting content from {url}: {str(e)}")
+
+                # Add footer for this URL
+                f.write(f"\n\nText extraction for the website {url} finished\n\n")
+
+                # Add separator between URLs, but not after the last one
+                if i < len(url_list) - 1:
+                    f.write("-" * 80 + "\n\n")
+
+        # Create metadata for the file
+        metadata = {
+            "file_hash": url_hash,
+            "original_filename": "url_content.txt",
+            "username": [username],
+            "is_url": True,
+            "urls": url_list,
+            "file_id": temp_file_id,
+        }
+
+        # Save metadata
+        self.gcs_handler.temp_metadata = metadata
+
+        # Import here to avoid circular imports
+        from rtl_rag_chatbot_api.app import SessionLocal, create_embeddings_background
+
+        # Schedule background task to create embeddings
+        background_tasks.add_task(
+            create_embeddings_background,
+            temp_file_id,
+            temp_file_path,
+            embedding_handler,  # Use the embedding_handler passed as parameter
+            self.configs,
+            SessionLocal,
+            [username],
+        )
+
+        # Clean up the website handler
+        website_handler.cleanup()
+
+        return {
+            "file_id": temp_file_id,
+            "status": "success",
+            "message": "URLs processed successfully",
+            "is_image": False,
+            "is_tabular": False,
+            "original_filename": "url_content.txt",
+            "temp_file_path": temp_file_path,
+        }
