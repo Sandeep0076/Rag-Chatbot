@@ -37,6 +37,7 @@ from rtl_rag_chatbot_api.chatbot.gemini_handler import (
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
+from rtl_rag_chatbot_api.chatbot.website_handler import WebsiteHandler
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
 from rtl_rag_chatbot_api.common.models import (
@@ -229,18 +230,120 @@ async def info():
 @app.post("/file/upload", response_model=FileUploadResponse)
 async def upload_file(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    is_image: bool = Form(...),
+    file: UploadFile = File(None),
+    is_image: bool = Form(False),
     username: str = Form(...),
+    is_url: bool = Form(False),
+    urls: str = Form(None),
     current_user=Depends(get_current_user),
 ):
     """
     Handles file upload and automatically creates embeddings for PDFs and images.
+    Also handles URL processing when is_url is True.
     Made asynchronous to prevent blocking during long operations.
     """
     try:
         # Generate temporary file_id with UUID - will be replaced if file already exists
         temp_file_id = str(uuid.uuid4())
+
+        # Handle URL processing
+        if is_url and urls:
+            url_list = [url.strip() for url in urls.split(",") if url.strip()]
+
+            if not url_list:
+                raise HTTPException(status_code=400, detail="No valid URLs provided")
+
+            # Create a URL hash for all URLs combined
+            url_hash = file_handler.calculate_url_hash(",".join(url_list))
+
+            # Check if we've already processed these URLs
+            existing_file_id = await file_handler.find_existing_file_by_hash_async(
+                url_hash
+            )
+
+            if existing_file_id:
+                # Update the file info with the new username
+                gcs_handler.update_file_info(existing_file_id, {"username": username})
+                return {
+                    "file_id": existing_file_id,
+                    "status": "existing",
+                    "message": "URLs already processed",
+                    "is_image": False,
+                    "is_tabular": False,
+                    "original_filename": "url_content.txt",
+                    "temp_file_path": None,
+                }
+
+            # Process the URLs and save content to a text file
+            website_handler = WebsiteHandler()
+
+            # Create directory if it doesn't exist
+            os.makedirs("local_data", exist_ok=True)
+
+            # Create a text file to store the extracted content
+            temp_file_path = f"local_data/{temp_file_id}_url_content.txt"
+
+            with open(temp_file_path, "w", encoding="utf-8") as f:
+                for url in url_list:
+                    # Add header for this URL
+                    f.write(f"This text is extracted from URL -- {url}\n\n")
+
+                    # Extract content from the URL
+                    try:
+                        documents = website_handler.get_vectorstore_from_url(url)
+                        if documents and len(documents) > 0:
+                            # Write the content to the file
+                            f.write(documents[0].page_content)
+                        else:
+                            f.write(f"Error: Could not extract content from {url}")
+                    except Exception as e:
+                        f.write(f"Error extracting content from {url}: {str(e)}")
+
+                    # Add footer for this URL
+                    f.write(f"\n\nText extraction for the website {url} finished\n\n")
+                    f.write("-" * 80 + "\n\n")
+
+            # Create metadata for the file
+            metadata = {
+                "file_hash": url_hash,
+                "original_filename": "url_content.txt",
+                "username": [username],
+                "is_url": True,
+                "urls": url_list,
+                "file_id": temp_file_id,
+            }
+
+            # Save metadata
+            gcs_handler.temp_metadata = metadata
+
+            # Schedule background task to create embeddings
+            background_tasks.add_task(
+                create_embeddings_background,
+                temp_file_id,
+                temp_file_path,
+                embedding_handler,
+                configs,
+                SessionLocal,
+                [username],
+            )
+
+            # Clean up the website handler
+            website_handler.cleanup()
+
+            return {
+                "file_id": temp_file_id,
+                "status": "success",
+                "message": "URLs processed successfully",
+                "is_image": False,
+                "is_tabular": False,
+                "original_filename": "url_content.txt",
+                "temp_file_path": temp_file_path,
+            }
+
+        # Handle regular file upload
+        if not file:
+            raise HTTPException(status_code=400, detail="No file provided")
+
         original_filename = file.filename
         file_extension = os.path.splitext(original_filename)[1].lower()
 

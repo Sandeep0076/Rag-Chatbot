@@ -518,6 +518,19 @@ class WebsiteHandler:
             metadata={"source": url, "error": str(error)},
         )
 
+    def cleanup(self):
+        """Clean up resources used by the WebsiteHandler.
+
+        This method ensures that the Selenium WebDriver is properly closed.
+        """
+        if self._driver:
+            try:
+                self._driver.quit()
+            except Exception as e:
+                print(f"Error closing Selenium driver: {str(e)}")
+            finally:
+                self._driver = None
+
     def _get_vectorstore_from_url(self, url: str) -> List[Document]:
         """Internal implementation for fetching content from a single URL.
 
@@ -565,32 +578,38 @@ class WebsiteHandler:
 url1 = "https://en.wikipedia.org/wiki/API"
 url2 = "https://python.langchain.com/docs/integrations/document_loaders/web_base/"
 url3 = "https://www.w3schools.com/js/js_api_intro.asp"
-url4 = "https://www.langchain.com/langgraph"
+url4 = "https://langchain-ai.github.io/langgraph/tutorials/introduction/"
 url5 = "https://platform.openai.com/docs/guides/images?api-mode=responses"
-url6 = "https://www.rtl.de/"
+url6 = ("https://www.rtl.de/",)
+url7 = (
+    "https://www.quora.com/What-is-it-that-we-dont-understand-or-know-about-black-holes"
+)
+url8 = "https://www.helicone.ai/llm-cost"
+url9 = "https://yourgpt.ai/tools/openai-and-other-llm-api-pricing-calculator"
 
 if __name__ == "__main__":
     # Test the unified function with both single and multiple URLs
     handler = WebsiteHandler()
     try:
-        # Test with a single URL
+        # Test with a single URL‚
         print("\n=== Testing with a single URL ===")
-        single_result = handler.get_vectorstore_from_url(url4)
+        single_result = handler.get_vectorstore_from_url(url9)
         print(f"Single URL result: {len(single_result)} document processed")
         doc = single_result[0]
         print(f"Source: {doc.metadata['source']}")
         print(f"Title: {doc.metadata.get('title', 'No title')}")
-        print(f"Content (first 500 chars): {doc.page_content[:2000]}...")
+        print(f"Content : {doc.page_content}")
+        # print(f"Content (first 2000 chars): {doc.page_content[:2000]}...")
 
         # # Test with multiple URLs as separate arguments
         # print("\n=== Testing with multiple URLs as separate arguments ===")
-        # results = handler.get_vectorstore_from_url(url1, url3, url5)  # Pass multiple URLs as separate arguments
+        # results = handler.get_vectorstore_from_url(url4, url5, url6)  # Pass multiple URLs as separate arguments
         # print(f"Multiple URLs results: {len(results)} documents processed")
         # for i, doc in enumerate(results):
         #     print(f"\nDocument {i+1}:")
         #     print(f"Source: {doc.metadata['source']}")
         #     print(f"Title: {doc.metadata.get('title', 'No title')}")
-        #     print(f"Content (first 100 chars): {doc.page_content[:100]}...")
+        #     print(f"Content : {doc.page_content}")
     finally:
         # Clean up Selenium driver if it was initialized
         if handler._driver:

@@ -33,7 +33,7 @@ def handle_file_upload():
 
     st.session_state.file_type = st.radio(
         "Select file type:",
-        ["PDF", "Text", "CSV/Excel", "Database", "Image"],
+        ["PDF", "Text", "CSV/Excel", "Database", "Image", "URL"],
         horizontal=True,
     )
 
@@ -47,6 +47,7 @@ def handle_file_upload():
         "Database": ["db", "sqlite"],
         "PDF": ["pdf"],
         "Text": ["txt", "doc", "docx"],
+        "URL": [],  # No file types for URL
     }[st.session_state.file_type]
 
     # Display help text for database files
@@ -55,11 +56,47 @@ def handle_file_upload():
             "Upload SQLite database files (.db or .sqlite) to chat with their contents. "
         )
 
-    uploaded_file = st.file_uploader(
-        f"Choose a {st.session_state.file_type} file", type=file_types
-    )
+    # Handle URL input
+    if st.session_state.file_type == "URL":
+        st.info(
+            "Enter one or more URLs separated by commas to chat with their contents."
+        )
+        url_input = st.text_area("Enter URLs (comma-separated for multiple URLs)")
 
-    if uploaded_file is not None:
+        if url_input and st.button("Process URLs"):
+            if not st.session_state.username:
+                st.error("Username is required. Please enter a username above.")
+                return
+
+            with st.spinner("Processing URLs..."):
+                # Use the existing file upload endpoint with is_url=True
+                data = {
+                    "username": st.session_state.username,
+                    "is_url": "true",
+                    "urls": url_input,
+                }
+
+                upload_response = requests.post(f"{API_URL}/file/upload", data=data)
+
+                if upload_response.status_code == 200:
+                    upload_result = upload_response.json()
+                    file_id = upload_result["file_id"]
+                    st.session_state.file_id = file_id
+                    st.session_state.file_uploaded = True
+
+                    st.success("URLs processed successfully and ready for chat.")
+
+                    # Reset messages when new URLs are processed
+                    st.session_state.messages = []
+                else:
+                    st.error(f"URL processing failed: {upload_response.text}")
+    else:
+        uploaded_file = st.file_uploader(
+            f"Choose a {st.session_state.file_type} file", type=file_types
+        )
+
+    # Only show the upload button if we're not in URL mode and a file has been selected
+    if st.session_state.file_type != "URL" and uploaded_file is not None:
         if st.button("Upload and Process File"):
             if not st.session_state.username:
                 st.error("Username is required. Please enter a username above.")

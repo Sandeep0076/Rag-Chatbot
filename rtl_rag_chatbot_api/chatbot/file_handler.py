@@ -54,6 +54,18 @@ class FileHandler:
         """
         return hashlib.md5(file_content).hexdigest()
 
+    def calculate_url_hash(self, url):
+        """
+        Calculates the MD5 hash of a URL string.
+
+        Args:
+            url (str): The URL to hash.
+
+        Returns:
+            str: The hexadecimal digest of the MD5 hash.
+        """
+        return hashlib.md5(url.encode("utf-8")).hexdigest()
+
     async def _handle_image_analysis(
         self, file_id: str, temp_file_path: str, analysis_files: list
     ) -> None:
