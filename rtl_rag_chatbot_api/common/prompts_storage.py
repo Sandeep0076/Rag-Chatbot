@@ -143,3 +143,11 @@ Based on the user's question, determine if a chart or graph is requested and ret
 **User Question:**
 
 """
+
+BOILERPLATE_PROMPT = """
+Given is the extracted text from a website by the use of Beautiful soup, Selenium, Trafilatura.
+Evaluate whether it contains substantive data or is predominantly boilerplate information.
+Determine if the extracted text primarily contains valuable data or consists largely of boilerplate content
+(e.g., cookie notices, legal disclaimers, navigation elements) and/or irrelevant hyperlinks (hrefs).
+If it doesn't contain substantive data, return `False` otherwise return `True`.
+"""

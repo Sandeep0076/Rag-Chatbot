@@ -232,7 +232,6 @@ async def upload_file(
     file: UploadFile = File(None),
     is_image: bool = Form(False),
     username: str = Form(...),
-    is_url: bool = Form(False),
     urls: str = Form(None),
     current_user=Depends(get_current_user),
 ):
@@ -246,7 +245,7 @@ async def upload_file(
         temp_file_id = str(uuid.uuid4())
 
         # Handle URL processing
-        if is_url and urls:
+        if urls:
             return await file_handler.process_urls(
                 urls, username, temp_file_id, background_tasks, embedding_handler
             )

@@ -7,6 +7,7 @@ import shutil
 import aiofiles
 from fastapi import UploadFile
 
+from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
 from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
@@ -14,6 +15,7 @@ from rtl_rag_chatbot_api.chatbot.utils.encryption import decrypt_file, encrypt_f
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
+from rtl_rag_chatbot_api.common.prompts_storage import BOILERPLATE_PROMPT
 
 
 class FileHandler:
@@ -527,14 +529,64 @@ class FileHandler:
                 # Add header for this URL with clear separation
                 f.write(f"This text is extracted from URL -- {url}\n\n")
 
+                # Helper function to count words in text
+                def count_words(text):
+                    if not text:
+                        return 0
+                    # Split by whitespace and count non-empty words
+                    words = [word for word in text.split() if word.strip()]
+                    return len(words)
+
                 # Extract content from the URL
                 try:
                     documents = website_handler.get_vectorstore_from_url(url)
+
+                    # Check if we have valid content
                     if documents and len(documents) > 0:
-                        # Write the content to the file
-                        f.write(documents[0].page_content)
+                        content = documents[0].page_content
+                        word_count = count_words(content)
+
+                        # If word count is less than 150, use BOILERPLATE_PROMPT to verify content quality
+                        if word_count < 150:
+                            extraction_result = get_azure_non_rag_response(
+                                self.configs, BOILERPLATE_PROMPT
+                            )
+                            is_substantive = extraction_result == "True"
+                        else:
+                            # If we have more than 150 words, assume it's substantive content
+                            is_substantive = True
+
+                        if is_substantive:
+                            # Write the content to the file
+                            f.write(documents[0].page_content)
+                            f.write(f"\n\nWord count: {word_count} words")
+                        else:
+                            # If content is not substantive, return an error message to the Streamlit UI
+                            error_msg = (
+                                f"Error: Content from {url} appears to be boilerplate "
+                                f"or insufficient (Word count: {word_count})"
+                            )
+                            f.write(error_msg)
+                            return {
+                                "file_id": temp_file_id,
+                                "status": "error",
+                                "message": "The website is not allowing to extract text, please try another website.",
+                                "is_image": False,
+                                "is_tabular": False,
+                                "original_filename": "url_content.txt",
+                                "temp_file_path": temp_file_path,
+                            }
                     else:
                         f.write(f"Error: Could not extract content from {url}")
+                        return {
+                            "file_id": temp_file_id,
+                            "status": "error",
+                            "message": "The website is not allowing to extract text, please try another website.",
+                            "is_image": False,
+                            "is_tabular": False,
+                            "original_filename": "url_content.txt",
+                            "temp_file_path": temp_file_path,
+                        }
                 except Exception as e:
                     f.write(f"Error extracting content from {url}: {str(e)}")
 
