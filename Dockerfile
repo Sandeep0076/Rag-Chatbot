@@ -34,7 +34,7 @@ ENV PATH="$POETRY_HOME/bin:$PATH"
 RUN apt-get update && apt-get install build-essential -y  && apt-get install -y --no-install-recommends \
     curl gcc musl-dev build-essential\
     && rm -rf /var/lib/apt/lists/* \
-    && python3 -m pip install --upgrade pip \
+    && python3 -m pip install --upgrade pip setuptools wheel \
     && curl -sSL https://install.python-poetry.org | python3 -
 
 USER worker
