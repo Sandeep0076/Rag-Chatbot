@@ -371,3 +371,43 @@ class GCSHandler:
                     logging.error(f"Error processing {blob.name}: {str(e)}")
                     continue
         return None
+
+    def check_embeddings_status(self, file_id: str) -> str:
+        """
+        Check the status of embeddings for a given file ID.
+
+        This method checks if there's a file_info.json for the given file ID and
+        returns the embeddings_status field. If the file doesn't exist or doesn't
+        have an embeddings_status field, it returns "unknown".
+
+        Args:
+            file_id (str): The ID of the file to check
+
+        Returns:
+            str: The status of the embeddings ("completed", "in_progress", "failed", or "unknown")
+        """
+        try:
+            # Check if there's a temporary metadata with this file_id
+            if self.temp_metadata and self.temp_metadata.get("file_id") == file_id:
+                # Return the status from temp_metadata if available
+                return self.temp_metadata.get("embeddings_status", "in_progress")
+
+            # Check if there's a file_info.json for this file_id
+            file_info = self.get_file_info(file_id)
+            if file_info:
+                # Return the status from file_info if available
+                return file_info.get("embeddings_status", "in_progress")
+
+            # Check if there are any blobs in the file-embeddings directory
+            prefix = f"file-embeddings/{file_id}/"
+            blobs = list(self.bucket.list_blobs(prefix=prefix, max_results=1))
+            if blobs:
+                # If there are blobs but no file_info.json, assume embeddings are in progress
+                return "in_progress"
+
+            # If no blobs are found, return unknown
+            return "unknown"
+
+        except Exception as e:
+            logging.error(f"Error checking embeddings status for {file_id}: {str(e)}")
+            return "unknown"

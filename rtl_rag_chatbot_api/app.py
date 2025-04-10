@@ -246,9 +246,19 @@ async def upload_file(
 
         # Handle URL processing
         if urls:
-            return await file_handler.process_urls(
+            url_result = await file_handler.process_urls(
                 urls, username, temp_file_id, background_tasks, embedding_handler
             )
+
+            # Check if URL processing returned an error status
+            if url_result.get("status") == "error":
+                # Return the error as a HTTPException
+                raise HTTPException(
+                    status_code=400,
+                    detail=url_result.get("message", "Error processing URLs"),
+                )
+
+            return url_result
 
         # Handle regular file upload
         if not file:
@@ -854,10 +864,19 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         file_info = gcs_handler.get_file_info(query.file_id)
         if not file_info:
             logging.info(f"File info not found for {query.file_id}")
-            raise HTTPException(
-                status_code=400,
-                detail="File appears to be corrupted or empty. Please try uploading a different file.",
-            )
+
+            # Check if this might be a URL file that's still being processed
+            embeddings_status = gcs_handler.check_embeddings_status(query.file_id)
+            if embeddings_status == "in_progress":
+                raise HTTPException(
+                    status_code=400,
+                    detail="URL content is still being processed. Please wait a moment and try again.",
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="File appears to be corrupted or empty. Please try uploading a different file.",
+                )
 
         model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
         model_info = initialized_models.get(model_key)

@@ -561,21 +561,26 @@ class FileHandler:
                             f.write(documents[0].page_content)
                             f.write(f"\n\nWord count: {word_count} words")
                         else:
-                            # If content is not substantive, return an error message to the Streamlit UI
+                            # If content is not substantive, write an error message to the file
+                            # but continue processing other URLs if there are any
                             error_msg = (
                                 f"Error: Content from {url} appears to be boilerplate "
                                 f"or insufficient (Word count: {word_count})"
                             )
                             f.write(error_msg)
-                            return {
-                                "file_id": temp_file_id,
-                                "status": "error",
-                                "message": "The website is not allowing to extract text, please try another website.",
-                                "is_image": False,
-                                "is_tabular": False,
-                                "original_filename": "url_content.txt",
-                                "temp_file_path": temp_file_path,
-                            }
+
+                            # If this is the only URL, return an error immediately
+                            if len(url_list) == 1:
+                                return {
+                                    "file_id": temp_file_id,
+                                    "status": "error",
+                                    "message": "The website is not allowing to extract sufficient text, "
+                                    "please try another website.",
+                                    "is_image": False,
+                                    "is_tabular": False,
+                                    "original_filename": "url_content.txt",
+                                    "temp_file_path": temp_file_path,
+                                }
                     else:
                         f.write(f"Error: Could not extract content from {url}")
                         return {
@@ -596,6 +601,32 @@ class FileHandler:
                 # Add separator between URLs, but not after the last one
                 if i < len(url_list) - 1:
                     f.write("-" * 80 + "\n\n")
+
+        # Check if the file contains any actual content or just error messages
+        with open(temp_file_path, "r", encoding="utf-8") as check_file:
+            file_content = check_file.read()
+            # Check if the file contains any substantive content or only error messages
+            if all(
+                f"Error: Content from {url}" in file_content for url in url_list
+            ) or all(
+                f"Error: Could not extract content from {url}" in file_content
+                for url in url_list
+            ):
+                # All URLs failed to extract substantive content
+                website_handler.cleanup()
+                # Clean up the temporary file
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                return {
+                    "file_id": temp_file_id,
+                    "status": "error",
+                    "message": "Could not extract sufficient content from any of the "
+                    "provided URLs. Please try different URLs.",
+                    "is_image": False,
+                    "is_tabular": False,
+                    "original_filename": "url_content.txt",
+                    "temp_file_path": None,
+                }
 
         # Create metadata for the file
         metadata = {
