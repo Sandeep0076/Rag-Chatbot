@@ -110,4 +110,4 @@ def test_is_user_account_enabled_not_found(
 
     result = is_user_account_enabled("unknown@example.com")
 
-    assert result is None
+    assert result is False

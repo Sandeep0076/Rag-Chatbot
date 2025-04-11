@@ -36,7 +36,9 @@ def is_user_account_enabled(user_email):
     Accesses the Microsoft Graph API to check if the user account is enabled.
 
     Returns:
-        bool: True if the user account is enabled, False if it is disabled, and None if the user does not exist.
+        bool: True if the user account is enabled, False if it is disabled or not-existant,
+              and None if something went wrong. In case of an error, the user should not be
+              marked as deletion candidate.
     """
     token = get_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -50,7 +52,9 @@ def is_user_account_enabled(user_email):
     )
 
     if user_response.status_code == 200:
-        log.info(f"Successfully obtained user details for {user_email}")
+        log.info(
+            f"Request successfull. Checking response for user details for '{user_email}'"
+        )
         user_data = user_response.json()
 
         if "value" in user_data and len(user_data["value"]) > 0:
@@ -66,7 +70,7 @@ def is_user_account_enabled(user_email):
         log.error(
             f"Failed to fetch user details for {user_email}: 'value' or 'accountEnabled' field not found."
         )
-        return None  # info not found in response
+        return False  # info not found in response
 
     log.error(
         f"Failed to fetch user details for {user_email}: {user_response.status_code}, {user_response.text}"
