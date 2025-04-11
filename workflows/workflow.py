@@ -101,20 +101,28 @@ def get_user_fileids(candidates: List[User]):
     """
 
     with get_db_session() as session:
-        user_file_ids = (
-            session.query(distinct(Conversation.fileId), Conversation.userEmail)
-            .filter(
-                Conversation.userEmail.in_(list(map(lambda u: u.email, candidates))),
-                Conversation.fileId.isnot(None),
+        try:
+            user_file_ids = (
+                session.query(distinct(Conversation.fileId), Conversation.userEmail)
+                .filter(
+                    Conversation.userEmail.in_(
+                        list(map(lambda u: u.email, candidates))
+                    ),
+                    Conversation.fileId.isnot(None),
+                )
+                .all()
             )
-            .all()
-        )
 
-        log.info(f"Found {len(user_file_ids)} file ids to delete embeddings for.")
+            log.info(f"Found {len(user_file_ids)} file ids to delete embeddings for.")
 
-        # returns a mapping of file ids to user emails
-        # e.g. [(file_id1, user_email1), (file_id2, user_email1), ...]
-        return user_file_ids
+            # returns a mapping of file ids to user emails
+            # e.g. [(file_id1, user_email1), (file_id2, user_email1), ...]
+            return user_file_ids
+        except Exception as e:
+            log.error(
+                f"Failed to retrieve file ids. Returning empty list. Original error: {e}"
+            )
+            return []
 
 
 def is_new_deletion_candidate(user: User, account_statuses: Dict = {}) -> bool:
@@ -185,6 +193,9 @@ def delete_candidate_user_embeddings():
     # 2. and get the list of file ids for each user
     users = get_users_deletion_candicates()
     file_ids_by_user_emails = get_user_fileids(users)
+
+    if not file_ids_by_user_emails:
+        log.warning("No file ids found for deletion candidates: nothing to delete.")
 
     for file_id, user_email in file_ids_by_user_emails:
         # e.g. chatbot-storage-dev-gcs-eu/file-embeddings/07806aff-478b-4a45-8725-9bac7935975e
