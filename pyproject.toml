@@ -63,6 +63,12 @@ aiofiles = "^23.1.0"
 python-docx = "0.8.11"
 
 openpyxl = "^3.1.5"
+playwright = "^1.51.0"
+unstructured = "^0.17.2"
+weasyprint = "^65.0"
+selenium = "^4.30.0"
+webdriver-manager = "^4.0.2"
+trafilatura = "^1.6.2"
 [tool.poetry.dev-dependencies]
 pytest = "^7.1.0"
 pytest-sugar = "^0.9.4"
