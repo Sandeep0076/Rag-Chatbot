@@ -9,7 +9,7 @@ from workflows.db.helpers import datetime_from_iso8601_timestamp, iso8601_timest
 from workflows.db.tables import Base, User
 from workflows.workflow import (
     get_users,
-    get_users_deletion_candicates,
+    get_users_deletion_candidates,
     mark_deletion_candidates,
 )
 
@@ -80,7 +80,7 @@ def test_workflow_get_users_deletion_candicates(mock_get_db_session, test_db_ses
     # workflows.workflow.get_db_session has a `with get_db_session as ..:` statement.
     mock_get_db_session.return_value.__enter__.return_value = test_db_session
 
-    users = get_users_deletion_candicates()
+    users = get_users_deletion_candidates()
     assert len(users) == 2
     assert users[0].email == "user5@example.com"
     assert users[1].email == "user6@example.com"

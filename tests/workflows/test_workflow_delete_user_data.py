@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from workflows.db.tables import Base, Conversation, Folder, Message, User
-from workflows.workflow import delete_candidate_user_data, get_users_deletion_candicates
+from workflows.workflow import delete_candidate_user_data, get_users_deletion_candidates
 
 # Create a session for a SQLite in-memory database
 engine = create_engine(
@@ -218,6 +218,6 @@ def test_delete_candidate_user_data_failure(
     )
 
     # check if users are still there
-    remaining_users = get_users_deletion_candicates()
+    remaining_users = get_users_deletion_candidates()
     # 1 successfully deleted, 2 left (see `test_all_deletion_candidates_gone`)
     assert len(remaining_users) == 2

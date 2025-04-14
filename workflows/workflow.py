@@ -70,7 +70,7 @@ def get_users():
         return users
 
 
-def get_users_deletion_candicates():
+def get_users_deletion_candidates():
     """
     Returns a list of users marked as deletion candidates in database which are marked for more than 4 weeks.
     """
@@ -191,7 +191,7 @@ def delete_candidate_user_embeddings():
 
     # 1. Get the list of users marked for deletion from the chatbot database
     # 2. and get the list of file ids for each user
-    users = get_users_deletion_candicates()
+    users = get_users_deletion_candidates()
     file_ids_by_user_emails = get_user_fileids(users)
 
     if not file_ids_by_user_emails:
@@ -220,7 +220,7 @@ def delete_candidate_user_data():
     log.info("Starting deletion of user data.")
 
     # 1. Get the list of users marked for deletion from the chatbot database
-    users = get_users_deletion_candicates()
+    users = get_users_deletion_candidates()
 
     # 2. Get related data for each user and perform the necessary actions
     with get_db_session() as session:

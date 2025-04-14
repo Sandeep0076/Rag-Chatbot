@@ -9,7 +9,7 @@ from workflows.db.tables import Base
 from workflows.workflow import (
     delete_candidate_user_embeddings,
     get_user_fileids,
-    get_users_deletion_candicates,
+    get_users_deletion_candidates,
 )
 
 # Create a session for a SQLite in-memory database
@@ -89,7 +89,7 @@ def test_delete_candidate_user_embeddings(
 
 @patch("workflows.workflow.file_present_in_gcp")
 @patch("workflows.workflow.get_db_session")
-def test_deletion_condidates_fileids(
+def test_deletion_candidates_fileids(
     mock_get_db_session, mock_file_present_in_gcp, test_db_session
 ):
     """
@@ -103,7 +103,7 @@ def test_deletion_condidates_fileids(
     mock_file_present_in_gcp.return_value = True
 
     # Call the function
-    candidates = get_users_deletion_candicates()
+    candidates = get_users_deletion_candidates()
     file_ids = get_user_fileids(candidates)
     assert len(file_ids) == 2
 
