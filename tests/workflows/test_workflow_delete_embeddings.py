@@ -108,6 +108,30 @@ def test_deletion_condidates_fileids(
     assert len(file_ids) == 2
 
 
+@patch("workflows.workflow.delete_embeddings")
+@patch("workflows.workflow.get_user_fileids")
+@patch("workflows.workflow.file_present_in_gcp")
+@patch("workflows.workflow.get_db_session")
+def test_deletion_condidates_fileids__None(
+    mock_get_db_session,
+    mock_file_present_in_gcp,
+    mock_get_user_fileids,
+    mock_delete_embeddings,
+    test_db_session,
+):
+    """"""
+    # Mock the get_db_session to return the in-memory test session
+    mock_get_db_session.return_value = test_db_session
+
+    # Mock the return values
+    mock_get_user_fileids.return_value = None
+
+    # Call the function
+    delete_candidate_user_embeddings()
+
+    assert mock_delete_embeddings.call_count == 0
+
+
 @patch("workflows.workflow.file_present_in_gcp")
 @patch("workflows.workflow.delete_embeddings")
 @patch("workflows.workflow.get_db_session")
