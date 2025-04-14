@@ -74,25 +74,32 @@ def get_users_deletion_candidates():
     """
     Returns a list of users marked as deletion candidates in database which are marked for more than 4 weeks.
     """
-    with get_db_session() as session:
-        # get all users
-        users = (
-            session.query(User)
-            .filter(
-                and_(User.wf_deletion_candidate, User.wf_deletion_timestamp is not None)
+    try:
+        with get_db_session() as session:
+            # get all users
+            users = (
+                session.query(User)
+                .filter(
+                    and_(
+                        User.wf_deletion_candidate,
+                        User.wf_deletion_timestamp.isnot(None),
+                    )
+                )
+                .all()
             )
-            .all()
-        )
 
-        filtered_users = db_helpers.filter_older_than_4_weeks(users)
+            filtered_users = db_helpers.filter_older_than_4_weeks(users)
 
-        log.info(
-            f"Found {len(users)} deletion candidates, "
-            f"{len(filtered_users)} of them marked older than 4 weeks: "
-            f"{', '.join(list(map(lambda u: u.email, filtered_users)))}"
-        )
+            log.info(
+                f"Found {len(users)} deletion candidates, "
+                f"{len(filtered_users)} of them marked older than 4 weeks: "
+                f"{', '.join(list(map(lambda u: u.email, filtered_users)))}"
+            )
 
-        return filtered_users
+            return filtered_users
+    except Exception as e:
+        log.error(f"Failed to retrieve deletion candidates. Original error: {e}")
+        return []
 
 
 def get_user_fileids(candidates: List[User]):
