@@ -46,9 +46,10 @@ Upload a file (PDF, image, CSV, or Excel) to the API.
   - `Authorization`: Your auth token
 - **Request Body**:
   - Form data:
-    - `file`: The file to upload (File)
+    - `file`: The file to upload (File) - Not required if using URLs
     - `is_image`: Whether the file is an image (Boolean)
     - `username`: Username for tracking file ownership (String)
+    - `urls`: URLs to extract content from (String, comma or newline separated) - Alternative to file upload
 - **Response Format**:
   ```json
   {
@@ -59,7 +60,9 @@ Upload a file (PDF, image, CSV, or Excel) to the API.
     "is_image": false
   }
   ```
-- **Usage Example**:
+- **Usage Examples**:
+
+  **File Upload Example:**
   1. Open Postman and create a new request
   2. Set the request method to POST
   3. Enter the URL: `http://your-api-domain/file/upload`
@@ -69,6 +72,16 @@ Upload a file (PDF, image, CSV, or Excel) to the API.
      - Key: `is_image`, Value: `false` (or `true` if uploading an image)
      - Key: `username`, Value: Enter a username
   6. Click "Send" to upload the file
+
+  **URL Content Extraction Example:**
+  1. Open Postman and create a new request
+  2. Set the request method to POST
+  3. Enter the URL: `http://your-api-domain/file/upload`
+  4. Go to the "Body" tab and select "form-data"
+  5. Add the following key-value pairs:
+     - Key: `urls`, Value: Enter one or more URLs (comma or newline separated)
+     - Key: `username`, Value: Enter a username
+  6. Click "Send" to process URLs
 
 
 ### Check Embeddings

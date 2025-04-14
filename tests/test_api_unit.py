@@ -7,7 +7,20 @@ from fastapi.testclient import TestClient
 
 from rtl_rag_chatbot_api.app import app
 
+from . import delete_test_embeddings
 from .test_utils import ResourceManager
+
+
+@pytest.fixture(scope="session", autouse=True)
+def run_delete_embeddings_first():
+    """Run delete_test_embeddings.py before any tests to clean up test embeddings."""
+    logging.info("Running delete_test_embeddings.py before tests")
+    delete_test_embeddings.main()
+    yield
+    # Optionally run again after all tests
+    logging.info("Running delete_test_embeddings.py after tests")
+    delete_test_embeddings.main()
+
 
 # Initialize test client
 client = TestClient(app)
@@ -174,7 +187,7 @@ def test_chat_with_pdf(
 
     # Test chat with PDF using GPT-4
     chat_data = {
-        "text": ["Who is main character of the story"],
+        "text": ["From which country this paper is from ?"],
         "file_id": file_id,
         "model_choice": "gpt_4o_mini",
         "user_id": "test_user",
@@ -182,12 +195,12 @@ def test_chat_with_pdf(
     response = client.post("/file/chat", json=chat_data)
     assert response.status_code == 200
     assert "response" in response.json()
-    assert "Aladdin" in response.json()["response"]
+    assert "Uzbekistan" in response.json()["response"]
     assert not response.json().get("is_table", False)
 
     # Test chat with PDF using Gemini Pro
     chat_data_gemini = {
-        "text": ["Who is main character of the story"],
+        "text": ["From which country this paper is from ?"],
         "file_id": file_id,
         "model_choice": "gemini-pro",
         "user_id": "test_user",
@@ -195,7 +208,7 @@ def test_chat_with_pdf(
     response_gemini = client.post("/file/chat", json=chat_data_gemini)
     assert response_gemini.status_code == 200
     assert "response" in response_gemini.json()
-    assert "Aladdin" in response_gemini.json()["response"]
+    assert "Uzbekistan" in response_gemini.json()["response"]
     assert not response_gemini.json().get("is_table", False)
 
 
@@ -496,16 +509,13 @@ async def test_chat_with_pdf_visualization(
         file_id = response.json()["file_id"]
         resource_manager.add_file_id(file_id)
 
-        # Mock ChromaDB response
-        mock_chroma_manager.return_value.get_collection.return_value.query.return_value = {
-            "documents": [["Sample text about operating system distribution"]]
-        }
+        # No need to mock ChromaDB response - we'll use the actual PDF content
 
         # Test chat with visualization request (visualization need is auto-detected from query text)
         query = {
             "text": ["Create a pie chart for distribution of operating systems"],
             "file_id": file_id,
-            "model_choice": "gemini-pro",
+            "model_choice": "gpt_4o_mini",
             "user_id": "test_user",
         }
 
@@ -650,6 +660,46 @@ def test_chat_with_doc(
     assert "response" in response_gemini.json()
     assert "50" in response_gemini.json()["response"]
     assert not response_gemini.json().get("is_table", False)
+
+
+def test_chat_with_url(
+    mock_files: dict,
+    resource_manager: ResourceManager,
+) -> None:
+    """Test chat functionality with URL content."""
+    # Upload URL content
+    upload_response = client.post(
+        "/file/upload",
+        data={
+            "urls": "https://en.wikipedia.org/wiki/Elon_Musk",
+            "username": "test_user",
+        },
+    )
+
+    # Verify upload response
+    assert upload_response.status_code == 200
+    file_id = upload_response.json()["file_id"]
+    resource_manager.add_file_id(file_id)
+
+    # Test chat with URL content
+    chat_data = {
+        "text": ["In which month Elon musk was born"],
+        "file_id": file_id,
+        "model_choice": "gpt_4o_mini",
+        "user_id": "test_user",
+    }
+
+    # Send chat request
+    response = client.post("/file/chat", json=chat_data)
+    assert response.status_code == 200
+    assert "response" in response.json()
+
+    # Check if response contains June or 6
+    response_text = response.json()["response"]
+    assert any(
+        month in response_text for month in ["June", "6"]
+    ), f"Response '{response_text}' does not contain 'June' or '6'"
+    assert not response.json().get("is_table", False)
 
 
 def test_health():
