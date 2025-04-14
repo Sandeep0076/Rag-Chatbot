@@ -203,6 +203,8 @@ def delete_candidate_user_embeddings():
 
     if not file_ids_by_user_emails:
         log.warning("No file ids found for deletion candidates: nothing to delete.")
+        log.info("Workflow step deletion of user embeddings completed with warnings.")
+        return
 
     for file_id, user_email in file_ids_by_user_emails:
         # e.g. chatbot-storage-dev-gcs-eu/file-embeddings/07806aff-478b-4a45-8725-9bac7935975e
