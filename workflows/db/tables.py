@@ -15,7 +15,7 @@ class User(Base):
     wf_deletion_candidate = Column(
         Boolean, nullable=False, default=False, server_default="0"
     )
-    wf_deletion_timestamp = Column(String, nullable=True)
+    wf_deletion_timestamp = Column(DateTime, nullable=True)
 
     # Foreign keys:
 
