@@ -1,3 +1,4 @@
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
@@ -5,7 +6,11 @@ from sqlalchemy import and_, create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from workflows.db.helpers import datetime_from_iso8601_timestamp, iso8601_timestamp_now
+from workflows.db.helpers import (
+    LOCAL_TIMEZONE,
+    datetime_from_iso8601_timestamp,
+    iso8601_timestamp_now,
+)
 from workflows.db.tables import Base, User
 from workflows.workflow import (
     get_users,
@@ -110,7 +115,9 @@ def test_mark_deletion_candidates(
         lambda email: email != "user2@example.com"
     )  # Only 'user2@example.com' is disabled
 
-    mock_datetime_now = "2024-10-02T15:48:39.500Z"
+    mock_datetime_now = datetime.strptime(
+        "2024-10-02T15:48:39.500Z", "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
     mock_iso8601_timestamp_now.return_value = mock_datetime_now
 
     # call the workflow function
@@ -176,8 +183,12 @@ def test_already_marked_users(
 
         assert user5.wf_deletion_candidate is True
         # user5 already marked and timestamp must keep its value
+        assert isinstance(
+            user5.wf_deletion_timestamp, datetime
+        ), "wf_deletion_timestamp should be a datetime object."
         assert user5.wf_deletion_timestamp != iso8601_timestamp_now
+        # subtract the current datetime from the deletion timestamp and check if the difference is greater than 28 days
         assert (
             datetime_from_iso8601_timestamp(iso8601_timestamp_now())
-            - datetime_from_iso8601_timestamp(user5.wf_deletion_timestamp)
+            - user5.wf_deletion_timestamp.replace(tzinfo=LOCAL_TIMEZONE)
         ).days > 28, "User 5's deletion timestamp should be older than 4 weeks."

@@ -57,7 +57,7 @@ def get_db_session():
         db_session = Session()
         yield db_session
     except Exception as e:
-        log.error(f"Database not reachable: {e}")
+        log.error(f"Error in session: {e}")
     finally:
         db_session.close()
 

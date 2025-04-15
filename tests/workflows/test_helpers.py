@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from workflows.db.helpers import filter_older_than_4_weeks
+from workflows.db.helpers import LOCAL_TIMEZONE, filter_older_than_4_weeks
 from workflows.gcs.helpers import delete_embeddings
 
 
@@ -20,18 +20,24 @@ def test_filter_older_than_4_weeks(
 ):
     # setup mock for datetime four weeks ago and
     # mock the datetime conversion for the first user
-    mock_datetime_four_weeks_ago.return_value = datetime(
-        2024, 9, 12, 12, 0, 0
+    mock_datetime_four_weeks_ago.return_value = datetime(2024, 9, 12, 12, 0, 0).replace(
+        tzinfo=LOCAL_TIMEZONE
     )  # assume today is October 10th, 2024
     mock_datetime_from_iso8601_timestamp.side_effect = (
-        lambda timestamp: datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
+        lambda timestamp: datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=LOCAL_TIMEZONE
+        )
     )
 
     # create two mock user objects
     class MockUser:
         def __init__(self, email, wf_deletion_timestamp):
             self.email = email
-            self.wf_deletion_timestamp = wf_deletion_timestamp
+            self.wf_deletion_timestamp = (
+                datetime.strptime(wf_deletion_timestamp, "%Y-%m-%dT%H:%M:%SZ")
+                if wf_deletion_timestamp
+                else None
+            )
 
     user1 = MockUser("user1@example.com", "2024-09-10T12:00:00Z")  # older than 4 weeks
     user2 = MockUser("user2@example.com", None)  # no deletion timestamp
