@@ -243,7 +243,6 @@ async def upload_file(
     try:
         # Generate temporary file_id with UUID - will be replaced if file already exists
         temp_file_id = str(uuid.uuid4())
-
         # Handle URL processing
         if urls:
             url_result = await file_handler.process_urls(
@@ -274,7 +273,6 @@ async def upload_file(
         # or the temp_file_id if it's a new file
         file_id = result["file_id"]
         temp_file_path = result["temp_file_path"]
-
         # Handle CSV/Excel/Database files in background
         if (
             file_extension in [".csv", ".xlsx", ".xls", ".db", ".sqlite"]
@@ -301,10 +299,10 @@ async def upload_file(
         )
         if is_supported_file and result["status"] == "existing":
             google_result = await embedding_handler.check_embeddings_exist(
-                file_id, "gemini-pro"
+                file_id, "gemini-flash"
             )
             azure_result = await embedding_handler.check_embeddings_exist(
-                file_id, "gpt_4_omni"
+                file_id, "gpt_4o_mini"
             )
             if (
                 not google_result["embeddings_exist"]

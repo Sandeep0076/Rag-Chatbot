@@ -11,7 +11,7 @@ from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_respon
 from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
-from rtl_rag_chatbot_api.chatbot.utils.encryption import decrypt_file, encrypt_file
+from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
@@ -211,14 +211,15 @@ class FileHandler:
             # Download the encrypted database
             self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
 
-            # Decrypt the database if it exists
-            if os.path.exists(encrypted_db_path):
-                decrypt_file(encrypted_db_path, db_path)
-                os.remove(encrypted_db_path)  # Clean up encrypted file
-            else:
-                logging.error(
-                    f"Encrypted database not found for file_id: {existing_file_id}"
-                )
+            # download_files_from_folder_by_id already decrypts the database
+            # # Decrypt the database if it exists
+            # if os.path.exists(encrypted_db_path):
+            #     decrypt_file(encrypted_db_path, db_path)
+            #     os.remove(encrypted_db_path)  # Clean up encrypted file
+            # else:
+            #     logging.error(
+            #         f"Encrypted database not found for file_id: {existing_file_id}"
+            #     )
 
             # Initialize handler with decrypted database
             handler = TabularDataHandler(self.configs, existing_file_id)
@@ -269,10 +270,10 @@ class FileHandler:
                 # file_id = existing_file_id
                 embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
                 google_result = await embedding_handler.check_embeddings_exist(
-                    existing_file_id, "gemini-pro"
+                    existing_file_id, "gemini-flash"
                 )
                 azure_result = await embedding_handler.check_embeddings_exist(
-                    existing_file_id, "gpt_4_omni"
+                    existing_file_id, "gpt_4o_mini"
                 )
 
             # Create necessary directories
