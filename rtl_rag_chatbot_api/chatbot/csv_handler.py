@@ -262,11 +262,13 @@ class TabularDataHandler:
 
                 column_stats = {}
                 for column in columns:
-                    if column["type"].python_type in (int, float):
+                    if hasattr(column["type"], "python_type") and column[
+                        "type"
+                    ].python_type in (int, float):
                         stats = session.execute(
                             text(
-                                f"SELECT MIN(\"{column['name']}\"), MAX(\"{column['name']}\"), "
-                                f"AVG(\"{column['name']}\") FROM \"{table_name}\""
+                                f'SELECT MIN("{column["name"]}"), MAX("{column["name"]}"), '
+                                f'AVG("{column["name"]}") FROM "{table_name}"'
                             )
                         ).fetchone()
                         column_stats[column["name"]] = {
@@ -287,7 +289,23 @@ class TabularDataHandler:
                         "column_stats": column_stats,
                     }
                 )
-        return table_info
+        # Compose a database summary for file_info.json
+        database_summary = {
+            "table_count": len(table_info),
+            "table_names": [t["name"] for t in table_info],
+            "tables": [],
+        }
+        for t in table_info:
+            database_summary["tables"].append(
+                {
+                    "name": t["name"],
+                    "columns": t["columns"],
+                    "row_count": t["row_count"],
+                    "top_rows": [list(row) for row in t["sample_data"]],
+                    "column_stats": t["column_stats"],
+                }
+            )
+        return database_summary
 
     def get_answer(self, question: str) -> str:
         """

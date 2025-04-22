@@ -164,6 +164,78 @@ class FileHandler:
         data_preparer = PrepareSQLFromTabularData(temp_file_path, data_dir)
         data_preparer.run_pipeline()
 
+        # Extract database_summary directly without using TabularDataHandler
+        try:
+            # Import necessary modules for direct database access
+            from sqlalchemy import create_engine, inspect, text
+
+            # Create direct connection to the database
+            db_url = f"sqlite:///{db_path}"
+            engine = create_engine(db_url)
+            inspector = inspect(engine)
+
+            # Extract table info directly
+            table_info = []
+            with engine.connect() as connection:
+                for table_name in inspector.get_table_names():
+                    columns = inspector.get_columns(table_name)
+                    row_count = connection.execute(
+                        text(f'SELECT COUNT(*) FROM "{table_name}"')
+                    ).scalar()
+                    sample_data = connection.execute(
+                        text(f'SELECT * FROM "{table_name}" LIMIT 3')
+                    ).fetchall()
+
+                    column_stats = {}
+                    for column in columns:
+                        if hasattr(column["type"], "python_type") and column[
+                            "type"
+                        ].python_type in (int, float):
+                            stats = connection.execute(
+                                text(
+                                    f'SELECT MIN("{column["name"]}"), MAX("{column["name"]}"), '
+                                    f'AVG("{column["name"]}") FROM "{table_name}"'
+                                )
+                            ).fetchone()
+                            column_stats[column["name"]] = {
+                                "min": stats[0],
+                                "max": stats[1],
+                                "avg": stats[2],
+                            }
+
+                    table_info.append(
+                        {
+                            "name": table_name,
+                            "columns": [
+                                {"name": col["name"], "type": str(col["type"])}
+                                for col in columns
+                            ],
+                            "row_count": row_count,
+                            "sample_data": [
+                                [str(cell) for cell in row] for row in sample_data
+                            ],
+                            "column_stats": column_stats,
+                        }
+                    )
+
+            # Create database summary
+            database_summary = {
+                "table_count": len(table_info),
+                "table_names": [t["name"] for t in table_info],
+                "tables": table_info,
+            }
+
+            metadata["database_summary"] = database_summary
+            logging.info(
+                f"Successfully extracted database_summary with {len(table_info)} tables"
+            )
+
+        except Exception as e:
+            logging.error(
+                f"Failed to extract database_summary for new file: {str(e)}",
+                exc_info=True,
+            )
+
         # Upload metadata and encrypted database
         try:
             encrypted_db_path = encrypt_file(db_path)
@@ -257,7 +329,14 @@ class FileHandler:
             file_extension = os.path.splitext(original_filename)[1].lower()
             logging.info(f"Processing file with extension: {file_extension}")
 
-            is_tabular = file_extension in [".csv", ".xlsx", ".xls"]
+            is_tabular = file_extension in [
+                ".csv",
+                ".xlsx",
+                ".xls",
+                ".db",
+                ".sqlite",
+                ".sqlite3",
+            ]
             is_database = file_extension in [".db", ".sqlite", ".sqlite3"]
             is_text = file_extension in [".txt", ".doc", ".docx"]
 
