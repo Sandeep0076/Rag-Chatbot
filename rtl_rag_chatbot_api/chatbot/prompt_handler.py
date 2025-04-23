@@ -48,9 +48,10 @@ Analyze the given database_info and user_question. Your task is to:
 1. If the user_question can be directly answered using the database_info, provide a concise answer.
 2. For text-based searches (especially names), always use case-insensitive comparisons using LOWER() or UPPER().
 3. In most cases, where database_info is insufficient, generate a detailed SQL-like natural language query.
+You can generate user query by understanding database_info and user_question.
+
 
 Database Info: {database_info}
-Table Name: {table_name}
 User Question: {user_question}
 
 Guidelines for generating SQL-like natural language queries:
@@ -64,6 +65,12 @@ Guidelines for generating SQL-like natural language queries:
 - Never include any disclaimers about training data or model capabilities in your response
 - Provide only the direct answer or query, without any additional commentary
 - When asked about table data, return the answer in tabular form with headers and rows and columns. Use markdown format.
+- When the user asks the question, check database info. Check column names,
+  table names, and values. Analyze and interpret.
+    - It could be possible inside user question, there is no explicit column name
+    or table name reference. Find the closest relevant column that might be related
+    to the question. Use that information to generate user query/answer.
+
 
 Examples:
 {examples}
@@ -77,24 +84,24 @@ Output a single, coherent response without any disclaimers or metadata about the
 """
 
 
-def format_question(database_info: str, user_question: str, table_name: str) -> str:
+def format_question(database_info: dict, user_question: str) -> str:
     """
     Formats a user question into a database-friendly query using Azure OpenAI.
 
     Args:
-        database_info: Information about the database structure
+        database_info: Information about the database structure (full database_summary)
         user_question: The original user question
-        table_name: Name of the table being queried
 
     Returns:
         str: A formatted question optimized for database querying
     """
+    # Simply use the database_info directly from file_info.json
     formatted_prompt = special_prompt.format(
         database_info=database_info,
         user_question=user_question,
-        table_name=table_name,
         examples=examples,
     )
+
     # Get the formatted question
     formatted_question = get_azure_non_rag_response(configs, formatted_prompt)
     return formatted_question

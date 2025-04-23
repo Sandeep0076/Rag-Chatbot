@@ -8,7 +8,6 @@ import aiofiles
 from fastapi import UploadFile
 
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
-from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
@@ -293,18 +292,96 @@ class FileHandler:
             #         f"Encrypted database not found for file_id: {existing_file_id}"
             #     )
 
-            # Initialize handler with decrypted database
-            handler = TabularDataHandler(self.configs, existing_file_id)
-            # metadata = self.gcs_handler.get_file_info(existing_file_id)
-            if handler.initialize_database(is_new_file=False):
-                return {
-                    "file_id": existing_file_id,
-                    "is_image": False,
-                    "is_tabular": True,
-                    "message": "File exists. Database ready for querying.",
-                    "status": "existing",
-                    "temp_file_path": None,
-                }
+            # Check if file_info.json has database_summary, if not, add it
+            file_info = self.gcs_handler.get_file_info(existing_file_id)
+
+            # Extract database_summary if it doesn't exist
+            if "database_summary" not in file_info:
+                try:
+                    # Import necessary modules for direct database access
+                    from sqlalchemy import create_engine, inspect, text
+
+                    # Create direct connection to the database
+                    db_url = f"sqlite:///{db_path}"
+                    engine = create_engine(db_url)
+                    inspector = inspect(engine)
+
+                    # Extract table info directly
+                    table_info = []
+                    with engine.connect() as connection:
+                        for table_name in inspector.get_table_names():
+                            columns = inspector.get_columns(table_name)
+                            row_count = connection.execute(
+                                text(f'SELECT COUNT(*) FROM "{table_name}"')
+                            ).scalar()
+                            sample_data = connection.execute(
+                                text(f'SELECT * FROM "{table_name}" LIMIT 3')
+                            ).fetchall()
+
+                            column_stats = {}
+                            for column in columns:
+                                if hasattr(column["type"], "python_type") and column[
+                                    "type"
+                                ].python_type in (int, float):
+                                    stats = connection.execute(
+                                        text(
+                                            f'SELECT MIN("{column["name"]}"), MAX("{column["name"]}"), '
+                                            f'AVG("{column["name"]}") FROM "{table_name}"'
+                                        )
+                                    ).fetchone()
+                                    column_stats[column["name"]] = {
+                                        "min": stats[0],
+                                        "max": stats[1],
+                                        "avg": stats[2],
+                                    }
+
+                            table_info.append(
+                                {
+                                    "name": table_name,
+                                    "columns": [
+                                        {"name": col["name"], "type": str(col["type"])}
+                                        for col in columns
+                                    ],
+                                    "row_count": row_count,
+                                    "sample_data": [
+                                        [str(cell) for cell in row]
+                                        for row in sample_data
+                                    ],
+                                    "column_stats": column_stats,
+                                }
+                            )
+
+                    # Create database summary
+                    database_summary = {
+                        "table_count": len(table_info),
+                        "table_names": [t["name"] for t in table_info],
+                        "tables": table_info,
+                    }
+
+                    # Update file_info.json with database_summary
+                    self.gcs_handler.update_file_info(
+                        existing_file_id, {"database_summary": database_summary}
+                    )
+                    logging.info(
+                        f"Added database_summary to existing file_info.json with {len(table_info)} tables"
+                    )
+
+                except Exception as e:
+                    logging.error(
+                        f"Failed to extract database_summary for existing file: {str(e)}",
+                        exc_info=True,
+                    )
+
+            # Return success directly - we've already extracted the database summary if needed
+            # No need to initialize TabularDataHandler which might fail
+            return {
+                "file_id": existing_file_id,
+                "is_image": False,
+                "is_tabular": True,
+                "message": "File exists. Database ready for querying.",
+                "status": "existing",
+                "temp_file_path": None,
+            }
         except Exception as e:
             logging.error(f"Error processing existing database: {str(e)}")
             if os.path.exists(encrypted_db_path):
