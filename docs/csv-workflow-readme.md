@@ -7,7 +7,8 @@ The application implements a sophisticated chat system for CSV files using a com
 - TabularDataHandler: Core class handling CSV/Excel interactions
 - SQLite Database: Stores tabular data efficiently
 - LangChain Integration: For SQL query generation
-- Azure OpenAI: For natural language understanding
+- PromptHandler: For structuring prompts and questions
+- Multiple LLM Providers: Azure OpenAI and Google Gemini for natural language understanding
 
 ## Workflow
 
@@ -26,36 +27,71 @@ b) Existing File:
 
 ### 2. Query Processing Flow
 
-#### Direct Answer Path
+#### Request Initiation
+- User submits question to `/file/chat` endpoint in app.py
+- Request is routed to `TabularDataHandler.ask_question` method
+- Method validates inputs and initializes resources if needed
+
+#### Question Transformation
+- Raw user question is passed through `format_question()` from prompt_handler.py
+- The question is enriched with table schema, metadata, and context
+- System generates a more structured query that aligns with the data format
+
+#### Intent Detection & Processing
+The system analyzes the formatted question for specific keywords to determine processing path:
+
+##### Direct Answer Path
 Triggered when:
+- Question contains analytical keywords (SELECT, FIND, LIST, SHOW, CALCULATE, etc.)
+- Clear data retrieval intent is detected
 - Question can be directly mapped to SQL
-- Contains SQL-like keywords (SELECT, FIND, LIST, etc.)
-- Clear data retrieval intent
 
 Process:
-1. Question formatted using `format_question()`
-2. SQL agent processes the query
-3. Returns structured data response
+1. The agent (typically a SQL-capable LLM) processes the formatted question
+2. The system extracts:
+   - Final answer from the agent
+   - Intermediate reasoning steps
+   - SQL queries generated (if applicable)
+3. These components are combined into a comprehensive prompt
+4. Model-specific response generation based on selected LLM:
+   - Gemini models: Uses `get_gemini_non_rag_response()`
+   - Azure models: Uses `get_azure_non_rag_response()`
+5. Returns a natural language answer derived from the structured data
 
-#### Forced Answer Path
+##### Alternative Path
 Triggered when:
-- Complex questions needing inference
-- No direct SQL mapping possible
-- Contextual understanding required
+- No analytical keywords are detected
+- Question may be conversational or unclear
+- The system returns the formatted question itself
 
-Process:
-1. Attempts direct answer first
-2. If fails, uses `get_forced_answer()`
-3. Uses LLM to interpret context and generate response
+#### Error Handling
+- Comprehensive error logging throughout the process
+- Graceful error propagation to higher-level handlers
+- User-friendly error messages for common failures
 
 ### 3. Memory Management
 - Connection pooling with SQLAlchemy
 - Session cleanup after each query
 - Automatic resource disposal
 - Concurrent user session handling
+- Lazy initialization of agents and models to conserve resources
 
 ### 4. Performance Optimizations
 - Lazy loading of models
 - Connection pooling
 - File caching
 - Background cleanup tasks
+- Model selection based on question complexity
+
+### 5. Example Flow
+
+When a user asks: "What is the average salary in the dataset?"
+
+1. The question enters `/file/chat` endpoint
+2. It's routed to `TabularDataHandler.ask_question`
+3. The question is formatted with table context: "Given the table employee_data with columns [name, position, salary], calculate the average of the salary column"
+4. The system detects "CALCULATE" as a keyword and routes to the analytical path
+5. The agent processes this, potentially generating SQL: `SELECT AVG(salary) FROM employee_data`
+6. The raw result and steps are combined into a comprehensive prompt
+7. The appropriate LLM generates a natural language response: "The average salary in the employee dataset is $45,000"
+8. This formatted answer is returned to the calling function and ultimately to the user

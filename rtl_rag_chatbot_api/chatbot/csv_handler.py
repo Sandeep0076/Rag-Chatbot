@@ -84,8 +84,20 @@ class TabularDataHandler:
         self.db = SQLDatabase(engine=self.engine)
         self.llm = self._initialize_llm()
         self.agent = None
-        self.table_info = self.get_table_info()
-        if self.table_info:
+
+        # Get database info - this now returns a database_summary structure
+        db_info = self.get_table_info()
+
+        # Extract table_info from database_summary for backward compatibility
+        if isinstance(db_info, dict) and "tables" in db_info:
+            # New format - database_summary structure
+            self.table_info = db_info["tables"]
+        else:
+            # Old format - direct table_info list
+            self.table_info = db_info
+
+        # Set table_name from table_info
+        if self.table_info and len(self.table_info) > 0:
             self.table_name = self.table_info[0][
                 "name"
             ]  # Assuming the first table is the one we want
@@ -201,10 +213,47 @@ class TabularDataHandler:
         # Initialize SQL agent after database is prepared
         self._initialize_agent()
 
+    def _clean_sql_query(self, query: str) -> str:
+        """
+        Cleans SQL query by removing markdown formatting characters.
+
+        Args:
+            query (str): The SQL query that might contain markdown formatting.
+
+        Returns:
+            str: Cleaned SQL query without markdown formatting.
+        """
+        # Remove markdown code block delimiters
+        if query.startswith("```") and query.endswith("```"):
+            # Remove starting and ending backticks
+            query = query[3:].strip()
+            if query.endswith("```"):
+                query = query[:-3].strip()
+
+        # If query starts with 'sql' or other language identifier, remove it
+        lines = query.split("\n")
+        if lines and lines[0].lower().strip() in ["sql", "mysql", "sqlite"]:
+            query = "\n".join(lines[1:]).strip()
+
+        return query
+
     def _initialize_agent(self):
         """
         Initializes the SQL agent for executing database queries.
         """
+        # Create a custom SQLDatabase wrapper that preprocesses queries
+        original_run = self.db.run
+
+        def wrapped_run(query, *args, **kwargs):
+            # Clean the query before execution
+            cleaned_query = self._clean_sql_query(query)
+            logging.info(f"Original query: {query}")
+            logging.info(f"Cleaned query: {cleaned_query}")
+            return original_run(cleaned_query, *args, **kwargs)
+
+        # Replace the run method with our wrapped version
+        self.db.run = wrapped_run
+
         toolkit = SQLDatabaseToolkit(
             db=self.db, llm=self.llm, handle_parsing_errors=True
         )
@@ -262,11 +311,13 @@ class TabularDataHandler:
 
                 column_stats = {}
                 for column in columns:
-                    if column["type"].python_type in (int, float):
+                    if hasattr(column["type"], "python_type") and column[
+                        "type"
+                    ].python_type in (int, float):
                         stats = session.execute(
                             text(
-                                f"SELECT MIN(\"{column['name']}\"), MAX(\"{column['name']}\"), "
-                                f"AVG(\"{column['name']}\") FROM \"{table_name}\""
+                                f'SELECT MIN("{column["name"]}"), MAX("{column["name"]}"), '
+                                f'AVG("{column["name"]}") FROM "{table_name}"'
                             )
                         ).fetchone()
                         column_stats[column["name"]] = {
@@ -287,7 +338,23 @@ class TabularDataHandler:
                         "column_stats": column_stats,
                     }
                 )
-        return table_info
+        # Compose a database summary for file_info.json
+        database_summary = {
+            "table_count": len(table_info),
+            "table_names": [t["name"] for t in table_info],
+            "tables": [],
+        }
+        for t in table_info:
+            database_summary["tables"].append(
+                {
+                    "name": t["name"],
+                    "columns": t["columns"],
+                    "row_count": t["row_count"],
+                    "top_rows": [list(row) for row in t["sample_data"]],
+                    "column_stats": t["column_stats"],
+                }
+            )
+        return database_summary
 
     def get_answer(self, question: str) -> str:
         """
@@ -325,10 +392,28 @@ class TabularDataHandler:
             self._initialize_agent()
 
         try:
-            # Use the format_question function from prompt_handler
-            formatted_question = format_question(
-                self.table_info, question, self.table_name
-            )
+            # Import GCSHandler to access file_info.json
+            from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
+
+            gcs_handler = GCSHandler(self.config)
+
+            # Get database_summary from file_info.json instead of regenerating it
+            file_info = gcs_handler.get_file_info(self.file_id)
+
+            # Use database_summary from file_info if available, otherwise fall back to table_info
+            if file_info and "database_summary" in file_info:
+                db_summary = file_info["database_summary"]
+                logging.info(
+                    "Using database_summary from file_info.json for file_id: %s",
+                    self.file_id,
+                )
+            else:
+                logging.info(
+                    "No database_summary found in file_info.json, generating from table_info"
+                )
+
+            # Use the format_question function from prompt_handler with database summary
+            formatted_question = format_question(db_summary, question)
             logging.info(f"Formatted question: {formatted_question}")
 
             # Check if the formatted question contains specific keywords
