@@ -15,7 +15,7 @@ class User(Base):
     wf_deletion_candidate = Column(
         Boolean, nullable=False, default=False, server_default="0"
     )
-    wf_deletion_timestamp = Column(String, nullable=True)
+    wf_deletion_timestamp = Column(DateTime, nullable=True)
 
     # Foreign keys:
 
@@ -30,7 +30,9 @@ class Message(Base):
     id = Column(String, primary_key=True, unique=True, nullable=False)
     role = Column(String, nullable=False)
     content = Column(String, nullable=False)
-    createdAt = Column(DateTime, nullable=False, default=datetime.now(timezone.utc))
+    createdAt = Column(
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
     conversationId = Column(String, nullable=False)
 
     # Foreign keys:
@@ -53,15 +55,15 @@ class Conversation(Base):
     updatedAt = Column(
         DateTime,
         nullable=False,
-        default=func.now(),
-        onupdate=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
     createdAt = Column(
         DateTime,
         nullable=False,
-        default=func.now(),
-        onupdate=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
     fileId = Column(String, nullable=True)

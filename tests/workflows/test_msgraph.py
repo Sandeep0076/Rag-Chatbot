@@ -30,9 +30,13 @@ def test_is_user_account_enabled_success(mock_get_access_token, mock_requests_ge
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {
-        "accountEnabled": True,
-        "displayName": "Test User",
-        "mail": "testuser@example.com",
+        "value": [
+            {
+                "accountEnabled": True,
+                "displayName": "Test User",
+                "mail": "testuser@example.com",
+            }
+        ]
     }
 
     mock_requests_get.return_value = mock_response
@@ -59,9 +63,13 @@ def test_is_user_account_enabled_disabled_account(
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {
-        "accountEnabled": False,
-        "displayName": "Test User",
-        "mail": "testuser@example.com",
+        "value": [
+            {
+                "accountEnabled": False,
+                "displayName": "Test User",
+                "mail": "testuser@example.com",
+            }
+        ]
     }
 
     mock_requests_get.return_value = mock_response
@@ -90,3 +98,16 @@ def test_is_user_account_enabled_failure(
         "Failed to fetch user details for nonexistentuser@example.com: 404, Not Found"
     )
     mock_requests_get.assert_called_once()
+
+
+def test_is_user_account_enabled_not_found(
+    mock_get_access_token, mock_requests_get, mock_log
+):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"value": []}
+    mock_requests_get.return_value = mock_response
+
+    result = is_user_account_enabled("unknown@example.com")
+
+    assert result is False

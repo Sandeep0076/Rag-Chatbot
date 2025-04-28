@@ -30,6 +30,13 @@ def datetime_four_weeks_ago():
     return datetime.now(LOCAL_TIMEZONE) - timedelta(weeks=4)
 
 
+def is_older_than_4_weeks(user):
+    if not user.wf_deletion_timestamp:
+        return False
+    user_timestamp = user.wf_deletion_timestamp.replace(tzinfo=LOCAL_TIMEZONE)
+    return user_timestamp <= datetime_four_weeks_ago()
+
+
 def filter_older_than_4_weeks(users: List) -> List:
     """
     Keeps those users in the list for which the deletion timestamp of the user
@@ -38,12 +45,4 @@ def filter_older_than_4_weeks(users: List) -> List:
     from the list.
     """
     # filter those with timestamp older than 4 weeks
-    return list(
-        filter(
-            lambda user: datetime_from_iso8601_timestamp(user.wf_deletion_timestamp)
-            <= datetime_four_weeks_ago()
-            if user.wf_deletion_timestamp
-            else False,
-            users,
-        )
-    )
+    return [user for user in users if is_older_than_4_weeks(user)]
