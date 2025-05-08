@@ -61,6 +61,18 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class ImageGenerationRequest(BaseModel):
+    prompt: str = Field(..., description="Text prompt for image generation")
+    size: str = Field(
+        default="1024x1024", description="Size of the generated image (e.g., 1024x1024)"
+    )
+    n: int = Field(default=1, description="Number of images to generate")
+    model_choice: Optional[str] = Field(
+        default=None,
+        description="Model to use for image generation (dall-e-3 or imagen-3.0)",
+    )
+
+
 class CleanupRequest(BaseModel):
     is_manual: bool = True
 

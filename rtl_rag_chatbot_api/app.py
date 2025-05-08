@@ -25,7 +25,9 @@ from starlette_exporter import PrometheusMiddleware, handle_metrics
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot as Chatbot
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
+from rtl_rag_chatbot_api.chatbot.combined_image_handler import CombinedImageGenerator
 from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
+from rtl_rag_chatbot_api.chatbot.dalle_handler import DalleImageGenerator
 from rtl_rag_chatbot_api.chatbot.data_visualization import detect_visualization_need
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.file_handler import FileHandler
@@ -35,6 +37,7 @@ from rtl_rag_chatbot_api.chatbot.gemini_handler import (
     get_gemini_non_rag_response,
 )
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
+from rtl_rag_chatbot_api.chatbot.imagen_handler import ImagenGenerator
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
@@ -47,6 +50,7 @@ from rtl_rag_chatbot_api.common.models import (
     EmbeddingsCheckRequest,
     FileDeleteRequest,
     FileUploadResponse,
+    ImageGenerationRequest,
     NeighborsQuery,
     Query,
 )
@@ -77,6 +81,9 @@ gemini_handler = GeminiHandler(configs, gcs_handler)
 file_handler = FileHandler(configs, gcs_handler, gemini_handler)
 model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler)
+dalle_handler = DalleImageGenerator(configs)
+imagen_handler = ImagenGenerator(configs)
+combined_image_handler = CombinedImageGenerator(configs)
 
 # database connection
 if os.getenv("DB_INSTANCE"):
@@ -937,12 +944,20 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 @app.get("/available-models")
 async def get_available_models(current_user=Depends(get_current_user)):
     """
-    Endpoint to retrieve a list of available models including Azure LLM models and Gemini models.
+    Endpoint to retrieve a list of available models including Azure LLM models, Gemini models,
+    and image generation models.
     """
+    # Get available models from config
     azure_models = list(configs.azure_llm.models.keys())
     gemini_models = ["gemini-flash", "gemini-pro"]
-    all_models = azure_models + gemini_models
-    return {"models": all_models}
+    # Add individual image models and the combined option
+    image_models = ["dall-e-3", configs.vertexai_imagen.model_name, "Dalle + Imagen"]
+
+    # Return combined list with model categories
+    return {
+        "models": azure_models + gemini_models + image_models,
+        "model_types": {"text": azure_models + gemini_models, "image": image_models},
+    }
 
 
 @app.post("/file/cleanup")
@@ -1076,6 +1091,9 @@ async def delete_resources(
                 if not file_info:
                     results[file_id] = "Error: File info not found"
                     continue
+
+                # This section previously contained Streamlit-specific code
+                # which has been removed as it doesn't belong in the FastAPI backend
 
                 # Check if username exists in file_info
                 usernames = file_info.get("username", [])
@@ -1276,6 +1294,100 @@ def find_file_by_name(
         raise HTTPException(
             status_code=500, detail=f"Error searching for file: {str(e)}"
         )
+
+
+@app.post("/image/generate")
+async def generate_image(
+    request: ImageGenerationRequest, current_user=Depends(get_current_user)
+):
+    """
+    Generate an image based on the provided text prompt using selected model (DALL-E 3 or Imagen).
+
+    Args:
+        request (ImageGenerationRequest): Request body containing:
+            - prompt (str): Text prompt for image generation
+            - size (str, optional): Size of the generated image (default: "1024x1024")
+            - n (int, optional): Number of images to generate (default: 1)
+            - model_choice (str, optional): Model to use ("dall-e-3" or "imagen-3.0") (default: "dall-e-3")
+        current_user: Authenticated user information
+
+    Returns:
+        dict: Dictionary containing:
+            - success (bool): Whether the image generation was successful
+            - image_url (str): URL of the generated image (if successful)
+            - error (str): Error message (if unsuccessful)
+            - prompt (str): The original prompt
+            - model (str): The model used for generation
+    """
+    try:
+        # Select the appropriate image generator based on model_choice
+        if request.model_choice and "imagen" in request.model_choice.lower():
+            # Generate image using the imagen_handler
+            logging.info(
+                f"Using Vertex AI Imagen model for image generation with prompt: {request.prompt}"
+            )
+            result = imagen_handler.generate_image(
+                prompt=request.prompt, size=request.size, n=request.n
+            )
+        else:
+            # Default to DALL-E 3
+            logging.info(
+                f"Using DALL-E 3 model for image generation with prompt: {request.prompt}"
+            )
+            result = dalle_handler.generate_image(
+                prompt=request.prompt, size=request.size, n=request.n
+            )
+
+        return result
+    except Exception as e:
+        logging.error(f"Error generating image: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "prompt": request.prompt,
+            "model": request.model_choice or "dall-e-3",
+        }
+
+
+@app.post("/image/generate-combined")
+async def generate_combined_images(
+    request: ImageGenerationRequest, current_user=Depends(get_current_user)
+):
+    """
+    Generate images using both DALL-E and Imagen models concurrently with the same prompt.
+
+    Args:
+        request (ImageGenerationRequest): Request body containing:
+            - prompt (str): Text prompt for image generation
+            - size (str, optional): Size of the generated image (default: "1024x1024")
+            - n (int, optional): Number of images to generate per model (default: 1)
+        current_user: Authenticated user information
+
+    Returns:
+        dict: Dictionary containing results from both models:
+            - success (bool): Whether either image generation was successful
+            - dalle_result (dict): Result from DALL-E model
+            - imagen_result (dict): Result from Imagen model
+            - prompt (str): The original prompt
+            - models (list): List of models used for generation
+    """
+    try:
+        logging.info(f"Generating images with both models for prompt: {request.prompt}")
+
+        # Use the combined image handler to generate images from both models
+        result = await combined_image_handler.generate_images(
+            prompt=request.prompt, size=request.size, n=request.n
+        )
+
+        return result
+    except Exception as e:
+        logging.error(f"Error generating combined images: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "prompt": request.prompt,
+            "models": ["dall-e-3", configs.vertexai_imagen.model_name],
+        }
 
 
 def start():

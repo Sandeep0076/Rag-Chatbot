@@ -703,9 +703,35 @@ def test_chat_with_url(
 
 
 def test_health():
-    response = client.get("/internal/healthy")
+    """Test health endpoint."""
+    response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+    assert response.json()["status"] == "ok"
+
+
+def test_generate_combined_images():
+    """Test combined image generation with both DALL-E and Imagen models.
+
+    This test verifies the endpoint that generates images from both models simultaneously
+    using a photoreal prompt of a medieval village.
+    """
+    # Define the test prompt
+    test_prompt = "An old medieval village of rome, sunset view, photorealic picture shot by cannon camera"
+
+    # Prepare request data
+    request_data = {"prompt": test_prompt, "size": "1024x1024", "n": 1}
+
+    # Call the endpoint
+    response = client.post("/image/generate-combined", json=request_data)
+
+    # Verify response is successful
+    assert response.status_code == 200
+
+    # Check basic response structure
+    response_data = response.json()
+    assert "success" in response_data
+    assert "dalle_result" in response_data
+    assert "imagen_result" in response_data
 
 
 def test_info():
