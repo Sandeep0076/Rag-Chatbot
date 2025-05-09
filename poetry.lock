@@ -4639,6 +4639,26 @@ signals = ["blinker (>=1.4.0)"]
 signedtoken = ["cryptography (>=3.0.0)", "pyjwt (>=2.0.0,<3)"]
 
 [[package]]
+name = "office365-rest-python-client"
+version = "2.6.1"
+description = "Microsoft 365 & Microsoft Graph Library for Python"
+optional = false
+python-versions = "*"
+files = [
+    {file = "Office365_REST_Python_Client-2.6.1-py3-none-any.whl", hash = "sha256:99a7bf0bda0d26000e5411eaf933dbae69ad374ab07999c7d40e6308fe6c2657"},
+    {file = "office365_rest_python_client-2.6.1.tar.gz", hash = "sha256:22ae8c306f1dd95e980762c9f7288edbfb6fdfb1e0837da9ff4b086aeecda295"},
+]
+
+[package.dependencies]
+msal = "*"
+pytz = "*"
+requests = "*"
+typing-extensions = ">=4.0.0"
+
+[package.extras]
+ntlmprovider = ["requests-ntlm"]
+
+[[package]]
 name = "olefile"
 version = "0.47"
 description = "Python package to parse, read and write Microsoft OLE2 files (Structured Storage or Compound Document, Microsoft Office)"
@@ -8604,4 +8624,4 @@ test = ["pytest"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<3.13"
-content-hash = "d081114c6b967d94ddcf06cbb18a9badc3cb489fa5e097996d65e5c2f79a5c7d"
+content-hash = "1f41e08856e948d3bfa420719befcc401b4ca190a5e2176e17f24b24ebf9ac5a"

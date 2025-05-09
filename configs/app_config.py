@@ -63,6 +63,22 @@ class GeminiConfig(BaseModel):
     model_config = {"protected_namespaces": ()}
 
 
+class AzureDalle3Config(BaseModel):
+    api_key: str
+    endpoint: str
+    api_version: str
+    model_name: str
+    deployment: str
+    model_config = {"protected_namespaces": ()}
+
+
+class VertexAIImagenConfig(BaseModel):
+    model_name: str = "imagen-3.0-generate-002"
+    project: str = "dat-itowe-dev"
+    location: str = "europe-west4"
+    model_config = {"protected_namespaces": ()}
+
+
 class CleanupConfig(BaseModel):
     staleness_threshold_minutes: int = 240  # 4 hours default
     min_cleanup_interval: int = 30  # 30 minutes default
@@ -76,6 +92,8 @@ class Config(BaseSettings):
     llm_hyperparams: LLMHyperParams
     gcp_resource: GCPResourceConfig
     gemini: GeminiConfig
+    azure_dalle_3: AzureDalle3Config
+    vertexai_imagen: VertexAIImagenConfig = Field(default_factory=VertexAIImagenConfig)
     cleanup: CleanupConfig = Field(default_factory=lambda: CleanupConfig())
 
     class Config:
