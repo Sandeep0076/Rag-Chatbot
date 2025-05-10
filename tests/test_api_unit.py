@@ -143,6 +143,26 @@ def mock_tabular_handler():
         mock.return_value.get_answer.return_value = (
             "The average number of pregnancies is 3.845"
         )
+
+        # Mock the get_table_info method to return the new database_summary structure
+        mock_table = {
+            "name": "mock_table",
+            "columns": [{"name": "pregnancies", "type": "FLOAT"}],
+            "row_count": 100,
+            "sample_data": [["3.845"]],
+            "column_stats": {"pregnancies": {"min": 0, "max": 10, "avg": 3.845}},
+        }
+
+        mock.return_value.get_table_info.return_value = {
+            "table_count": 1,
+            "table_names": ["mock_table"],
+            "tables": [mock_table],
+        }
+
+        # Set up the table_info attribute directly for any direct access
+        mock.return_value.table_info = [mock_table]
+        mock.return_value.table_name = "mock_table"
+
         yield mock
 
 
@@ -645,7 +665,10 @@ def test_chat_with_doc(
     response = client.post("/file/chat", json=chat_data)
     assert response.status_code == 200
     assert "response" in response.json()
-    assert "50" in response.json()["response"]
+    response_text = response.json()["response"]
+    assert any(
+        value in response_text.lower() for value in ["50", "fifty"]
+    ), f"Expected either '50' or 'fifty' in response: {response_text}"
     assert not response.json().get("is_table", False)
 
     # Test chat with text document using Gemini Pro
@@ -658,7 +681,10 @@ def test_chat_with_doc(
     response_gemini = client.post("/file/chat", json=chat_data_gemini)
     assert response_gemini.status_code == 200
     assert "response" in response_gemini.json()
-    assert "50" in response_gemini.json()["response"]
+    response_text_gemini = response_gemini.json()["response"]
+    assert any(
+        value in response_text_gemini.lower() for value in ["50", "fifty"]
+    ), f"Expected either '50' or 'fifty' in response: {response_text_gemini}"
     assert not response_gemini.json().get("is_table", False)
 
 
