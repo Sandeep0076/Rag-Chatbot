@@ -154,6 +154,23 @@ class GCSHandler:
             logging.error(f"Error uploading to GCS: {str(e)}")
         raise
 
+    def check_file_exists(self, blob_path: str) -> bool:
+        """
+        Check if a file exists in Google Cloud Storage.
+
+        Args:
+            blob_path (str): The path to the blob in the bucket.
+
+        Returns:
+            bool: True if the file exists, False otherwise.
+        """
+        try:
+            blob = self.bucket.blob(blob_path)
+            return blob.exists()
+        except Exception as e:
+            logging.error(f"Error checking if file exists in GCS: {str(e)}")
+            return False
+
     def upload_to_gcs(
         self,
         bucket_name: str,
