@@ -177,6 +177,10 @@ def mark_deletion_candidates():
                 user.wf_deletion_candidate = True
                 user.wf_deletion_timestamp = db_helpers.iso8601_timestamp_now()
                 users_marked.append(user.email)
+            else:
+                # in any other case, set the deletion candidate to None to ensure that the user is not marked
+                user.wf_deletion_candidate = None
+                user.wf_deletion_timestamp = None
 
             # add user to the session for committing changes
             session.add(user)
