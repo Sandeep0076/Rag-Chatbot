@@ -411,6 +411,12 @@ class TabularDataHandler:
                 logging.info(
                     "No database_summary found in file_info.json, generating from table_info"
                 )
+                # Create database_summary from table_info
+                db_summary = {
+                    "table_count": len(self.table_info),
+                    "table_names": [t["name"] for t in self.table_info],
+                    "tables": self.table_info,
+                }
 
             # Use the format_question function from prompt_handler with database summary
             formatted_question = format_question(db_summary, question)

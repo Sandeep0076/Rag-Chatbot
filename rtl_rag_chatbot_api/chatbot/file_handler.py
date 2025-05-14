@@ -390,6 +390,255 @@ class FileHandler:
                 os.remove(db_path)
             raise
 
+    async def _encrypt_file(self, file_path: str, file_name: str) -> str:
+        """
+        Encrypt a file and return the path to the encrypted file.
+
+        Args:
+            file_path (str): Path to the file to encrypt
+            file_name (str): Name of the file for logging purposes
+
+        Returns:
+            str: Path to the encrypted file, or None if encryption failed
+        """
+        try:
+            encrypted_file_path = await asyncio.to_thread(encrypt_file, file_path)
+            logging.info(f"Successfully encrypted file: {file_name}")
+            return encrypted_file_path
+        except Exception as e:
+            logging.error(f"Error encrypting file {file_name}: {str(e)}")
+            return None
+
+    async def _upload_encrypted_file(
+        self, encrypted_file_path: str, destination_path: str, original_filename: str
+    ):
+        """
+        Upload an encrypted file to GCS and clean it up afterwards.
+
+        Args:
+            encrypted_file_path (str): Path to the encrypted file
+            destination_path (str): Destination path in GCS
+            original_filename (str): Original filename for logging purposes
+
+        Returns:
+            bool: True if upload succeeded, False otherwise
+        """
+        if not encrypted_file_path:
+            return False
+
+        try:
+            files_to_upload = {
+                "encrypted_file": (
+                    encrypted_file_path,
+                    destination_path,
+                )
+            }
+            await asyncio.to_thread(
+                self.gcs_handler.upload_to_gcs,
+                self.configs.gcp_resource.bucket_name,
+                files_to_upload,
+            )
+            logging.info(
+                f"Successfully uploaded encrypted file for {original_filename}"
+            )
+
+            # Clean up encrypted file after upload
+            if os.path.exists(encrypted_file_path):
+                os.remove(encrypted_file_path)
+            return True
+        except Exception as e:
+            logging.error(f"Error uploading encrypted file: {str(e)}")
+            # Clean up encrypted file in case of error
+            if os.path.exists(encrypted_file_path):
+                os.remove(encrypted_file_path)
+            return False
+
+    async def _determine_file_types(self, original_filename):
+        """Determine file types based on extension."""
+        file_extension = os.path.splitext(original_filename)[1].lower()
+        logging.info(f"Processing file with extension: {file_extension}")
+
+        is_tabular = file_extension in [
+            ".csv",
+            ".xlsx",
+            ".xls",
+            ".db",
+            ".sqlite",
+            ".sqlite3",
+        ]
+        is_database = file_extension in [".db", ".sqlite", ".sqlite3"]
+        is_text = file_extension in [".txt", ".doc", ".docx"]
+
+        if is_text:
+            logging.info(f"Detected text file: {original_filename}")
+
+        return is_tabular, is_database, is_text
+
+    async def _prepare_file_directories(self, file_id, existing_file_id):
+        """Create necessary directories for file processing."""
+        os.makedirs("local_data", exist_ok=True)
+        if not existing_file_id:
+            chroma_dir = f"./chroma_db/{file_id}"
+            os.makedirs(chroma_dir, exist_ok=True)
+            logging.info(f"Created directory: {chroma_dir}")
+
+    async def _process_image_analysis(
+        self,
+        is_image,
+        existing_file_id,
+        google_result,
+        azure_result,
+        actual_file_id,
+        temp_file_path,
+        metadata,
+    ):
+        """Process image analysis for new or incomplete embeddings."""
+        if not is_image or (
+            existing_file_id
+            and google_result["embeddings_exist"]
+            and azure_result["embeddings_exist"]
+        ):
+            return []
+
+        analysis_files = []
+        # Use the actual_file_id for image analysis to ensure consistency
+        await self._handle_image_analysis(
+            actual_file_id, temp_file_path, analysis_files
+        )
+        metadata.update(
+            {
+                "gpt4_analysis_path": analysis_files[0],
+                "gemini_analysis_path": analysis_files[1],
+                "has_analysis": True,
+            }
+        )
+        return analysis_files
+
+    async def _check_local_embeddings(self, existing_file_id):
+        """Check if local embeddings exist."""
+        azure_path = f"./chroma_db/{existing_file_id}/azure"
+        gemini_path = f"./chroma_db/{existing_file_id}/google"
+        return (
+            os.path.exists(azure_path)
+            and os.path.exists(gemini_path)
+            and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
+            and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
+        )
+
+    async def _handle_existing_file_encryption(
+        self,
+        encrypted_file_path,
+        existing_file_id,
+        original_filename,
+        temp_file_path,
+        is_tabular,
+        is_database,
+    ):
+        """Check and handle encryption for existing files."""
+        # Check if encrypted file exists in GCS
+        encrypted_file_exists = await asyncio.to_thread(
+            self.gcs_handler.check_file_exists,
+            f"file-embeddings/{existing_file_id}/{original_filename}.encrypted",
+        )
+
+        # If encrypted file doesn't exist, encrypt and upload the current file
+        if not encrypted_file_exists and not is_tabular and not is_database:
+            # For existing files, we need to ensure we have an encrypted version
+            existing_encrypted_file_path = encrypted_file_path
+
+            # Encrypt the file if it wasn't encrypted earlier
+            if not existing_encrypted_file_path:
+                existing_encrypted_file_path = await self._encrypt_file(
+                    temp_file_path, original_filename
+                )
+
+            # Upload the encrypted file
+            if existing_encrypted_file_path:
+                await self._upload_encrypted_file(
+                    existing_encrypted_file_path,
+                    f"file-embeddings/{existing_file_id}/{original_filename}.encrypted",
+                    original_filename,
+                )
+
+    async def _handle_existing_file(
+        self,
+        existing_file_id,
+        encrypted_file_path,
+        temp_file_path,
+        original_filename,
+        is_image,
+        is_tabular,
+        is_database,
+        username,
+        google_result,
+        azure_result,
+    ):
+        """Handle processing for files that already exist in the system."""
+        # Early return if the file doesn't exist
+        if not existing_file_id:
+            return None
+
+        logging.info(f"Found embeddings for: {original_filename}")
+
+        # Update file_info.json with the new username
+        self.gcs_handler.update_file_info(existing_file_id, {"username": username})
+        logging.info(f"Updated file_info.json with username: {username}")
+
+        # Handle encryption for existing files
+        await self._handle_existing_file_encryption(
+            encrypted_file_path,
+            existing_file_id,
+            original_filename,
+            temp_file_path,
+            is_tabular,
+            is_database,
+        )
+
+        # Handle tabular data separately
+        if is_tabular or is_database:
+            return await self._handle_existing_tabular_data(
+                existing_file_id, original_filename, temp_file_path
+            )
+
+        # Check if local embeddings exist first
+        local_exists = await self._check_local_embeddings(existing_file_id)
+
+        # Download embeddings if they exist remotely but not locally
+        if (
+            google_result["embeddings_exist"]
+            and azure_result["embeddings_exist"]
+            and not local_exists
+        ):
+            self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
+
+        # For images, we only need the embeddings to chat
+        if is_image:
+            return {
+                "file_id": existing_file_id,
+                "is_image": is_image,
+                "is_tabular": is_tabular,
+                "message": "File already exists and has embeddings.",
+                "status": "existing",
+                "temp_file_path": temp_file_path,  # Keep original temp file for reference
+            }
+
+        # Copy the temp file to match the existing file ID path
+        existing_temp_path = f"local_data/{existing_file_id}_{original_filename}"
+        os.makedirs(os.path.dirname(existing_temp_path), exist_ok=True)
+        shutil.copy2(temp_file_path, existing_temp_path)
+        temp_file_path = existing_temp_path
+
+        return {
+            "file_id": existing_file_id,
+            "is_image": is_image,
+            "is_tabular": is_tabular,
+            "message": "File already exists. Processing database."
+            if is_tabular
+            else "File already exists and has embeddings.",
+            "status": "existing",
+            "temp_file_path": temp_file_path,
+        }
+
     async def process_file(
         self, file: UploadFile, file_id: str, is_image: bool, username: str
     ) -> dict:
@@ -401,29 +650,19 @@ class FileHandler:
             # Read and hash file content
             file_content = await file.read()
             file_hash = self.calculate_file_hash(file_content)
+            # Determine file types
+            is_tabular, is_database, is_text = await self._determine_file_types(
+                original_filename
+            )
 
-            # Determine file type
-            file_extension = os.path.splitext(original_filename)[1].lower()
-            logging.info(f"Processing file with extension: {file_extension}")
+            # Check for existing file and get embedding status
+            existing_file_id = None
+            google_result = {"embeddings_exist": False}
+            azure_result = {"embeddings_exist": False}
 
-            is_tabular = file_extension in [
-                ".csv",
-                ".xlsx",
-                ".xls",
-                ".db",
-                ".sqlite",
-                ".sqlite3",
-            ]
-            is_database = file_extension in [".db", ".sqlite", ".sqlite3"]
-            is_text = file_extension in [".txt", ".doc", ".docx"]
-
-            if is_text:
-                logging.info(f"Detected text file: {original_filename}")
-            # Check for existing file
             existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
             if existing_file_id:
-                logging.info(f"Existing file found with hash: {existing_file_id}")
-                # file_id = existing_file_id
+                # Get embedding status for existing file
                 embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
                 google_result = await embedding_handler.check_embeddings_exist(
                     existing_file_id, "gemini-flash"
@@ -431,19 +670,23 @@ class FileHandler:
                 azure_result = await embedding_handler.check_embeddings_exist(
                     existing_file_id, "gpt_4o_mini"
                 )
+                logging.info(f"Existing file found with hash: {existing_file_id}")
 
             # Create necessary directories
-            os.makedirs("local_data", exist_ok=True)
-            if not existing_file_id:
-                chroma_dir = f"./chroma_db/{file_id}"
-                os.makedirs(chroma_dir, exist_ok=True)
-                logging.info(f"Created directory: {chroma_dir}")
+            await self._prepare_file_directories(file_id, existing_file_id)
 
             # Save file locally
             temp_file_path = f"local_data/{file_id}_{original_filename}"
             async with aiofiles.open(temp_file_path, "wb") as buffer:
                 await buffer.write(file_content)
             del file_content
+
+            # Encrypt the original uploaded file (tabular files are handled separately)
+            encrypted_file_path = None
+            if not is_tabular:
+                encrypted_file_path = await self._encrypt_file(
+                    temp_file_path, original_filename
+                )
 
             # Determine the actual file_id to use - if an existing file is found, use that ID
             actual_file_id = existing_file_id if existing_file_id else file_id
@@ -459,29 +702,19 @@ class FileHandler:
             }
 
             # Process based on file type
-            if is_image and (
-                not existing_file_id
-                or (
-                    existing_file_id
-                    and (
-                        not google_result["embeddings_exist"]
-                        or not azure_result["embeddings_exist"]
-                    )
-                )
-            ):
-                analysis_files = []
-                # Use the actual_file_id for image analysis to ensure consistency
-                await self._handle_image_analysis(
-                    actual_file_id, temp_file_path, analysis_files
-                )
-                metadata.update(
-                    {
-                        "gpt4_analysis_path": analysis_files[0],
-                        "gemini_analysis_path": analysis_files[1],
-                        "has_analysis": True,
-                    }
-                )
+            # Process image analysis if needed
+            analysis_files = await self._process_image_analysis(
+                is_image,
+                existing_file_id,
+                google_result,
+                azure_result,
+                actual_file_id,
+                temp_file_path,
+                metadata,
+            )
 
+            # Add encryption status to metadata
+            metadata["is_encrypted"] = encrypted_file_path is not None
             self.gcs_handler.temp_metadata = metadata
 
             # If it's a new tabular file, prepare SQLite database
@@ -494,69 +727,32 @@ class FileHandler:
                     username,
                 )
 
-            if existing_file_id:
-                logging.info(f"Found embeddings for: {original_filename}")
+            # Handle existing file case
+            existing_file_result = await self._handle_existing_file(
+                existing_file_id,
+                encrypted_file_path,
+                temp_file_path,
+                original_filename,
+                is_image,
+                is_tabular,
+                is_database,
+                username,
+                google_result,
+                azure_result,
+            )
 
-                # Update file_info.json with the new username
-                self.gcs_handler.update_file_info(
-                    existing_file_id, {"username": username}
+            if existing_file_result:
+                return existing_file_result
+
+            # Upload the encrypted file to GCS if available (skip for tabular files - handled separately)
+            if not is_tabular and encrypted_file_path:
+                await self._upload_encrypted_file(
+                    encrypted_file_path,
+                    f"file-embeddings/{actual_file_id}/{original_filename}.encrypted",
+                    original_filename,
                 )
-                logging.info(f"Updated file_info.json with username: {username}")
 
-                if is_tabular or is_database:
-                    return await self._handle_existing_tabular_data(
-                        existing_file_id, original_filename, temp_file_path
-                    )
-
-                # Check if local embeddings exist first
-                azure_path = f"./chroma_db/{existing_file_id}/azure"
-                gemini_path = f"./chroma_db/{existing_file_id}/google"
-                local_exists = (
-                    os.path.exists(azure_path)
-                    and os.path.exists(gemini_path)
-                    and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
-                    and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
-                )
-
-                if (
-                    google_result["embeddings_exist"]
-                    and azure_result["embeddings_exist"]
-                ):
-                    if not local_exists:
-                        self.gcs_handler.download_files_from_folder_by_id(
-                            existing_file_id
-                        )
-
-                # For images, we only need the embeddings to chat
-                if is_image:
-                    return {
-                        "file_id": existing_file_id,
-                        "is_image": is_image,
-                        "is_tabular": is_tabular,
-                        "message": "File already exists and has embeddings.",
-                        "status": "existing",
-                        "temp_file_path": temp_file_path,  # Keep original temp file for reference
-                    }
-
-                # Copy the temp file to match the existing file ID path
-                existing_temp_path = (
-                    f"local_data/{existing_file_id}_{original_filename}"
-                )
-                os.makedirs(os.path.dirname(existing_temp_path), exist_ok=True)
-                shutil.copy2(temp_file_path, existing_temp_path)
-                temp_file_path = existing_temp_path
-
-                return {
-                    "file_id": existing_file_id,
-                    "is_image": is_image,
-                    "is_tabular": is_tabular,
-                    "message": "File already exists. Processing database."
-                    if is_tabular
-                    else "File already exists and has embeddings.",
-                    "status": "existing",
-                    "temp_file_path": temp_file_path,
-                }
-
+            # Return response for new files
             return {
                 "file_id": actual_file_id,  # Always use the consistent file_id
                 "is_image": is_image,
@@ -565,7 +761,9 @@ class FileHandler:
                 if not is_tabular
                 else "File processed and ready for use.",
                 "status": "success",
-                "temp_file_path": analysis_files[0] if is_image else temp_file_path,
+                "temp_file_path": analysis_files[0]
+                if is_image and analysis_files
+                else temp_file_path,
             }
 
         except Exception as e:
@@ -573,6 +771,14 @@ class FileHandler:
             # Clean up temp files in case of error
             if "temp_file_path" in locals() and os.path.exists(temp_file_path):
                 await asyncio.to_thread(os.remove, temp_file_path)
+            if (
+                "encrypted_file_path" in locals()
+                and encrypted_file_path
+                and os.path.exists(encrypted_file_path)
+            ):
+                await asyncio.to_thread(os.remove, encrypted_file_path)
+            # We don't need to check for existing_encrypted_file_path as it's not defined in this scope
+            # This was likely added during refactoring but is not needed here
             if (
                 "analysis_files" in locals()
                 and analysis_files
