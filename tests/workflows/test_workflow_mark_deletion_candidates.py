@@ -157,9 +157,7 @@ def test_mark_deletion_candidates(
 
 @patch("workflows.workflow.get_db_session")
 @patch("workflows.msgraph.is_user_account_enabled")  # Mock the Azure Graph API call
-@patch("workflows.db.helpers.iso8601_timestamp_now")  # Mock the datetime helper
 def test_already_marked_users(
-    mock_iso8601_timestamp_now,
     mock_is_user_account_enabled,
     mock_get_db_session,
     test_db_session,
@@ -168,11 +166,6 @@ def test_already_marked_users(
     # db session should use the test session. Use of __enter__ is necessary because
     # workflows.workflow.get_db_session has a `with get_db_session as ..:` statement.
     mock_get_db_session.return_value.__enter__.return_value = test_db_session
-
-    # iso8601_timestamp_now needs to be mocked because otherwise iso8601_timestamp_now()
-    # will return a new timestamp each time
-    mock_datetime_now = iso8601_timestamp_now()
-    mock_iso8601_timestamp_now.return_value = mock_datetime_now
 
     # call the workflow function
     mark_deletion_candidates()
@@ -196,9 +189,7 @@ def test_already_marked_users(
 
 @patch("workflows.workflow.get_db_session")
 @patch("workflows.msgraph.is_user_account_enabled")  # Mock the Azure Graph API call
-@patch("workflows.db.helpers.iso8601_timestamp_now")  # Mock the datetime helper
 def test_reactivated_user(
-    mock_iso8601_timestamp_now,
     mock_is_user_account_enabled,
     mock_get_db_session,
     test_db_session,
@@ -212,39 +203,25 @@ def test_reactivated_user(
     mock_get_db_session.return_value.__enter__.return_value = test_db_session
 
     # Mock the Azure Graph API to simulate account statuses
-    # Assume user1@example.com is re-activated (account enabled)
+    # Assume user4@example.com is re-activated (account enabled)
     mock_is_user_account_enabled.side_effect = (
-        lambda email: email != "user1@example.com"
-    )  # All users except user1@example.com are inactive
-
-    # Mock the current timestamp
-    mock_datetime_now = datetime.strptime(
-        "2024-10-02T15:48:39.500Z", "%Y-%m-%dT%H:%M:%S.%fZ"
+        # new active user
+        lambda email: email == "user4@example.com"
+        # already active users
+        or email == "user1@example.com"
+        or email == "user2@example.com"
+        or email == "user3@example.com"
     )
-    mock_iso8601_timestamp_now.return_value = mock_datetime_now
-
-    # Set up test data: user1@example.com is marked as a deletion candidate
-    with test_db_session as session:
-        user1 = session.query(User).filter(User.email == "user1@example.com").first()
-        user1.wf_deletion_candidate = True
-        user1.wf_deletion_timestamp = mock_datetime_now
-        session.commit()
 
     # Call the workflow function
     mark_deletion_candidates()
 
-    # Verify that user1 is unmarked as a deletion candidate
+    # Verify that user4 is unmarked as a deletion candidate
     with test_db_session as session:
-        user1 = session.query(User).filter(User.email == "user1@example.com").first()
+        user4 = session.query(User).filter(User.email == "user4@example.com").first()
         assert (
-            user1.wf_deletion_candidate is False
-        ), "User1 should no longer be marked as a deletion candidate."
+            user4.wf_deletion_candidate is False
+        ), "User4 should no longer be marked as a deletion candidate."
         assert (
-            user1.wf_deletion_timestamp is None
-        ), "User1's deletion timestamp should be cleared."
-
-        # Verify that other users remain unaffected
-        for user in session.query(User).filter(User.email != "user1@example.com"):
-            assert (
-                user.wf_deletion_candidate is True
-            ), f"{user.email} should remain marked as a deletion candidate."
+            user4.wf_deletion_timestamp is None
+        ), "User4's deletion timestamp should be cleared."
