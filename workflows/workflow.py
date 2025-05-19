@@ -146,8 +146,18 @@ def is_new_deletion_candidate(user: User, account_statuses: Dict = {}) -> bool:
         and account_statuses.get(user.email)
         is not None  # b. we got the information (None if user does not exist)
         and account_statuses.get(user.email) is False  # c. user is inactive
-        and user.wf_deletion_candidate
-        is False  # d. user is not already set to be inactive
+        and user.wf_deletion_candidate is False  # d. user is not already marked
+    )
+
+
+def is_user_got_reactivated(user: User, account_statuses: Dict = {}) -> bool:
+    """"""
+    return (
+        user.email in account_statuses  # a. we got the user
+        and account_statuses.get(user.email)
+        is not None  # b. we got the information (None if user does not exist)
+        and account_statuses.get(user.email) is True  # c. user is active
+        and user.wf_deletion_candidate is True  # d. user is already marked
     )
 
 
@@ -172,13 +182,19 @@ def mark_deletion_candidates():
     users_marked = []
     with get_db_session() as session:
         for user in users:
-            # mark those users for which , which are not marked, and which are not yet already marked
+            # Check if the user is inactive
             if is_new_deletion_candidate(user, account_statuses):
                 user.wf_deletion_candidate = True
                 user.wf_deletion_timestamp = db_helpers.iso8601_timestamp_now()
                 users_marked.append(user.email)
 
-            # add user to the session for committing changes
+            # Check if the user is reactivated
+            elif is_user_got_reactivated(user, account_statuses):
+                # Ensure re-actived users are not marked as deletion candidates
+                user.wf_deletion_candidate = False
+                user.wf_deletion_timestamp = None
+
+            # Add user to the session for committing changes
             session.add(user)
 
         log.info(
