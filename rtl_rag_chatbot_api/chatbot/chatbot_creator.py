@@ -9,43 +9,67 @@ from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
 class AzureChatbot(BaseRAGHandler):
     """Handles interactions with Azure OpenAI models for RAG applications."""
 
-    def __init__(self, configs, gcs_handler):
-        super().__init__(configs, gcs_handler)
-        self.configs = configs
-        self.model_config = None
-        self.llm_client = None
-        self.embedding_client = None
-
-    def initialize(
+    def __init__(
         self,
+        configs,
+        gcs_handler,
         model_choice: str,
         file_id: str = None,
-        embedding_type: str = None,
-        collection_name: str = None,
+        file_ids: List[str] = None,
+        all_file_infos: dict = None,  # Passed from app.py, contains file_info for each file_id
+        collection_name_prefix: str = "rag_collection_",
         user_id: str = None,
     ):
+        super().__init__(configs, gcs_handler)
+        self.configs = configs
         self.model_choice = model_choice
-        self.file_id = file_id
-        self.embedding_type = embedding_type
-        self.collection_name = collection_name or f"rag_collection_{file_id}"
-        self.user_id = user_id  # Added user_id
+        self.user_id = user_id
+        self.all_file_infos = all_file_infos if all_file_infos else {}
+        self._collection_name_prefix = collection_name_prefix  # e.g. "RAG_CHATBOT_"
+        self.active_file_ids: List[str] = []
+        self.is_multi_file = False
+
+        if file_ids and len(file_ids) > 0:
+            self.is_multi_file = True
+            self.active_file_ids = sorted(
+                list(set(file_ids))
+            )  # Ensure unique and sorted
+            # For BaseRAGHandler compatibility if its methods are ever called directly in multi-mode
+            # These singular attributes don't really apply, so set to None or first file for safety.
+            self.file_id = None
+            self.collection_name = None
+            self.embedding_type = (
+                None  # In multi-file, embedding type is always 'azure' for this class
+            )
+            logging.info(
+                f"AzureChatbot initialized for multi-file: {self.active_file_ids}"
+            )
+        elif file_id:
+            self.is_multi_file = False
+            self.active_file_ids = [file_id]
+            self.file_id = file_id  # For BaseRAGHandler compatibility
+            # collection_name for single file is typically just prefix + file_id
+            self.collection_name = f"{self._collection_name_prefix}{self.file_id}"
+            self.embedding_type = "azure"  # Default/assumed for AzureChatbot
+            logging.info(f"AzureChatbot initialized for single-file: {self.file_id}")
+        else:
+            raise ValueError(
+                "AzureChatbot requires either file_id or file_ids for initialization."
+            )
 
         self.model_config = self.configs.azure_llm.models.get(model_choice)
         if not self.model_config:
             raise ValueError(f"Configuration for model {model_choice} not found")
 
-        self.initialize_azure_clients()
+        self._initialize_azure_clients()
 
-    def initialize_azure_clients(self):
+    def _initialize_azure_clients(self):
         """Initialize Azure OpenAI and embedding clients."""
-        # Initialize Azure OpenAI client for chat completions
         self.llm_client = openai.AzureOpenAI(
             api_key=self.model_config.api_key,
             azure_endpoint=self.model_config.endpoint,
             api_version=self.model_config.api_version,
         )
-
-        # Initialize Azure Text Analytics client for embeddings
         self.embedding_client = openai.AzureOpenAI(
             api_key=self.configs.azure_embedding.azure_embedding_api_key,
             azure_endpoint=self.configs.azure_embedding.azure_embedding_endpoint,
@@ -56,83 +80,115 @@ class AzureChatbot(BaseRAGHandler):
         """Get embeddings using Azure's embedding model."""
         try:
             batch_embeddings = []
-            for text in texts:
+            for (
+                text_item
+            ) in texts:  # Ensure we handle if a list of lists is accidentally passed
+                current_text = (
+                    text_item if isinstance(text_item, str) else " ".join(text_item)
+                )
+                if not current_text.strip():  # Handle empty strings
+                    # OpenAI API errors on empty strings, return zero vector or skip
+                    # For simplicity, let's assume a zero vector of the expected dimension (e.g., 1536 for ada-002)
+                    # This part might need adjustment based on actual embedding dimension
+                    logging.warning(
+                        "Empty string encountered in get_embeddings, returning zero vector."
+                    )
+                    batch_embeddings.append([0.0] * 1536)  # Assuming ada-002 dimension
+                    continue
                 response = self.embedding_client.embeddings.create(
                     model=self.configs.azure_embedding.azure_embedding_deployment,
-                    input=text,
+                    input=current_text,
                 )
                 batch_embeddings.append(response.data[0].embedding)
             return batch_embeddings
         except Exception as e:
             logging.error(f"Error getting Azure embeddings: {str(e)}")
+            # It might be useful to log the problematic texts if possible, carefully
+            # logging.error(f"Problematic texts (first 100 chars): {[t[:100] for t in texts]}")
             raise
 
     def get_answer(self, query: str) -> str:
         try:
-            # Log the model choice for debugging
-            logging.info(f"Model choice: {self.model_choice}")
+            logging.info(
+                f"AzureChatbot ({self.model_choice}) get_answer for file(s): {self.active_file_ids}"
+            )
+            all_relevant_docs = []
+            embedding_model_for_rag = "azure"  # AzureChatbot uses Azure embeddings
 
-            # Get relevant documents from ChromaDB
-            relevant_docs = self.query_chroma(query, self.file_id)
+            for f_id in self.active_file_ids:
+                # Construct collection name specific to this file_id
+                current_collection_name = f"{self._collection_name_prefix}{f_id}"
+                logging.info(
+                    f"Querying ChromaDB for file: {f_id}, collection: {current_collection_name}"
+                )
+                try:
+                    # Use the chroma_manager from BaseRAGHandler
+                    # We need to ensure query_chroma can be called with a specific collection
+                    # if it's not using self.collection_name. For now, let's assume
+                    # direct ChromaManager usage for flexibility here.
+                    query_embedding = self.get_embeddings([query])[0]
+                    chroma_collection = self.chroma_manager.get_collection(
+                        file_id=f_id,  # Used for path generation by chroma_manager
+                        embedding_type=embedding_model_for_rag,  # 'azure' or 'google'
+                        collection_name=current_collection_name,
+                        user_id=self.user_id,  # Pass for potential session tracking, not filtering
+                        is_embedding=False,  # We are querying
+                    )
+                    results = chroma_collection.query(
+                        query_embeddings=[query_embedding], n_results=3
+                    )  # n_results can be configured
+                    docs_from_file = (
+                        results["documents"][0] if results["documents"] else []
+                    )
 
-            if self.model_choice.lower().startswith("gpt_3_5_turbo"):
-                logging.info("Using GPT-3.5-turbo block")
+                    if self.is_multi_file:
+                        all_relevant_docs.extend(
+                            [f"[Source: {f_id}] {doc}" for doc in docs_from_file]
+                        )
+                    else:
+                        all_relevant_docs.extend(docs_from_file)
+                    logging.info(f"Retrieved {len(docs_from_file)} docs from {f_id}")
+                except Exception as e:
+                    logging.error(f"Error querying ChromaDB for file {f_id}: {str(e)}")
+                    # Optionally, continue to next file or raise error
+                    # For now, we log and continue, so chat can proceed with partial context if one DB fails
 
-                # Take only first document and limit its size
-                if relevant_docs:
-                    doc = relevant_docs[0]
-                    sentences = doc.split(". ")
-                    limited_doc = ". ".join(sentences[:2]) + "."
+            if not all_relevant_docs:
+                logging.warning(
+                    f"No relevant documents found for query: '{query}' in files: {self.active_file_ids}"
+                )
+                # Fallback: use a generic response or attempt non-RAG if desired.
+                # For now, we'll proceed, and the LLM will answer based on its general knowledge if context is empty.
 
-                    # Implement token-based limit on limited_doc
-                    max_doc_tokens = 2000  # Adjust as needed to ensure total tokens stay within limits
-                    current_tokens = len(self.simple_tokenize(limited_doc))
-                    while current_tokens > max_doc_tokens and len(sentences) > 1:
-                        sentences = sentences[:-1]
-                        limited_doc = ". ".join(sentences) + "."
-                        current_tokens = len(self.simple_tokenize(limited_doc))
-                    if current_tokens > max_doc_tokens:
-                        limited_doc = "..."
+            context_str = "\n".join(all_relevant_docs)
 
-                    relevant_docs = [limited_doc]
+            system_message = self.configs.chatbot.system_prompt_rag_llm
+            messages = [
+                {"role": "system", "content": system_message},
+                {
+                    "role": "user",
+                    "content": f"Context:\n{context_str}\n\nQuestion: {query}",
+                },
+            ]
+            max_response_tokens = (
+                self.model_config.max_tokens
+                if hasattr(self.model_config, "max_tokens")
+                and self.model_config.max_tokens is not None
+                else 3000
+            )  # Use model specific or default
 
-                # Ultra-short system message
-                system_message = "Answer the question using the provided context."
+            logging.info(
+                f"Sending to LLM. Deployment: {self.model_config.deployment}. Files: {self.active_file_ids}"
+            )
+            # logging.debug(f"Messages for LLM: {messages}") # Be careful logging full context
 
-                # Minimal context format for GPT-3.5
-                messages = [
-                    {"role": "system", "content": system_message},
-                    {
-                        "role": "user",
-                        "content": f"{relevant_docs[0] if relevant_docs else ''}\n\nQuestion: {query}",
-                    },
-                ]
-
-                # Reduce max tokens for completion
-                max_tokens = 2000
-
-            else:
-                logging.info("Using default model block")
-                system_message = self.configs.chatbot.system_prompt_rag_llm
-                context = "\n".join(relevant_docs) if relevant_docs else ""
-                messages = [
-                    {"role": "system", "content": system_message},
-                    {
-                        "role": "user",
-                        "content": f"Context:\n{context}\n\nQuestion: {query}",
-                    },
-                ]
-                max_tokens = 3000
-
-            # Check if the model is o3 mini which requires different parameters
-            logging.info(f"Model deployment name: {self.model_config.deployment}")
-            # Check for o3-mini in the deployment name
             if "o3-mini" in self.model_config.deployment.lower():
-                logging.info("Using o3 mini specific parameters")
+                logging.info("Using o3 mini specific parameters for LLM call")
                 response = self.llm_client.chat.completions.create(
                     model=self.model_config.deployment,
                     messages=messages,
-                    max_completion_tokens=50000,
+                    # max_completion_tokens=50000, # This was likely a typo, should be max_tokens
+                    max_tokens=max_response_tokens,
                     stop=None,
                     stream=False,
                 )
@@ -140,15 +196,23 @@ class AzureChatbot(BaseRAGHandler):
                 response = self.llm_client.chat.completions.create(
                     model=self.model_config.deployment,
                     messages=messages,
-                    temperature=0.7,
-                    max_tokens=max_tokens,
+                    temperature=self.configs.llm_hyperparams.temperature,  # Use configured temperature
+                    max_tokens=max_response_tokens,
                 )
 
-            return response.choices[0].message.content
+            final_answer = response.choices[0].message.content
+            logging.info(f"Received answer from LLM for files {self.active_file_ids}")
+            return final_answer
 
         except Exception as e:
-            logging.error(f"Error in get_answer: {str(e)}")
-            raise
+            logging.error(
+                f"Error in get_answer for files {self.active_file_ids}: {str(e)}",
+                exc_info=True,
+            )
+            # Provide a more generic error to the user via the API
+            raise Exception(
+                f"Failed to get answer due to an internal error. Details: {str(e)}"
+            )
 
     def get_n_nearest_neighbours(self, query: str, n_neighbours: int = 3) -> List[str]:
         """Get nearest neighbors for a query."""

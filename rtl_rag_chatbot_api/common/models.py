@@ -5,7 +5,8 @@ from pydantic import BaseModel, Field
 
 class Query(BaseModel):
     text: List[str]
-    file_id: str
+    file_id: Optional[str] = None  # Keep for single file, now optional
+    file_ids: Optional[List[str]] = None  # For multiple files
     model_choice: str = Field(..., description="The chosen language model")
     user_id: str
     model_config = {"protected_namespaces": ()}

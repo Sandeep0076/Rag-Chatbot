@@ -34,7 +34,6 @@ class BaseRAGHandler:
 
         # Model-specific token limits for response generation (not chunking)
         self.MODEL_TOKEN_LIMITS = {
-            "gpt_3_5_turbo": 8000,
             "gpt_4": 32000,
             "gpt_4o_mini": 128000,
             "gpt_4_omni": 128000,
@@ -43,8 +42,9 @@ class BaseRAGHandler:
         }
 
         self.AZURE_MAX_TOKENS = self.MODEL_TOKEN_LIMITS.get(
-            "gpt_3_5_turbo", 8000
-        )  # Use GPT-3.5 limit for Azure
+            "gpt_4o_mini",
+            128000,  # Default to gpt_4o_mini's limit for Azure if not specified elsewhere
+        )
         self.GEMINI_MAX_TOKENS = self.MODEL_TOKEN_LIMITS.get(
             "gemini-flash", 15000
         )  # Use Gemini Flash limit
@@ -398,6 +398,23 @@ class BaseRAGHandler:
     def get_model_token_limit(self, model_name: str) -> int:
         """Get the token limit for a specific model."""
         return self.MODEL_TOKEN_LIMITS.get(model_name.lower(), 2000)
+
+    def truncate_text(self, text: str, max_tokens: int) -> str:
+        """Truncates text to a maximum number of tokens, preserving whole words if possible."""
+        if not text:  # Handle empty or None input text
+            return ""
+
+        tokens = self.simple_tokenize(text)  # Uses existing simple_tokenize
+        if len(tokens) <= max_tokens:
+            return text
+
+        # Join the allowed number of tokens and return
+        truncated_text = " ".join(tokens[:max_tokens])
+        logging.debug(
+            f"Truncated text from {len(tokens)} tokens to {max_tokens} tokens."
+            f"Original length: {len(text)}, Truncated length: {len(truncated_text)}"
+        )
+        return truncated_text
 
     def ensure_token_limit(self, text: str, model_name: str) -> List[str]:
         """

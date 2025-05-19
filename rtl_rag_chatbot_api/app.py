@@ -9,7 +9,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import uvicorn
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -46,7 +46,6 @@ from rtl_rag_chatbot_api.common.models import (
     ChatRequest,
     CleanupRequest,
     DeleteRequest,
-    EmbeddingCreationRequest,
     EmbeddingsCheckRequest,
     FileDeleteRequest,
     FileUploadResponse,
@@ -516,95 +515,6 @@ async def create_embeddings_background(
         cleanup_coordinator.cleanup_chroma_instance(file_id, include_gcs=True)
 
 
-@app.post("/embeddings/create")
-async def create_embeddings(
-    request: EmbeddingCreationRequest, current_user=Depends(get_current_user)
-):
-    """
-    Creates embeddings for an uploaded file using Azure or Google Gemini models.
-
-    This endpoint handles the generation and storage of embeddings for document processing.
-    It checks if embeddings already exist, creates new ones if needed, and updates the file status.
-
-    Args:
-        request (EmbeddingCreationRequest): Request body containing:
-            - file_id (str): Unique identifier for the uploaded file
-            - is_image (bool): Flag indicating if the file is an image
-        current_user: Authenticated user information (handled by dependency)
-
-    Returns:
-        dict: Dictionary containing:
-            - message (str): Status message about embedding creation
-            - For tabular data: Returns formatted markdown table if applicable
-
-    Raises:
-        HTTPException:
-            - 404: If file not found or model not initialized
-            - 500: For embedding creation or storage errors
-
-    Notes:
-        - Embeddings are stored using ChromaDB
-        - Status is tracked in GCS file metadata
-        - Supports both text and image files
-    """
-    try:
-        file_info = gcs_handler.get_file_info(request.file_id)
-        if not file_info:
-            raise HTTPException(status_code=404, detail="File info not found")
-
-        # Check local embeddings first
-        azure_path = f"./chroma_db/{request.file_id}/azure"
-        gemini_path = f"./chroma_db/{request.file_id}/google"
-        local_exists = (
-            os.path.exists(azure_path)
-            and os.path.exists(gemini_path)
-            and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
-            and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
-        )
-
-        if local_exists:
-            return {
-                "message": "Embeddings already exist locally",
-                "status": "existing",
-                "can_chat": True,
-            }
-
-        # Rest of your existing embedding creation code
-        original_filename = file_info.get("original_filename")
-        if not original_filename:
-            raise HTTPException(status_code=400, detail="Original filename not found")
-
-        temp_file_path = f"local_data/{request.file_id}_{original_filename}"
-        if not os.path.exists(temp_file_path):
-            raise HTTPException(
-                status_code=404, detail=f"File not found at {temp_file_path}"
-            )
-
-        embedding_handler = EmbeddingHandler(configs, gcs_handler)
-        result = await embedding_handler.ensure_embeddings_exist(
-            request.file_id, temp_file_path
-        )
-
-        if isinstance(result, dict) and result.get("status") == "error":
-            return JSONResponse(
-                status_code=400,
-                content={"message": result.get("message", "Unknown error")},
-            )
-
-        return result
-
-    except Exception as e:
-        logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "message": "An unexpected error occurred while processing your file.",
-                "error": str(e),
-                "can_chat": False,
-            },
-        )
-
-
 @app.post("/embeddings/check", response_model=Dict[str, Any])
 async def check_embeddings(
     request: EmbeddingsCheckRequest, current_user=Depends(get_current_user)
@@ -821,123 +731,348 @@ def handle_visualization(
         raise HTTPException(status_code=500, detail="Failed to generate chart")
 
 
-@app.post("/file/chat")
-async def chat(query: Query, current_user=Depends(get_current_user)):
-    """
-    Process chat queries against document content using specified language models.
+async def _initialize_chat_model(
+    query: Query,
+    configs: dict,
+    gcs_handler: GCSHandler,
+    initialized_models: dict,  # This will be modified
+    model_key: str,
+    is_multi_file: bool,
+    all_file_infos: Dict[str, Any],
+    file_id_logging: str,  # For logging
+) -> Tuple[Any, Optional[bool]]:  # Returns (model, determined_is_tabular)
+    """Helper function to initialize and cache chat models."""
+    model: Any = None
+    determined_is_tabular: Optional[bool] = None
 
-    Handles multiple model types (Azure LLM, Gemini) and data formats (text, tabular).
-    Automatically initializes or switches models based on request parameters.
+    if is_multi_file:
+        determined_is_tabular = False  # For multi-file, it's always not tabular
+        logging.info(f"Initializing RAG model for multi-file: {query.file_ids}")
+        logging.info(f"  User: {query.user_id}, Model: {query.model_choice}")
+        model = Chatbot(
+            configs=configs,
+            gcs_handler=gcs_handler,
+            model_choice=query.model_choice,
+            file_ids=query.file_ids,  # type: ignore
+            all_file_infos=all_file_infos,
+        )
+    elif query.file_id:
+        # For single file, check for DB existence which also determines 'is_tabular'
+        _db_path, is_tabular_single, model_single = check_db_existence(
+            query.file_id, query, configs, initialized_models
+        )
+        determined_is_tabular = is_tabular_single
+        model = model_single  # This could be a TabularDataHandler or None
+
+        if (
+            not determined_is_tabular
+        ):  # If not tabular, it's a RAG model for single file
+            single_file_info_for_init = all_file_infos.get(query.file_id)
+            if not single_file_info_for_init:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Internal error: file_info missing for single file RAG model initialization.",
+                )
+            logging.info(f"Initializing RAG model for single file: {query.file_id}")
+            logging.info(f"  User: {query.user_id}, Model: {query.model_choice}")
+            model = initialize_rag_model(
+                query, configs, gcs_handler, single_file_info_for_init
+            )
+    else:
+        # This case should ideally not be reached if prior checks in `chat` are correct
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Internal server error: Model initialization path unclear "
+                "(neither multi-file nor single file_id provided)."
+            ),
+        )
+
+    # Cache the newly initialized model
+    initialized_models[model_key] = {
+        "model": model,
+        "is_tabular": determined_is_tabular,
+    }
+    logging.info(f"Model initialized and cached with key: {model_key}")
+    logging.info(f"  File(s): {file_id_logging}, User: {query.user_id}")
+    logging.info(f"  Model: {query.model_choice}, Is Tabular: {determined_is_tabular}")
+    return model, determined_is_tabular
+
+
+async def _format_chat_response(
+    response: Any,
+    query: Query,
+    generate_visualization: bool,
+    is_tabular: bool,
+    is_multi_file: bool,
+    configs: dict,
+) -> Dict[str, Any]:
+    """
+    Helper function to format the chat response based on response type and query parameters.
 
     Args:
-        query (Query): Request body containing:
-            - text (str): User's query text
-            - file_id (str): ID of the file to query against
-            - model_choice (str): Selected model (e.g., 'gpt_4o_mini', 'gemini-pro')
-        current_user: Authenticated user information (handled by dependency)
+        response: The raw response from the model
+        query: Original query object
+        generate_visualization: Whether visualization was requested
+        is_tabular: Whether the response is for tabular data
+        is_multi_file: Whether multiple files were queried
+        configs: Application configuration
 
     Returns:
-        dict: Response containing:
-            - response (str): Model's answer to the query
-            - For tabular data: Returns formatted markdown table if applicable
-
+        Formatted response dictionary
     """
-    try:
-        # Initialize visualization flag
-        generate_visualization = False
+    if isinstance(response, list):
+        return format_table_response(response)
 
-        # Auto-detect if visualization is needed based on the query text
-        if len(query.text) > 0:
-            should_visualize_filter = detect_visualization_need(query.text[-1])
-            if should_visualize_filter:
-                question = CHART_DETECTION_PROMPT + query.text[-1]
-                # Using gemini-flash for visualization detection for faster response
-                response = get_gemini_non_rag_response(
-                    configs, question, "gemini-flash"
+    if generate_visualization:
+        return handle_visualization(response, query, is_tabular, configs)
+
+    final_response_data = {
+        "response": str(response),
+        "is_table": is_tabular if is_tabular is not None else False,
+    }
+
+    if is_multi_file and query.file_ids:
+        final_response_data["sources"] = query.file_ids
+    elif query.file_id:
+        final_response_data["sources"] = [query.file_id]
+
+    return final_response_data
+
+
+async def _process_file_info(
+    query: Query, gcs_handler: GCSHandler, generate_visualization: bool
+) -> Dict[str, Any]:
+    """
+    Helper function to process file information for chat queries.
+
+    Args:
+        query: Query containing file_id or file_ids
+        gcs_handler: GCS handler for file operations
+        generate_visualization: Whether visualization was requested
+
+    Returns:
+        Dictionary containing processed file information
+    """
+    is_multi_file = bool(query.file_ids and len(query.file_ids) > 0)
+    all_file_infos = {}
+    model_key = ""
+    file_id_logging = ""
+    # Initialize is_tabular; for single file, it's determined later if not from cache.
+    # For multi-file, it's always False.
+    is_tabular = None
+
+    if is_multi_file:
+        if not query.file_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="file_ids must be provided for multi-file chat.",
+            )
+        file_id_logging = f"file_ids: {query.file_ids}"
+        logging.info(f"Multi-file chat request for {file_id_logging}")
+
+        for f_id in query.file_ids:
+            f_info = gcs_handler.get_file_info(f_id)
+            if not f_info:
+                embeddings_status = gcs_handler.check_embeddings_status(f_id)
+                if embeddings_status == "in_progress":
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"URL content for file {f_id} is still being processed. Please wait and try again.",
+                    )
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"File info not found for file_id: {f_id}. It may be corrupted or not yet processed.",
                 )
-                if response.lower() == "true" or "true" in response.lower():
-                    generate_visualization = True
-            else:
-                generate_visualization = should_visualize_filter
+            all_file_infos[f_id] = f_info
 
-        logging.info(
-            f"Graphic generation flag is {generate_visualization} for file {query.file_id}"
-        )
-        if len(query.text) == 0:
-            raise HTTPException(status_code=400, detail="Text array cannot be empty")
+        is_tabular = False
+        if generate_visualization:
+            logging.info(
+                "Visualization for multi-file chat is not currently supported. Proceeding without visualization."
+            )
+            generate_visualization = False
 
-        file_info = gcs_handler.get_file_info(query.file_id)
-        if not file_info:
-            logging.info(f"File info not found for {query.file_id}")
+        files_key_part = "_".join(sorted(query.file_ids))
+        model_key = f"multi_{files_key_part}_{query.user_id}_{query.model_choice}"
 
-            # Check if this might be a URL file that's still being processed
+    elif query.file_id:
+        file_id_logging = f"file_id: {query.file_id}"
+        logging.info(f"Single-file chat request for {file_id_logging}")
+        file_info_single = gcs_handler.get_file_info(query.file_id)
+        if not file_info_single:
             embeddings_status = gcs_handler.check_embeddings_status(query.file_id)
             if embeddings_status == "in_progress":
                 raise HTTPException(
                     status_code=400,
                     detail="URL content is still being processed. Please wait a moment and try again.",
                 )
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail="File appears to be corrupted or empty. Please try uploading a different file.",
-                )
-
+            raise HTTPException(
+                status_code=404,
+                detail="File appears to be corrupted, empty, or not found."
+                " Please try uploading/selecting a different file.",
+            )
+        all_file_infos[query.file_id] = file_info_single
         model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Either file_id (for single chat) or file_ids (for multi-chat) must be provided.",
+        )
+
+    return {
+        "is_multi_file": is_multi_file,
+        "all_file_infos": all_file_infos,
+        "model_key": model_key,
+        "file_id_logging": file_id_logging,
+        "is_tabular": is_tabular,
+        "generate_visualization": generate_visualization,
+    }
+
+
+async def _detect_visualization_need(question: str, configs: dict) -> bool:
+    """
+    Helper function to detect if visualization is needed based on user question.
+
+    Args:
+        question: The user's question to analyze
+        configs: Application configuration dictionary
+
+    Returns:
+        Boolean indicating whether visualization is needed
+    """
+    generate_visualization = False
+    should_visualize_filter = detect_visualization_need(question)
+
+    if should_visualize_filter:
+        question_for_detection = CHART_DETECTION_PROMPT + question
+        vis_detection_response = get_gemini_non_rag_response(
+            configs, question_for_detection, "gemini-flash"
+        )
+        if (
+            vis_detection_response.lower() == "true"
+            or "true" in vis_detection_response.lower()
+        ):
+            generate_visualization = True
+
+    return generate_visualization
+
+
+@app.post("/file/chat")
+async def chat(query: Query, current_user=Depends(get_current_user)):
+    """
+    Process chat queries against document content using specified language models.
+
+    Handles single or multiple files, multiple model types (Azure LLM, Gemini),
+    and data formats (text, tabular for single files).
+    Automatically initializes or switches models based on request parameters.
+
+    Args:
+        query (Query): Request body containing:
+            - text (List[str]): User's query text history
+            - file_id (Optional[str]): ID of the file to query (for single file chat)
+            - file_ids (Optional[List[str]]): IDs of files to query (for multi-file chat)
+            - model_choice (str): Selected model
+            - user_id (str): User identifier
+        current_user: Authenticated user information
+
+    Returns:
+        dict: Response containing the model's answer and source file information.
+    """
+    file_id_logging = ""
+    try:
+        if not query.text:
+            raise HTTPException(status_code=400, detail="Text array cannot be empty")
+
+        current_actual_question = query.text[-1]
+
+        generate_visualization = await _detect_visualization_need(
+            current_actual_question, configs
+        )
+
+        # Process file information and build the model key
+        file_data = await _process_file_info(query, gcs_handler, generate_visualization)
+
+        is_multi_file = file_data["is_multi_file"]
+        all_file_infos = file_data["all_file_infos"]
+        model_key = file_data["model_key"]
+        file_id_logging = file_data["file_id_logging"]
+        is_tabular = file_data["is_tabular"]
+        generate_visualization = file_data["generate_visualization"]
+
+        logging.info(f"Graphic generation flag: {generate_visualization}")
+        logging.info(f"For {file_id_logging}")
+
         model_info = initialized_models.get(model_key)
         model = model_info["model"] if model_info else None
-        is_tabular = model_info["is_tabular"] if model_info else False
+
+        if model_info:
+            is_tabular = model_info["is_tabular"]
+        elif is_multi_file:
+            is_tabular = (
+                False  # Already set, but good for clarity if model_info was None
+            )
+        # If single file and model_info is None, is_tabular is still None, will be set by check_db_existence
 
         try:
             if not model:
-                db_path, is_tabular, model = check_db_existence(
-                    query.file_id, query, configs, initialized_models
-                )
-                if not is_tabular:
-                    model = initialize_rag_model(query, configs, gcs_handler, file_info)
-                initialized_models[model_key] = {
-                    "model": model,
-                    "is_tabular": is_tabular,
-                }
-                logging.info(
-                    f"Model initialized: {query.file_id}, user: {query.user_id}, model: {query.model_choice}"
+                # Call the helper function to initialize the model
+                model, is_tabular = await _initialize_chat_model(
+                    query=query,
+                    configs=configs,
+                    gcs_handler=gcs_handler,
+                    initialized_models=initialized_models,
+                    model_key=model_key,
+                    is_multi_file=is_multi_file,
+                    all_file_infos=all_file_infos,
+                    file_id_logging=file_id_logging,
                 )
 
             if generate_visualization and not is_tabular:
-                current_question = query.text[-1] + VISUALISATION_PROMPT
+                question_to_model = current_actual_question + VISUALISATION_PROMPT
             else:
-                current_question = query.text[-1]
+                question_to_model = current_actual_question
 
-            # For GPT-3.5, skip previous messages to stay within token limits
             if query.model_choice.lower() == "gpt_3_5_turbo":
-                chat_context = current_question
+                chat_context = question_to_model
             else:
-                chat_context = (
-                    "\n".join([f"Previous message: {msg}" for msg in query.text[:-1]])
-                    + f"\nCurrent question: {current_question}"
-                    if len(query.text) > 1
-                    else current_question
-                )
+                if len(query.text) > 1:
+                    previous_messages = "\n".join(
+                        [f"Previous message: {msg}" for msg in query.text[:-1]]
+                    )
+                    chat_context = (
+                        f"{previous_messages}\nCurrent question: {question_to_model}"
+                    )
+                else:
+                    chat_context = question_to_model
+
             response = model.get_answer(chat_context)
 
-            if isinstance(response, list):
-                return format_table_response(response)
-
-            if generate_visualization:
-                return handle_visualization(response, query, is_tabular, configs)
-
-            return {"response": str(response), "is_table": False}
+            return await _format_chat_response(
+                response=response,
+                query=query,
+                generate_visualization=generate_visualization,
+                is_tabular=is_tabular,
+                is_multi_file=is_multi_file,
+                configs=configs,
+            )
 
         finally:
-            # Cleanup if model is TabularDataHandler
             if isinstance(model, TabularDataHandler):
                 model.cleanup()
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logging.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
+        logging.error(
+            f"Error in chat endpoint: {str(e)} for {file_id_logging}", exc_info=True
+        )
         error_message = str(e)
-        if "coroutine" in error_message.lower():
-            error_message = "Internal server error: Model response handling failed. Please try again."
+        if "coroutine" in error_message.lower() or "async" in error_message.lower():
+            error_message = (
+                "Internal server error: An unexpected issue occurred "
+                "while processing your request. Please try again."
+            )
         raise HTTPException(status_code=500, detail=error_message)
 
 

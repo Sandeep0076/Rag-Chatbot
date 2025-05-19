@@ -644,6 +644,7 @@ class FileHandler:
     ) -> dict:
         """Process uploaded file including handling images, tabular data and existing files."""
         try:
+            # breakpoint()
             # Sanitize filename
             original_filename = self._sanitize_filename(file.filename)
 

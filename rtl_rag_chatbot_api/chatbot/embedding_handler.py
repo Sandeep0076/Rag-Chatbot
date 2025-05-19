@@ -325,14 +325,15 @@ class EmbeddingHandler:
         """Creates embeddings using Azure OpenAI."""
         logging.info("Generating Azure embeddings...")
         try:
-            collection_name = f"rag_collection_{file_id}"
-
-            azure_handler = AzureChatbot(self.configs, self.gcs_handler)
-            azure_handler.initialize(
-                model_choice="gpt_4o_mini",
+            # Use a default model_choice like 'gpt_4o_mini' as AzureChatbot is used here
+            # primarily for its configuration and BaseRAGHandler methods for embeddings.
+            # The actual embedding model (e.g., text-embedding-ada-002) is handled by create_and_store_embeddings.
+            azure_handler = AzureChatbot(
+                configs=self.configs,
+                gcs_handler=self.gcs_handler,
+                model_choice="gpt_4o_mini",  # Or another default chat model from your config
                 file_id=file_id,
-                embedding_type="azure",
-                collection_name=collection_name,
+                collection_name_prefix="rag_collection_",  # Ensure this matches how collection_name is formed
             )
 
             azure_handler.create_and_store_embeddings(
