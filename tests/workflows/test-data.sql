@@ -9,6 +9,8 @@ INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp)
 -- user marked and timestamp older than 4 weeks
 INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user5_id', 'user5@example.com', 'User 5', True, TIMESTAMP_MORE_THAN_4_WEEKS);
 INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user6_id', 'user6@example.com', 'User 6', True, TIMESTAMP_MORE_THAN_4_WEEKS);
+-- operational user to be replaced for shared prompts, should be excluded from workflow in all phases
+INSERT INTO User (id, email, name) VALUES ('dXNlci5kZWxldGVkQHJ0bC5kZQo=', 'user.deleted@rtl.de', 'Nutzer, Gelöschter [RTL Tech]');
 
 -- Insert Models
 INSERT INTO Model (id, name, maxLength, tokenLimit) VALUES ('model1_id', 'GPT-4', 2048, 4096);
