@@ -167,7 +167,7 @@ def test_no_else_data_deleted(mock_get_db_session, mock_log, test_db_session):
 
         # users left
         users = db.query(User).all()
-        assert len(users) == 6
+        assert len(users) == 7
 
 
 # Helper function to raise the exception

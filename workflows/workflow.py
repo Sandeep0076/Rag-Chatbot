@@ -65,7 +65,12 @@ def get_db_session():
 def get_users():
     """"""
     with get_db_session() as session:
-        users = session.query(User).all()
+        users = (
+            # id = "dXNlci5kZWxldGVkQHJ0bC5kZQo=" is the operational user: user.deleted@rtl.de
+            session.query(User)
+            .filter(User.id != "dXNlci5kZWxldGVkQHJ0bC5kZQo=")
+            .all()
+        )
 
         return users
 
@@ -83,6 +88,8 @@ def get_users_deletion_candidates():
                     and_(
                         User.wf_deletion_candidate,
                         User.wf_deletion_timestamp.isnot(None),
+                        # id = "dXNlci5kZWxldGVkQHJ0bC5kZQo=" is the operational user: user.deleted@rtl.de
+                        User.id != "dXNlci5kZWxldGVkQHJ0bC5kZQo=",
                     )
                 )
                 .all()
