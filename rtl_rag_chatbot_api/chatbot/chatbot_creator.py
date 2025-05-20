@@ -160,6 +160,25 @@ class AzureChatbot(BaseRAGHandler):
                 # Fallback: use a generic response or attempt non-RAG if desired.
                 # For now, we'll proceed, and the LLM will answer based on its general knowledge if context is empty.
 
+            # Prepare additional context about available files when in multi-file mode
+            files_context = ""
+            if self.is_multi_file and self.all_file_infos:
+                file_details = []
+                for file_id in self.active_file_ids:
+                    if file_id in self.all_file_infos:
+                        # Extract original_filename from file_info if available
+                        file_info = self.all_file_infos.get(file_id, {})
+                        original_filename = file_info.get(
+                            "original_filename", f"Unknown filename (ID: {file_id})"
+                        )
+                        file_details.append(f"- {original_filename} (ID: {file_id})")
+
+                if file_details:
+                    files_context = (
+                        "Available documents:\n" + "\n".join(file_details) + "\n\n"
+                    )
+                    logging.info(f"Added file context with {len(file_details)} files")
+
             context_str = "\n".join(all_relevant_docs)
 
             system_message = self.configs.chatbot.system_prompt_rag_llm
@@ -167,7 +186,7 @@ class AzureChatbot(BaseRAGHandler):
                 {"role": "system", "content": system_message},
                 {
                     "role": "user",
-                    "content": f"Context:\n{context_str}\n\nQuestion: {query}",
+                    "content": f"{files_context}Context:\n{context_str}\n\nQuestion: {query}",
                 },
             ]
             max_response_tokens = (
@@ -182,13 +201,16 @@ class AzureChatbot(BaseRAGHandler):
             )
             # logging.debug(f"Messages for LLM: {messages}") # Be careful logging full context
 
-            if "o3-mini" in self.model_config.deployment.lower():
-                logging.info("Using o3 mini specific parameters for LLM call")
+            # Check for any o3 models, not just o3-mini
+            if "o3" in self.model_config.deployment.lower():
+                logging.info(
+                    f"Using o3-specific parameters for model: {self.model_config.deployment}"
+                )
                 response = self.llm_client.chat.completions.create(
                     model=self.model_config.deployment,
                     messages=messages,
-                    # max_completion_tokens=50000, # This was likely a typo, should be max_tokens
-                    max_tokens=max_response_tokens,
+                    max_completion_tokens=max_response_tokens,
+                    # Use max_completion_tokens instead of max_tokens for o3 models
                     stop=None,
                     stream=False,
                 )
@@ -255,13 +277,18 @@ def get_azure_non_rag_response(
             {"role": "user", "content": query},
         ]
 
-        # Check if the model is o3 mini which requires different parameters
+        # Check if the model is any o3 variant which requires different parameters
         logging.info(
             f"Non-RAG model deployment name: {configs.azure_llm.models[model_choice].deployment}"
         )
-        # Check for o3-mini in the deployment name
-        if "o3-mini" in configs.azure_llm.models[model_choice].deployment.lower():
-            logging.info("Using o3 mini specific parameters for non-RAG response")
+        # Check for any o3 models, not just o3-mini
+        if "o3" in configs.azure_llm.models[model_choice].deployment.lower():
+            logging.info(
+                (
+                    f"Using o3-specific parameters for non-RAG response with model: "
+                    f"{configs.azure_llm.models[model_choice].deployment}"
+                )
+            )
             response = llm_client.chat.completions.create(
                 model=configs.azure_llm.models[model_choice].deployment,
                 messages=messages,

@@ -520,17 +520,17 @@ async def check_embeddings(
     request: EmbeddingsCheckRequest, current_user=Depends(get_current_user)
 ) -> Dict[str, Any]:
     """
-    Check if embeddings exist for a specific file and model.
+    # TODO: Uncomment and implement when ready for user-specific cleanup model.
 
-    Args:
-        request (EmbeddingsCheckRequest): Request containing file_id and model_choice
-        current_user: Authenticated user information
+      Args:
+          request (EmbeddingsCheckRequest): Request containing file_id and model_choice
+          current_user: Authenticated user information
 
-    Returns:
-        Dict containing:
-            - embeddings_exist (bool): Whether embeddings exist
-            - model_type (str): Type of model (azure/google)
-            - file_id (str): The checked file ID
+      Returns:
+          Dict containing:
+              - embeddings_exist (bool): Whether embeddings exist
+              - model_type (str): Type of model (azure/google)
+              - file_id (str): The checked file ID
     """
     try:
         embedding_handler = EmbeddingHandler(configs, gcs_handler)
@@ -746,16 +746,117 @@ async def _initialize_chat_model(
     determined_is_tabular: Optional[bool] = None
 
     if is_multi_file:
-        determined_is_tabular = False  # For multi-file, it's always not tabular
-        logging.info(f"Initializing RAG model for multi-file: {query.file_ids}")
+        # First check if any of the files are tabular
+        has_tabular_files = False
+        tabular_file_ids = []
+        non_tabular_file_ids = []
+
+        # Check each file to see if it has a SQLite database
+        for file_id in query.file_ids:
+            db_path = f"./chroma_db/{file_id}/tabular_data.db"
+            if os.path.exists(db_path):
+                has_tabular_files = True
+                tabular_file_ids.append(file_id)
+            else:
+                non_tabular_file_ids.append(file_id)
+
+        # If we have mixed files (some tabular, some not), we need special handling
+        if has_tabular_files and non_tabular_file_ids:
+            logging.info(
+                "Mixed file types detected in multi-file chat (tabular + non-tabular)"
+            )
+            logging.info(f"Tabular files: {tabular_file_ids}")
+            logging.info(f"Non-tabular files: {non_tabular_file_ids}")
+            # For mixed files, use RAG model as it can handle non-tabular content
+            determined_is_tabular = False
+            logging.info("Using RAG model for mixed file types")
+            model = Chatbot(
+                configs=configs,
+                gcs_handler=gcs_handler,
+                model_choice=query.model_choice,
+                file_ids=query.file_ids,  # type: ignore
+                all_file_infos=all_file_infos,
+            )
+        elif has_tabular_files and not non_tabular_file_ids:
+            # All files are tabular - special handling required
+            logging.info(f"All files are tabular in multi-file: {query.file_ids}")
+            determined_is_tabular = True
+
+            # When all files are tabular, we should use the TabularDataHandler with all files
+            logging.info("Initializing TabularDataHandler with all tabular files")
+            if len(tabular_file_ids) > 0:
+                try:
+                    # Pass all file_ids to the TabularDataHandler to handle multiple databases
+                    model = TabularDataHandler(
+                        configs,
+                        file_id=tabular_file_ids[
+                            0
+                        ],  # For backward compatibility, set primary file_id
+                        model_choice=query.model_choice,
+                        file_ids=tabular_file_ids,  # Pass all tabular file_ids
+                    )
+                    logging.info(
+                        f"Successfully initialized TabularDataHandler for {len(tabular_file_ids)} files"
+                    )
+                except Exception as e:
+                    logging.error(f"Failed to initialize TabularDataHandler: {str(e)}")
+                    # Fall back to standard Chatbot even though it won't work well with tabular data
+                    logging.info("Falling back to RAG model for tabular data")
+                    model = Chatbot(
+                        configs=configs,
+                        gcs_handler=gcs_handler,
+                        model_choice=query.model_choice,
+                        file_ids=query.file_ids,  # type: ignore
+                        all_file_infos=all_file_infos,
+                    )
+            else:
+                # Should never happen as we already checked tabular_file_ids is not empty
+                logging.warning("No tabular files found despite earlier check")
+                determined_is_tabular = False
+                model = Chatbot(
+                    configs=configs,
+                    gcs_handler=gcs_handler,
+                    model_choice=query.model_choice,
+                    file_ids=query.file_ids,  # type: ignore
+                    all_file_infos=all_file_infos,
+                )
+        else:
+            # All files are non-tabular - use appropriate model based on model_choice
+            logging.info(f"All files are non-tabular: {non_tabular_file_ids}")
+            determined_is_tabular = False
+
+            # Check if this is a Gemini model
+            is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+
+            if is_gemini:
+                # Use GeminiHandler for Gemini models
+                logging.info(
+                    f"Using GeminiHandler for multi-file with model: {query.model_choice}"
+                )
+                model = GeminiHandler(
+                    configs=configs,
+                    gcs_handler=gcs_handler,
+                    model_choice=query.model_choice,
+                    file_ids=query.file_ids,  # type: ignore
+                    all_file_infos=all_file_infos,
+                    user_id=query.user_id,
+                )
+            else:
+                # Use AzureChatbot for Azure models
+                logging.info(
+                    f"Using AzureChatbot for multi-file with model: {query.model_choice}"
+                )
+                model = Chatbot(
+                    configs=configs,
+                    gcs_handler=gcs_handler,
+                    model_choice=query.model_choice,
+                    file_ids=query.file_ids,  # type: ignore
+                    all_file_infos=all_file_infos,
+                )
+
+        logging.info(f"Model initialized for multi-file: {query.file_ids}")
         logging.info(f"  User: {query.user_id}, Model: {query.model_choice}")
-        model = Chatbot(
-            configs=configs,
-            gcs_handler=gcs_handler,
-            model_choice=query.model_choice,
-            file_ids=query.file_ids,  # type: ignore
-            all_file_infos=all_file_infos,
-        )
+        logging.info(f"  Is Tabular: {determined_is_tabular}")
     elif query.file_id:
         # For single file, check for DB existence which also determines 'is_tabular'
         _db_path, is_tabular_single, model_single = check_db_existence(
@@ -858,9 +959,11 @@ async def _process_file_info(
     all_file_infos = {}
     model_key = ""
     file_id_logging = ""
-    # Initialize is_tabular; for single file, it's determined later if not from cache.
-    # For multi-file, it's always False.
+    # Initialize is_tabular
     is_tabular = None
+    # Track which files are tabular
+    tabular_files = []
+    non_tabular_files = []
 
     if is_multi_file:
         if not query.file_ids:
@@ -871,7 +974,18 @@ async def _process_file_info(
         file_id_logging = f"file_ids: {query.file_ids}"
         logging.info(f"Multi-file chat request for {file_id_logging}")
 
+        # Check each file to see if it's tabular
         for f_id in query.file_ids:
+            # Check if the file has a SQLite database (indicating tabular data)
+            db_path = f"./chroma_db/{f_id}/tabular_data.db"
+            is_file_tabular = os.path.exists(db_path)
+
+            if is_file_tabular:
+                tabular_files.append(f_id)
+            else:
+                non_tabular_files.append(f_id)
+
+            # Get file info
             f_info = gcs_handler.get_file_info(f_id)
             if not f_info:
                 embeddings_status = gcs_handler.check_embeddings_status(f_id)
@@ -886,7 +1000,23 @@ async def _process_file_info(
                 )
             all_file_infos[f_id] = f_info
 
-        is_tabular = False
+        # Log information about file types
+        if tabular_files and non_tabular_files:
+            logging.info(
+                f"Mixed file types detected: {len(tabular_files)} tabular and {len(non_tabular_files)} non-tabular"
+            )
+            logging.info(f"Tabular files: {tabular_files}")
+            logging.info(f"Non-tabular files: {non_tabular_files}")
+            # When mixed, we default to non-tabular mode for now as it's the safer option
+            is_tabular = False
+        elif tabular_files and not non_tabular_files:
+            logging.info(f"All files are tabular: {tabular_files}")
+            # All files are tabular, but we still need to handle this specially
+            is_tabular = True
+        else:
+            logging.info(f"All files are non-tabular: {non_tabular_files}")
+            is_tabular = False
+
         if generate_visualization:
             logging.info(
                 "Visualization for multi-file chat is not currently supported. Proceeding without visualization."
@@ -1033,19 +1163,18 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             else:
                 question_to_model = current_actual_question
 
-            if query.model_choice.lower() == "gpt_3_5_turbo":
-                chat_context = question_to_model
+            if len(query.text) > 1:
+                previous_messages = "\n".join(
+                    [f"Previous message: {msg}" for msg in query.text[:-1]]
+                )
+                chat_context = (
+                    f"{previous_messages}\nCurrent question: {question_to_model}"
+                )
             else:
-                if len(query.text) > 1:
-                    previous_messages = "\n".join(
-                        [f"Previous message: {msg}" for msg in query.text[:-1]]
-                    )
-                    chat_context = (
-                        f"{previous_messages}\nCurrent question: {question_to_model}"
-                    )
-                else:
-                    chat_context = question_to_model
+                chat_context = question_to_model
 
+            # Todo: If multiple file and tablular collect all responses
+            # and give to non rag and return answer.
             response = model.get_answer(chat_context)
 
             return await _format_chat_response(

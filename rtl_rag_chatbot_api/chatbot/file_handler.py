@@ -423,6 +423,7 @@ class FileHandler:
         Returns:
             bool: True if upload succeeded, False otherwise
         """
+        # Todo:: Check if encrypted file is already in gcp, if yes no need to encrypt
         if not encrypted_file_path:
             return False
 

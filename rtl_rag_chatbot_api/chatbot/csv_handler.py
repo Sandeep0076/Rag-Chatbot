@@ -34,23 +34,25 @@ class TabularDataHandler:
 
     Attributes:
         config (Config): Configuration object containing necessary settings.
-        file_id (str): Unique identifier for the file being processed.
+        file_ids (List[str]): List of file identifiers for multi-file mode.
+        file_id (str): Primary file identifier (for backward compatibility).
+        is_multi_file (bool): Whether multiple files are being handled.
         model_choice (str): The chosen language model for processing queries.
-        data_dir (str): Directory path for storing data files.
-        db_name (str): Name of the SQLite database file.
-        db_path (str): Full path to the SQLite database file.
-        db_url (str): SQLite database URL.
-        engine (Engine): SQLAlchemy database engine.
-        Session (sessionmaker): SQLAlchemy session maker.
-        db (SQLDatabase): SQLDatabase instance for database operations.
+        engines (dict): Dictionary of SQLAlchemy engines, one per file.
+        sessions (dict): Dictionary of sessionmakers, one per file.
+        dbs (dict): Dictionary of SQLDatabase instances, one per file.
         llm (Union[AzureChatOpenAI, ChatVertexAI]): Language model instance for natural language processing.
-        agent (Agent): SQL agent for executing database queries.
-        table_info (List[dict]): Information about tables in the database.
-        table_name (str): Name of the main table in the database.
+        agents (dict): Dictionary of SQL agents, one per file.
+        database_summaries (dict): Information about tables for each database.
+        primary_db_info (dict): Information about tables in the primary database.
     """
 
     def __init__(
-        self, config: Config, file_id: str = None, model_choice: str = "gpt_4o_mini"
+        self,
+        config: Config,
+        file_id: str = None,
+        model_choice: str = "gpt_4o_mini",
+        file_ids: List[str] = None,
     ):
         """
         Initializes the TabularDataHandler with the given configuration and file information.
@@ -59,50 +61,122 @@ class TabularDataHandler:
             config (Config): Configuration object containing necessary settings.
             file_id (str, optional): Unique identifier for the file being processed. Defaults to None.
             model_choice (str, optional): The chosen language model. Defaults to "gpt_4o_mini".
+            file_ids (List[str], optional): List of file IDs for multi-file mode. Defaults to None.
         """
         self.config = config
-        self.file_id = file_id
         self.model_choice = model_choice
-        self.data_dir = (
-            "rtl_rag_chatbot_api/tabularData/csv_dir"
-            if file_id is None
-            else f"./chroma_db/{file_id}"
-        )
         self.db_name = "tabular_data.db"
-        self.db_path = os.path.join(self.data_dir, self.db_name)
-        self.db_url = f"sqlite:///{self.db_path}"
+        self.engines = {}
+        self.sessions = {}
+        self.dbs = {}
+        self.agents = {}
+        self.database_summaries = {}
+
+        # Determine if we're in multi-file mode
+        self.is_multi_file = bool(file_ids and len(file_ids) > 0)
+
+        if self.is_multi_file:
+            # Multi-file mode
+            self.file_ids = sorted(list(set(file_ids)))  # Ensure unique and sorted
+            # For backward compatibility, set file_id to the first one
+            self.file_id = self.file_ids[0] if self.file_ids else None
+            logging.info(
+                f"TabularDataHandler initialized in multi-file mode with {len(self.file_ids)} files"
+            )
+
+            # Initialize databases for all files
+            for f_id in self.file_ids:
+                self._initialize_file_database(f_id)
+        else:
+            # Single file mode (backward compatible)
+            self.file_id = file_id
+            self.file_ids = [file_id] if file_id else []
+            if file_id:
+                self._initialize_file_database(file_id)
+            else:
+                # Legacy path for tests or default initialization
+                self.data_dir = "rtl_rag_chatbot_api/tabularData/csv_dir"
+                self.db_path = os.path.join(self.data_dir, self.db_name)
+                self.db_url = f"sqlite:///{self.db_path}"
+                self.engines["default"] = create_engine(
+                    self.db_url,
+                    poolclass=QueuePool,
+                    pool_size=5,
+                    max_overflow=10,
+                    pool_timeout=30,
+                    pool_recycle=1800,
+                )
+                self.sessions["default"] = sessionmaker(bind=self.engines["default"])
+                self.dbs["default"] = SQLDatabase(engine=self.engines["default"])
+
+        # Initialize LLM for all database operations
+        self.llm = self._initialize_llm()
+
+        # For backward compatibility, set these attributes for the primary file
+        if self.file_id:
+            self.engine = self.engines.get(self.file_id)
+            self.Session = self.sessions.get(self.file_id)
+            self.db = self.dbs.get(self.file_id)
+            self.agent = self.agents.get(self.file_id)
+
+            if self.file_id in self.database_summaries:
+                # Set primary DB info and table_info
+                self.primary_db_info = self.database_summaries[self.file_id]
+
+                if (
+                    isinstance(self.primary_db_info, dict)
+                    and "tables" in self.primary_db_info
+                ):
+                    self.table_info = self.primary_db_info["tables"]
+                else:
+                    self.table_info = self.primary_db_info
+
+                # Set table_name from table_info
+                if self.table_info and len(self.table_info) > 0:
+                    self.table_name = self.table_info[0]["name"]
+                else:
+                    raise ValueError(
+                        f"No tables found in the primary database for file_id: {self.file_id}"
+                    )
+            else:
+                raise ValueError(
+                    f"No database summary found for file_id: {self.file_id}"
+                )
+
+    def _initialize_file_database(self, file_id: str):
+        """
+        Initialize a single file's database and related components.
+
+        Args:
+            file_id (str): The file ID to initialize
+        """
+        data_dir = f"./chroma_db/{file_id}"
+        db_path = os.path.join(data_dir, self.db_name)
+        db_url = f"sqlite:///{db_path}"
+
         # Configure connection pooling
-        self.engine = create_engine(
-            self.db_url,
+        self.engines[file_id] = create_engine(
+            db_url,
             poolclass=QueuePool,
             pool_size=5,
             max_overflow=10,
             pool_timeout=30,
             pool_recycle=1800,
         )
-        self.Session = sessionmaker(bind=self.engine)
-        self.db = SQLDatabase(engine=self.engine)
-        self.llm = self._initialize_llm()
-        self.agent = None
+        self.sessions[file_id] = sessionmaker(bind=self.engines[file_id])
+        self.dbs[file_id] = SQLDatabase(engine=self.engines[file_id])
 
-        # Get database info - this now returns a database_summary structure
-        db_info = self.get_table_info()
-
-        # Extract table_info from database_summary for backward compatibility
-        if isinstance(db_info, dict) and "tables" in db_info:
-            # New format - database_summary structure
-            self.table_info = db_info["tables"]
-        else:
-            # Old format - direct table_info list
-            self.table_info = db_info
-
-        # Set table_name from table_info
-        if self.table_info and len(self.table_info) > 0:
-            self.table_name = self.table_info[0][
-                "name"
-            ]  # Assuming the first table is the one we want
-        else:
-            raise ValueError("No tables found in the database")
+        # Get database info
+        try:
+            db_info = self._get_table_info_for_file(file_id)
+            self.database_summaries[file_id] = db_info
+            # Initialize SQL agent after database is prepared
+            self._initialize_agent_for_file(file_id)
+            logging.info(f"Successfully initialized database for file_id: {file_id}")
+        except Exception as e:
+            logging.error(
+                f"Error initializing database for file_id {file_id}: {str(e)}"
+            )
 
     def _initialize_llm(self) -> Union[AzureChatOpenAI, ChatVertexAI]:
         """
@@ -164,9 +238,17 @@ class TabularDataHandler:
         )
 
     @contextmanager
-    def get_db_session(self):
+    def get_db_session(self, file_id=None):
         """Context manager for database sessions"""
-        session = self.Session()
+        # Use the specified file_id or fall back to primary file_id
+        current_file_id = file_id or self.file_id
+
+        if current_file_id in self.sessions:
+            session = self.sessions[current_file_id]()
+        else:
+            # Fallback to primary session
+            session = self.Session()
+
         try:
             yield session
             session.commit()
@@ -237,22 +319,58 @@ class TabularDataHandler:
 
         return query
 
+    def _initialize_agent_for_file(self, file_id: str):
+        """Initializes the SQL agent for a specific file's database.
+
+        Args:
+            file_id (str): The file ID whose SQL agent to initialize
+        """
+        if file_id not in self.dbs:
+            raise ValueError(f"No database initialized for file_id: {file_id}")
+
+        toolkit = SQLDatabaseToolkit(db=self.dbs[file_id], llm=self.llm)
+        self.agents[file_id] = create_sql_agent(
+            llm=self.llm, toolkit=toolkit, verbose=True, handle_parsing_errors=True
+        )
+
+        # For backward compatibility with the primary file_id
+        if file_id == self.file_id:
+            self.agent = self.agents[file_id]
+
     def _initialize_agent(self):
-        """
-        Initializes the SQL agent for executing database queries.
-        """
-        # Create a custom SQLDatabase wrapper that preprocesses queries
-        original_run = self.db.run
+        """Initializes the SQL agent for the primary file (backward compatibility)."""
+        if self.file_id:
+            self._initialize_agent_for_file(self.file_id)
+        # Ensure self.db is available for the primary file_id context
+        if hasattr(self, "db") and self.db:
+            original_run_method = self.db.run
 
-        def wrapped_run(query, *args, **kwargs):
-            # Clean the query before execution
-            cleaned_query = self._clean_sql_query(query)
-            logging.info(f"Original query: {query}")
-            logging.info(f"Cleaned query: {cleaned_query}")
-            return original_run(cleaned_query, *args, **kwargs)
+            # Define the wrapper function
+            def wrapped_run(command: str, fetch: str = "all") -> str:
+                # 'self' of TabularDataHandler is captured from the outer scope
+                logging.debug(f"Executing SQL via wrapped_run: {command}")
+                try:
+                    # Example: If query cleaning is desired here using a class method:
+                    # cleaned_command = self._clean_sql_query(command)
+                    # result = original_run_method(cleaned_command, fetch)
+                    result = original_run_method(command, fetch)
+                    logging.debug(f"SQL result (first 100 chars): {str(result)[:100]}")
+                    return result
+                except Exception as e:
+                    logging.error(
+                        f"Error in wrapped_run during SQL execution for command '{command}': {str(e)}"
+                    )
+                    raise
 
-        # Replace the run method with our wrapped version
-        self.db.run = wrapped_run
+            # Replace the run method with our wrapped version
+            self.db.run = wrapped_run
+            logging.info(
+                f"Patched db.run method for file_id: {self.file_id or 'default'}"
+            )
+        else:
+            logging.warning(
+                "Primary self.db not found or not initialized. Cannot patch db.run."
+            )
 
         toolkit = SQLDatabaseToolkit(
             db=self.db, llm=self.llm, handle_parsing_errors=True
@@ -289,17 +407,22 @@ class TabularDataHandler:
         except Exception as e:
             logging.error(f"Error debugging database: {str(e)}", exc_info=True)
 
-    def get_table_info(self) -> List[dict]:
+    def _get_table_info_for_file(self, file_id: str) -> dict:
         """
-        Retrieves detailed information about all tables in the database.
+        Retrieves detailed information about all tables in a specific database.
+
+        Args:
+            file_id (str): The file ID whose database to analyze
 
         Returns:
-            List[dict]: A list of dictionaries containing table information, including
-                        table name, columns, row count, sample data, and column statistics.
+            dict: A dictionary containing database summary information
         """
-        inspector = inspect(self.engine)
+        if file_id not in self.engines:
+            raise ValueError(f"No engine initialized for file_id: {file_id}")
+
+        inspector = inspect(self.engines[file_id])
         table_info = []
-        with self.Session() as session:
+        with self.sessions[file_id]() as session:
             for table_name in inspector.get_table_names():
                 columns = inspector.get_columns(table_name)
                 row_count = session.execute(
@@ -338,11 +461,12 @@ class TabularDataHandler:
                         "column_stats": column_stats,
                     }
                 )
-        # Compose a database summary for file_info.json
+        # Compose a database summary
         database_summary = {
             "table_count": len(table_info),
             "table_names": [t["name"] for t in table_info],
             "tables": [],
+            "file_id": file_id,  # Include file_id for multi-file tracking
         }
         for t in table_info:
             database_summary["tables"].append(
@@ -352,13 +476,39 @@ class TabularDataHandler:
                     "row_count": t["row_count"],
                     "top_rows": [list(row) for row in t["sample_data"]],
                     "column_stats": t["column_stats"],
+                    "file_id": file_id,  # Include file_id for multi-file tracking
                 }
             )
         return database_summary
 
+    def get_table_info(self) -> Union[List[dict], dict]:
+        """
+        Retrieves detailed information about all tables in the database(s).
+
+        For multi-file mode, returns information about the primary database.
+        For backward compatibility with existing code.
+
+        Returns:
+            Union[List[dict], dict]: Information about tables in the database(s)
+        """
+        if self.is_multi_file:
+            if self.file_id in self.database_summaries:
+                return self.database_summaries[self.file_id]
+            elif self.file_ids:
+                # If primary file_id not in summaries but we have other files, use the first available
+                for f_id in self.file_ids:
+                    if f_id in self.database_summaries:
+                        return self.database_summaries[f_id]
+                # If no file has a summary yet, try to generate one for the primary
+                return self._get_table_info_for_file(self.file_id)
+
+        # Traditional single-file mode
+        return self._get_table_info_for_file(self.file_id)
+
     def get_answer(self, question: str) -> str:
         """
         Processes a user's question and returns an answer based on the database content.
+        For multi-file mode, it attempts to determine which database to query or uses a combined approach.
 
         Args:
             question (str): The user's input question.
@@ -367,16 +517,215 @@ class TabularDataHandler:
             str: The answer to the user's question or an error message if processing fails.
         """
         try:
-            answer = self.ask_question(question)
-            if answer:
-                print("Direct answer")
-                return answer
+            if self.is_multi_file and len(self.file_ids) > 1:
+                return self._get_multi_file_answer(question)
             else:
-                print("Forced answer")
-                return self.get_forced_answer(question, answer)
+                # Standard single-file approach (also works when only one file in multi-file mode)
+                answer = self.ask_question(question)
+                if answer:
+                    logging.info("Direct answer")
+                    return answer
+                else:
+                    logging.info("Forced answer")
+                    return self.get_forced_answer(question, answer)
         except Exception as e:
             logging.error(f"Error in TabularDataHandler get_answer: {str(e)}")
             return f"An error occurred while processing your question: {str(e)}"
+
+    def _get_multi_file_answer(self, question: str) -> str:
+        """
+        Process a question in multi-file mode by querying across all available databases.
+        This method handles queries when multiple tabular files are in use.
+
+        Args:
+            question (str): The user's input question
+
+        Returns:
+            str: The answer combining information from all databases
+        """
+        try:
+            # First check if the question specifically mentions file IDs or table names to
+            # determine which database to use for the query
+            target_file_id = None
+
+            # 1. First check if question contains table names that match specific databases
+            for file_id, summary in self.database_summaries.items():
+                if "table_names" in summary:
+                    for table_name in summary["table_names"]:
+                        if table_name.lower() in question.lower():
+                            logging.info(
+                                f"Found table '{table_name}' mentioned in question, using file {file_id}"
+                            )
+                            target_file_id = file_id
+                            break
+                if target_file_id:  # Break outer loop too if we found a match
+                    break
+
+            # 2. If no specific table identified, create a comprehensive database summary
+            if not target_file_id:
+                # Create a combined database summary for context
+                all_tables_summary = self._generate_all_tables_summary()
+                logging.info(
+                    "No specific table identified in question. Using combined database approach."
+                )
+
+                # Try to route the question to the most relevant database based on content
+                suggested_file_id = self._suggest_database_for_question(
+                    question, all_tables_summary
+                )
+                if suggested_file_id:
+                    target_file_id = suggested_file_id
+                    logging.info(
+                        f"Selected database {target_file_id} as most relevant for question"
+                    )
+                else:
+                    # Default to the first file when we can't determine which is more relevant
+                    target_file_id = self.file_ids[0]
+                    logging.info(
+                        f"Using default database {target_file_id} for question"
+                    )
+
+            # We've determined which database to use, set up the agent for that database
+            if target_file_id not in self.agents:
+                self._initialize_agent_for_file(target_file_id)
+
+            # Format the question with additional context if needed
+            enhanced_question = self._enhance_question_with_context(
+                question, target_file_id
+            )
+
+            # Run the question on the selected agent
+            agent = self.agents[target_file_id]
+            if not agent:
+                self._initialize_agent_for_file(target_file_id)
+                agent = self.agents[target_file_id]
+
+            logging.info(f"Querying database for file_id: {target_file_id}")
+            result = agent.run(enhanced_question)
+
+            # Add source information to the response
+            db_info = self.database_summaries.get(target_file_id, {})
+            table_names = db_info.get("table_names", [])
+            tables_str = ", ".join(table_names) if table_names else "unknown"
+
+            enhanced_result = f"Answer from database {target_file_id} (tables: {tables_str}):\n\n{result}"
+            return enhanced_result
+
+        except Exception as e:
+            logging.error(f"Error in _get_multi_file_answer: {str(e)}")
+            return f"An error occurred while processing your question across multiple databases: {str(e)}"
+
+    def _generate_all_tables_summary(self) -> str:
+        """
+        Generate a concise summary of all tables across all databases.
+
+        Returns:
+            str: Text summary of all available tables and their columns
+        """
+        summary_parts = []
+
+        for file_id, db_summary in self.database_summaries.items():
+            if "tables" in db_summary:
+                summary_parts.append(f"Database {file_id}:")
+                for table in db_summary["tables"]:
+                    columns_info = ", ".join(
+                        [f"{col['name']} ({col['type']})" for col in table["columns"]]
+                    )
+                    summary_parts.append(
+                        f"  Table '{table['name']}' ({table['row_count']} rows): {columns_info}"
+                    )
+
+        return "\n".join(summary_parts)
+
+    def _suggest_database_for_question(
+        self, question: str, all_tables_summary: str
+    ) -> Optional[str]:
+        """
+        Suggest which database is most relevant to the question based on content.
+        Uses LLM to make the determination.
+
+        Args:
+            question: The user's question
+            all_tables_summary: Summary of all tables across all databases
+
+        Returns:
+            Optional[str]: The file_id of the most relevant database, or None if undetermined
+        """
+        try:
+            if self.model_choice.startswith("gemini"):
+                from rtl_rag_chatbot_api.chatbot.gemini_handler import (
+                    get_gemini_non_rag_response,
+                )
+
+                prompt = (
+                    f"Based on the following database structure:\n\n{all_tables_summary}\n\n"
+                    f"Which database would be most appropriate to answer this question: '{question}'?\n"
+                    "Respond with just the database ID (like '1fddcdde-c24e-4fef-b656-dc454f701418')."
+                )
+                response = get_gemini_non_rag_response(
+                    self.config, prompt, self.model_choice
+                )
+            else:
+                from rtl_rag_chatbot_api.chatbot.chatbot_creator import (
+                    get_azure_non_rag_response,
+                )
+
+                prompt = (
+                    f"Based on the following database structure:\n\n{all_tables_summary}\n\n"
+                    f"Which database would be most appropriate to answer this question: '{question}'?\n"
+                    "Respond with just the database ID (like '1fddcdde-c24e-4fef-b656-dc454f701418')."
+                )
+                response = get_azure_non_rag_response(
+                    self.config, prompt, self.model_choice
+                )
+
+            # Extract file_id from response
+            for file_id in self.file_ids:
+                if file_id in response:
+                    return file_id
+            return None
+        except Exception as e:
+            logging.error(f"Error in _suggest_database_for_question: {str(e)}")
+            return None
+
+    def _enhance_question_with_context(self, question: str, file_id: str) -> str:
+        """
+        Enhance the user's question with context about the selected database.
+
+        Args:
+            question: The user's original question
+            file_id: The selected file_id to query against
+
+        Returns:
+            str: An enhanced question with context
+        """
+        if file_id in self.database_summaries:
+            db_summary = self.database_summaries[file_id]
+            table_names = db_summary.get("table_names", [])
+
+            # Don't modify simple questions about table structure
+            if any(
+                keyword in question.lower()
+                for keyword in [
+                    "what tables",
+                    "table names",
+                    "how many tables",
+                    "show tables",
+                    "list tables",
+                ]
+            ):
+                return question
+
+            # Format enhanced question with table context
+            if table_names and len(table_names) == 1:
+                # Single table case - make it easy
+                return f"Using the table '{table_names[0]}', {question}"
+            elif table_names and len(table_names) > 1:
+                tables_str = ", ".join([f"'{t}'" for t in table_names])
+                return f"Using the tables {tables_str}, {question}"
+
+        # Default case - just return the original question
+        return question
 
     def ask_question(self, question: str) -> Optional[str]:
         """

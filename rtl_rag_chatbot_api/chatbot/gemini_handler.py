@@ -22,7 +22,17 @@ class GeminiHandler(BaseRAGHandler):
     Inherits common functionality from BaseRAGHandler.
     """
 
-    def __init__(self, configs, gcs_handler):
+    def __init__(
+        self,
+        configs,
+        gcs_handler,
+        model_choice: str = None,
+        file_id: str = None,
+        file_ids: List[str] = None,
+        all_file_infos: dict = None,
+        collection_name_prefix: str = "rag_collection_",
+        user_id: str = None,
+    ):
         super().__init__(configs, gcs_handler)
         vertexai.init(project=configs.gemini.project, location=configs.gemini.location)
         logger.info(
@@ -34,24 +44,55 @@ class GeminiHandler(BaseRAGHandler):
         self.generative_model = None
         self.MAX_TOKENS_PER_REQUEST = 15000
 
-    def initialize(
-        self,
-        model: str,
-        file_id: str = None,
-        embedding_type: str = None,
-        collection_name: str = None,
-        user_id: str = None,
-    ):
-        """Initialize the Gemini model with specific configurations."""
+        # Add multi-file support similar to AzureChatbot
+        self.configs = configs
+        self.model_choice = model_choice
+        self.user_id = user_id
+        self.all_file_infos = all_file_infos if all_file_infos else {}
+        self._collection_name_prefix = collection_name_prefix
+        self.active_file_ids: List[str] = []
+        self.is_multi_file = False
+
+        # Initialize the model if model_choice is provided
+        if model_choice:
+            # Map model choice to actual model name
+            self._initialize_gemini_model(model_choice)
+
+        # Handle multi-file or single file mode
+        if file_ids and len(file_ids) > 0:
+            self.is_multi_file = True
+            self.active_file_ids = sorted(
+                list(set(file_ids))
+            )  # Ensure unique and sorted
+            # For BaseRAGHandler compatibility if its methods are ever called directly in multi-mode
+            self.file_id = None
+            self.collection_name = None
+            self.embedding_type = (
+                None  # In multi-file, embedding type is always 'google' for this class
+            )
+            logger.info(
+                f"GeminiHandler initialized for multi-file: {self.active_file_ids}"
+            )
+        elif file_id:
+            self.is_multi_file = False
+            self.active_file_ids = [file_id]
+            self.file_id = file_id  # For BaseRAGHandler compatibility
+            self.collection_name = f"{self._collection_name_prefix}{self.file_id}"
+            self.embedding_type = "google"  # Default for GeminiHandler
+            logger.info(f"GeminiHandler initialized for single-file: {self.file_id}")
+        # If neither file_id nor file_ids are provided, do nothing - will be set during initialize()
+
+    def _initialize_gemini_model(self, model_choice: str):
+        """Initialize the Gemini model with the specified model choice."""
         # Map model choice to actual model name
         model_mapping = {
             "gemini-flash": self.configs.gemini.model_flash,
             "gemini-pro": self.configs.gemini.model_pro,
         }
 
-        actual_model = model_mapping.get(model)
+        actual_model = model_mapping.get(model_choice)
         if not actual_model:
-            raise ValueError(f"Invalid model choice: {model}")
+            raise ValueError(f"Invalid model choice: {model_choice}")
 
         generation_config = GenerationConfig(
             temperature=0.9,
@@ -72,10 +113,29 @@ class GeminiHandler(BaseRAGHandler):
             generation_config=generation_config,
             safety_settings=safety_settings,
         )
+
+    def initialize(
+        self,
+        model: str,
+        file_id: str = None,
+        embedding_type: str = None,
+        collection_name: str = None,
+        user_id: str = None,
+    ):
+        """Initialize the Gemini model with specific configurations."""
+        # Initialize the model
+        self._initialize_gemini_model(model)
+
+        # Set the file and collection parameters
         self.file_id = file_id
         self.embedding_type = embedding_type
         self.collection_name = collection_name or f"rag_collection_{file_id}"
         self.user_id = user_id
+
+        # For backwards compatibility, also set active_file_ids if not already set
+        if file_id and not self.active_file_ids:
+            self.active_file_ids = [file_id]
+            self.is_multi_file = False
 
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         try:
@@ -110,31 +170,116 @@ class GeminiHandler(BaseRAGHandler):
     def get_answer(self, query: str) -> str:
         """Generate an answer to a query using relevant context."""
         try:
-            # Get relevant documents from ChromaDB
-            relevant_docs = self.query_chroma(query, self.file_id)
+            logger.info(
+                f"GeminiHandler ({self.model_choice}) get_answer for file(s): {self.active_file_ids}"
+            )
 
-            if not relevant_docs:
+            all_relevant_docs = []
+            embedding_model_for_rag = "google"  # GeminiHandler uses Google embeddings
+
+            # Handle multi-file or single-file mode appropriately
+            if self.is_multi_file:
+                # Query each file and collect relevant documents
+                for f_id in self.active_file_ids:
+                    # Construct collection name specific to this file_id
+                    current_collection_name = f"{self._collection_name_prefix}{f_id}"
+                    logger.info(
+                        f"Querying ChromaDB for file: {f_id}, collection: {current_collection_name}"
+                    )
+                    try:
+                        # Get embeddings for the query
+                        query_embedding = self.get_embeddings([query])[0]
+
+                        # Get the collection for this file
+                        chroma_collection = self.chroma_manager.get_collection(
+                            file_id=f_id,
+                            embedding_type=embedding_model_for_rag,
+                            collection_name=current_collection_name,
+                            user_id=self.user_id,
+                            is_embedding=False,
+                        )
+
+                        # Query the collection
+                        results = chroma_collection.query(
+                            query_embeddings=[query_embedding],
+                            n_results=3,  # Get top 3 results per file
+                        )
+
+                        # Extract documents from results
+                        docs_from_file = (
+                            results["documents"][0] if results["documents"] else []
+                        )
+
+                        # Add source file ID to each document
+                        docs_with_source = [
+                            f"[Source: {f_id}] {doc}" for doc in docs_from_file
+                        ]
+                        all_relevant_docs.extend(docs_with_source)
+
+                        logger.info(f"Retrieved {len(docs_from_file)} docs from {f_id}")
+                    except Exception as e:
+                        logger.error(
+                            f"Error querying ChromaDB for file {f_id}: {str(e)}"
+                        )
+                        # Continue to next file if there's an error with one
+            else:
+                # Single-file mode - use the existing query_chroma method
+                relevant_docs = self.query_chroma(query, self.file_id)
+                all_relevant_docs = relevant_docs
+                logger.info(f"Retrieved {len(relevant_docs)} docs from {self.file_id}")
+
+            # Check if we found any relevant documents
+            if not all_relevant_docs:
+                logger.warning(
+                    f"No relevant documents found for query: '{query}' in files: {self.active_file_ids}"
+                )
                 return (
                     "I couldn't find any relevant information to answer your question."
                 )
 
+            # Prepare additional context about available files when in multi-file mode
+            files_context = ""
+            if self.is_multi_file and self.all_file_infos:
+                file_details = []
+                for file_id in self.active_file_ids:
+                    if file_id in self.all_file_infos:
+                        # Extract original_filename from file_info if available
+                        file_info = self.all_file_infos.get(file_id, {})
+                        original_filename = file_info.get(
+                            "original_filename", f"Unknown filename (ID: {file_id})"
+                        )
+                        file_details.append(f"- {original_filename} (ID: {file_id})")
+
+                if file_details:
+                    files_context = (
+                        "Available documents:\n" + "\n".join(file_details) + "\n\n"
+                    )
+                    logger.info(f"Added file context with {len(file_details)} files")
+
             # Construct the prompt with context
-            context = "\n".join(relevant_docs[:3])  # Use top 3 most relevant documents
+            context_str = "\n".join(all_relevant_docs[:5])  # Limit to top 5 total docs
+
             prompt = f"""{self.configs.chatbot.system_prompt_rag_llm}
-            Elaborate the give detailed answer based on the context provided.
-            Context:
-            {context}
+            Elaborate and give detailed answer based on the context provided.
+
+            {files_context}Context:
+            {context_str}
 
             Question: {query}
 
             Answer:"""
 
             # Get streaming response and return it
+            logger.info(f"Sending to Gemini model. Files: {self.active_file_ids}")
             response = self.get_gemini_response_stream(prompt)
+            logger.info(f"Received answer from Gemini for files {self.active_file_ids}")
             return response.strip()
 
         except Exception as e:
-            logging.error(f"Error in Gemini get_answer: {str(e)}")
+            logger.error(
+                f"Error in GeminiHandler get_answer for files {self.active_file_ids}: {str(e)}",
+                exc_info=True,
+            )
             return f"An error occurred while processing your question: {str(e)}"
 
 
