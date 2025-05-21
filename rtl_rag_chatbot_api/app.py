@@ -620,6 +620,7 @@ def initialize_rag_model(
 
     # Initialize model with ChromaDB
     if is_gemini:
+        # For GeminiHandler, create instance first then call initialize()
         model = GeminiHandler(configs, gcs_handler)
         model.initialize(
             model=query.model_choice,
@@ -629,14 +630,17 @@ def initialize_rag_model(
             user_id=query.user_id,
         )
     else:
-        model = Chatbot(configs, gcs_handler)
-        model.initialize(
+        # For AzureChatbot, all initialization happens in the constructor
+        # Pass all required parameters directly
+        model = Chatbot(
+            configs=configs,
+            gcs_handler=gcs_handler,
             model_choice=query.model_choice,
             file_id=query.file_id,
-            embedding_type="azure",
-            collection_name=f"rag_collection_{query.file_id}",
+            collection_name_prefix="rag_collection_",
             user_id=query.user_id,
         )
+        # AzureChatbot doesn't have an initialize() method, it's all done in __init__
 
     return model
 
