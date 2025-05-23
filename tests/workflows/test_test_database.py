@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from workflows.db.tables import Base, User
+from workflows.db.tables import Base, Prompt, User
 
 # Create a session for a SQLite in-memory database
 engine = create_engine(
@@ -66,3 +66,13 @@ def test_user_count_deletion_candidates(test_db_session):
 
         deletion_candidates = db.query(User).filter(User.wf_deletion_candidate).count()
         assert deletion_candidates == 5
+
+
+def test_published_prompts(test_db_session):
+    """Test to ensure that there are 4 published prompts in the Prompt table."""
+
+    with test_db_session as db:
+        prompt_count = (
+            db.query(Prompt).filter(Prompt.published).count()
+        )  # Query the number of shared prompts in the Prompt table
+        assert prompt_count == 4, f"Expected 4 prompts, but found {prompt_count}"
