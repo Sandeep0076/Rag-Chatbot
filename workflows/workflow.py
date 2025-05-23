@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 import workflows.db.helpers as db_helpers
 import workflows.msgraph as msgraph
 from workflows.app_config import config
-from workflows.db.tables import Conversation, Folder, Message, User
+from workflows.db.tables import Conversation, Folder, Message, Prompt, User
 from workflows.gcs.helpers import delete_embeddings, file_present_in_gcp
 
 logging.basicConfig(
@@ -33,7 +33,7 @@ def get_db_session():
     Returns:
         Session: SQLAlchemy session.
     """
-    engine = create_engine(os.getenv("DATABASE_URL", ""))
+    engine = create_engine(os.getenv("DATABASE_URL", "sqlite:///:memory:"))
     Session = sessionmaker(bind=engine)
 
     attempts = 0
@@ -68,7 +68,7 @@ def get_users():
         users = (
             # id = "dXNlci5kZWxldGVkQHJ0bC5kZQo=" is the operational user: user.deleted@rtl.de
             session.query(User)
-            .filter(User.id != "dXNlci5kZWxldGVkQHJ0bC5kZQo=")
+            .filter(User.id != config.workflow.db_deleted_user_id)
             .all()
         )
 
@@ -89,7 +89,7 @@ def get_users_deletion_candidates():
                         User.wf_deletion_candidate,
                         User.wf_deletion_timestamp.isnot(None),
                         # id = "dXNlci5kZWxldGVkQHJ0bC5kZQo=" is the operational user: user.deleted@rtl.de
-                        User.id != "dXNlci5kZWxldGVkQHJ0bC5kZQo=",
+                        User.id != config.workflow.db_deleted_user_id,
                     )
                 )
                 .all()
@@ -245,6 +245,40 @@ def delete_candidate_user_embeddings():
     log.info("Workflow step deletion of user embeddings completed.")
 
 
+def anonymise_shared_prompts():
+    """"""
+    # 1. Get the list of users marked for deletion from the chatbot database
+    # 2. and replace the user id with the operational user id
+    users = get_users_deletion_candidates()
+
+    if not users:
+        log.info("No users found for anonymisation: nothing to anonymise.")
+        log.info("Workflow step anonymising shared prompts completed.")
+        return
+
+    with get_db_session() as session:
+        try:
+            # replace all prompts created by the users in the list with the operational user id
+            session.query(Prompt).filter(
+                and_(
+                    Prompt.published,
+                    Prompt.userId.in_([user.id for user in users]),
+                )
+            ).update(
+                {Prompt.userId: config.workflow.db_deleted_user_id},
+                synchronize_session=False,
+            )
+
+            session.commit()
+
+        except Exception as e:
+            # Rollback in case of any errors and log the failure
+            session.rollback()
+            log.error(f"Failed to anonymise shared prompts for users: {e}")
+
+    log.info("Workflow step anonymising shared prompts completed.")
+
+
 def delete_candidate_user_data():
     """
     Workflow to delete user data for those marked as deletion candidates.
@@ -293,6 +327,10 @@ def delete_candidate_user_data():
 
                 for folder in folders:
                     session.delete(folder)
+
+                # TODO delete prompts
+
+                # NOTE anonmising shared prompts is handled in anaonymise_shared_prompts()
 
                 # Finally, delete the user itself
                 session.delete(user)
