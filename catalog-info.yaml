@@ -9,7 +9,7 @@ metadata:
     backstage.io/techdocs-ref: dir:.
 spec:
   type: service
-  owner: ecina
+  owner: group:default/ecina
   lifecycle: experimental
   providesApis:
     - 39e55275-d77a-4f08-82b2-b76a9d7bed98
@@ -23,6 +23,6 @@ metadata:
 spec:
   type: openapi
   lifecycle: experimental
-  owner: ecina
+  owner: group:default/ecina
   definition:
     $text: ./openapi.json
