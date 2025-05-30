@@ -6,7 +6,12 @@
 
 generator client {
   provider = "prisma-client-js"
-  binaryTargets = ["native", "debian-openssl-1.1.x"]
+  // darwin, darwin-arm64, debian-openssl-1.0.x, debian-openssl-1.1.x, debian-openssl-3.0.x,
+  // rhel-openssl-1.0.x, rhel-openssl-1.1.x, rhel-openssl-3.0.x, linux-arm64-openssl-1.1.x,
+  // linux-arm64-openssl-1.0.x, linux-arm64-openssl-3.0.x, linux-arm-openssl-1.1.x, linux-arm-openssl-1.0.x,
+  // linux-arm-openssl-3.0.x, linux-musl, linux-musl-openssl-3.0.x, linux-musl-arm64-openssl-1.1.x, linux-musl-arm64-openssl-3.0.x,
+  // linux-nixos, linux-static-x64, linux-static-arm64, windows, freebsd11, freebsd12, freebsd13, freebsd14, freebsd15, openbsd, netbsd, arm, native
+  binaryTargets = ["native", "debian-openssl-3.0.x", "linux-musl-openssl-3.0.x", "linux-musl-arm64-openssl-3.0.x"]
 }
 
 datasource db {
@@ -22,6 +27,10 @@ model User {
   wf_deletion_timestamp DateTime?
   conversations Conversation[]
   folders Folder[]
+  last_seen_release_version String @default("")
+  preferred_username String? @unique
+  Prompt Prompt[]
+  PromptLike PromptLike[]
 }
 
 model Message {
@@ -29,8 +38,11 @@ model Message {
   role String
   content String
   createdAt DateTime @default(now())
+  modelId String?
+  fileName String?
   conversation Conversation @relation(fields: [conversationId], references: [id])
   conversationId String
+  citations Citation[]
 }
 
 model Conversation {
@@ -42,7 +54,10 @@ model Conversation {
   folderId String?
   prompt String
   model Model? @relation(fields: [modelId], references: [id])
+  historicalConversationId String?
   modelId String
+  fileId String?
+  fileName String?
   name String
   userEmail String
   updatedAt DateTime @default(now())
@@ -64,4 +79,80 @@ model Folder {
   name String
   isRoot Boolean @default(false)
   conversations Conversation[]
+}
+
+model Release {
+  version   String   @id  @unique
+  active    Boolean
+  content   String
+  title     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Prompt {
+  id String @id @default(cuid())
+  name String
+  description String?
+  prompt String
+  folder PromptFolder @relation(fields: [folderId], references: [id])
+  folderId String
+  published Boolean
+  department Department? @relation(fields: [departmentId], references: [id])
+  departmentId Int?
+  tag String
+  user User @relation(fields: [userId], references: [id])
+  userId String
+  sharedLinkId String? @unique
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+  publishedAt DateTime?
+  copyCount Int @default(0)
+  likes PromptLike[]
+}
+
+model PromptLike {
+  id String @id @default(cuid())
+  prompt Prompt @relation( fields: [promptId], references: [id])
+  promptId String
+  user  User @relation(fields: [userId], references: [id])
+  userId String
+  createdAt DateTime @default(now())
+  @@unique([promptId, userId])
+}
+
+model PromptFolder {
+  id String @id @default(cuid())
+  userId String
+  name String
+  rootFolder Boolean
+  prompts Prompt[]
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
+model PromptTag {
+  name String @id
+  createdAt DateTime @default(now())
+}
+
+model Citation {
+  id String @id @unique @default(cuid())
+  title String
+  url String
+  message   Message  @relation(fields: [messageId], references: [id])
+  messageId String
+}
+
+model Department {
+  id Int @id @unique @default(autoincrement())
+  name String
+  displayName String?
+  Prompt Prompt[]
+}
+
+model AlembicVersion {
+  version_num String @id @db.VarChar(32)
+
+  @@map("alembic_version")
 }

@@ -10,3 +10,9 @@ os.environ["gcp"] = json.dumps(
         ),
     }
 )
+
+os.environ["workflow"] = json.dumps(
+    {
+        "db_deleted_user_id": os.getenv("WF_DB_DELETED_USER_ID", "deleted_user_id"),
+    }
+)

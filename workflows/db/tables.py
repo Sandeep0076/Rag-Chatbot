@@ -22,6 +22,7 @@ class User(Base):
     # Relationships:
     conversations = relationship("Conversation", back_populates="user")
     folders = relationship("Folder", back_populates="user")
+    prompts = relationship("Prompt", back_populates="user")
 
 
 class Message(Base):
@@ -108,3 +109,89 @@ class Folder(Base):
     # Relationships:
     user = relationship("User", back_populates="folders")
     conversations = relationship("Conversation", back_populates="folder")
+
+
+class Prompt(Base):
+    __tablename__ = "Prompt"
+
+    id = Column(String, primary_key=True, nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    prompt = Column(String, nullable=False)
+    folderId = Column(String, nullable=False)
+    published = Column(Boolean, nullable=False)
+    departmentId = Column(Integer, nullable=True)
+    tag = Column(String, nullable=False)
+    userId = Column(String, nullable=False)
+    sharedLinkId = Column(String, unique=True, nullable=True)
+    updatedAt = Column(DateTime, nullable=False)
+    createdAt = Column(DateTime, nullable=False, default=datetime.now(timezone.utc))
+    publishedAt = Column(DateTime, nullable=True)
+    copyCount = Column(Integer, nullable=False)
+
+    # Foreign keys:
+    folderId = mapped_column(ForeignKey("PromptFolder.id"))
+    departmentId = mapped_column(ForeignKey("Department.id"))
+    userId = mapped_column(ForeignKey("User.id"))
+
+    # Relationships:
+    promptfolder = relationship("PromptFolder", back_populates="prompts")
+    department = relationship("Department", back_populates="prompt")
+    user = relationship("User", back_populates="prompts")
+    likes = relationship("PromptLike", back_populates="prompt")
+
+
+class PromptLike(Base):
+    __tablename__ = "PromptLike"
+
+    id = Column(String, primary_key=True, nullable=False)
+    promptId = Column(String, nullable=False)
+    userId = Column(String, nullable=False)
+    createdAt = Column(DateTime, nullable=False, default=datetime.now(timezone.utc))
+
+    # Foreign keys:
+    promptId = mapped_column(ForeignKey("Prompt.id"))
+    userId = mapped_column(ForeignKey("User.id"))
+
+    # Relationships:
+    prompt = relationship("Prompt", back_populates="likes")
+
+
+class PromptFolder(Base):
+    __tablename__ = "PromptFolder"
+
+    id = Column(String, primary_key=True, nullable=False)
+    userId = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    rootFolder = Column(Boolean, nullable=False)
+    updatedAt = Column(DateTime, nullable=False)
+    createdAt = Column(DateTime, nullable=False, default=datetime.now(timezone.utc))
+
+    # Foreign keys:
+
+    # Relationships:
+    prompts = relationship("Prompt", back_populates="promptfolder")
+
+
+class PromptTag(Base):
+    __tablename__ = "PromptTag"
+
+    name = Column(String, primary_key=True, nullable=False)
+    createdAt = Column(DateTime, nullable=False, default=datetime.now(timezone.utc))
+
+    # Foreign keys:
+
+    # Relationships:
+
+
+class Department(Base):
+    __tablename__ = "Department"
+
+    id = Column(Integer, primary_key=True, unique=True, nullable=False)
+    name = Column(String, nullable=False)
+    displayName = Column(String, nullable=True)
+
+    # Foreign keys:
+
+    # Relationships:
+    prompt = relationship("Prompt", back_populates="department")

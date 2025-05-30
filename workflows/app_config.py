@@ -8,8 +8,13 @@ class GCSConfig(BaseModel):
     embeddings_root_folder: str
 
 
+class WorkflowConfig(BaseModel):
+    db_deleted_user_id: str
+
+
 class Config(BaseSettings):
     gcp: GCSConfig
+    workflow: WorkflowConfig
 
 
 config = Config()
