@@ -82,7 +82,7 @@ model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler)
 dalle_handler = DalleImageGenerator(configs)
 imagen_handler = ImagenGenerator(configs)
-combined_image_handler = CombinedImageGenerator(configs)
+combined_image_handler = CombinedImageGenerator(configs, dalle_handler, imagen_handler)
 
 # database connection
 if os.getenv("DB_INSTANCE"):

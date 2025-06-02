@@ -13,17 +13,23 @@ class CombinedImageGenerator:
     Simply uses instances of the individual generators without duplicating their logic.
     """
 
-    def __init__(self, configs):
+    def __init__(self, configs, dalle_generator=None, imagen_generator=None):
         """
-        Initialize combined image generator with configurations.
+        Initialize combined image generator with configurations and existing generator instances.
 
         Args:
             configs: Application configuration object
+            dalle_generator: Existing DalleImageGenerator instance (optional)
+            imagen_generator: Existing ImagenGenerator instance (optional)
         """
         self.configs = configs
-        # Create instances of individual generators
-        self.dalle_generator = DalleImageGenerator(configs)
-        self.imagen_generator = ImagenGenerator(configs)
+        # Use provided instances or create new ones if not provided
+        self.dalle_generator = (
+            dalle_generator if dalle_generator else DalleImageGenerator(configs)
+        )
+        self.imagen_generator = (
+            imagen_generator if imagen_generator else ImagenGenerator(configs)
+        )
 
     async def generate_images(
         self, prompt: str, size: str = "1024x1024", n: int = 1, **kwargs
