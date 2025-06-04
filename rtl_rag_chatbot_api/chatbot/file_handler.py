@@ -861,24 +861,9 @@ class FileHandler:
 
             raise HTTPException(status_code=400, detail="No valid URLs provided")
 
-        # Create a URL hash for all URLs combined
-        url_hash = self.calculate_url_hash(",".join(url_list))
-
-        # Check if we've already processed these URLs
-        existing_file_id = await self.find_existing_file_by_hash_async(url_hash)
-
-        if existing_file_id:
-            # Update the file info with the new username
-            self.gcs_handler.update_file_info(existing_file_id, {"username": username})
-            return {
-                "file_id": existing_file_id,
-                "status": "existing",
-                "message": "URLs already processed",
-                "is_image": False,
-                "is_tabular": False,
-                "original_filename": "url_content.txt",
-                "temp_file_path": None,
-            }
+        # We'll calculate the hash after content extraction
+        extracted_content = []
+        existing_file_id = None
 
         # Process the URLs and save content to a text file
         website_handler = WebsiteHandler()
@@ -923,7 +908,9 @@ class FileHandler:
 
                         if is_substantive:
                             # Write the content to the file
-                            f.write(documents[0].page_content)
+                            content = documents[0].page_content
+                            extracted_content.append(content)
+                            f.write(content)
                             f.write(f"\n\nWord count: {word_count} words")
                         else:
                             # If content is not substantive, write an error message to the file
@@ -993,9 +980,37 @@ class FileHandler:
                     "temp_file_path": None,
                 }
 
+        # Calculate hash based on all extracted content
+        combined_content = "\n".join(extracted_content).encode("utf-8")
+        content_hash = self.calculate_file_hash(combined_content)
+
+        # Check if we've already processed this content
+        existing_file_id = await self.find_existing_file_by_hash_async(content_hash)
+
+        # If we found existing content with the same hash, reuse it
+        if existing_file_id:
+            logging.info(
+                f"Found existing content with ID {existing_file_id}, reusing it"
+            )
+            # Update the file info with the new username
+            self.gcs_handler.update_file_info(existing_file_id, {"username": username})
+            # Clean up the temporary file
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            return {
+                "file_id": existing_file_id,
+                "status": "existing",
+                "message": "Content already processed, reusing existing file",
+                "is_image": False,
+                "is_tabular": False,
+                "is_url": True,
+                "original_filename": "url_content.txt",
+                "temp_file_path": None,
+            }
+
         # Create metadata for the file
         metadata = {
-            "file_hash": url_hash,
+            "file_hash": content_hash,
             "original_filename": "url_content.txt",
             "username": [username],
             "is_url": True,
