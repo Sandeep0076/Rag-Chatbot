@@ -63,7 +63,10 @@ async def process_single_url(
             return {
                 "file_id": url_file_id,
                 "status": "error",
-                "message": f"Content from {url} is not substantive enough (only {word_count} words)",
+                "message": (
+                    f"Die Verarbeitung von {url} ist fehlgeschlagen. "
+                    "Bitte versuchen Sie es erneut mit einer anderen Domain/einer anderen URL."
+                ),
                 "is_image": False,
                 "is_tabular": False,
                 "original_filename": title or "url_content.txt",
@@ -221,7 +224,8 @@ async def process_urls_individually(
         if not successful_urls:
             return {
                 "status": "error",
-                "message": "Could not process any of the provided URLs",
+                "message": "Die angegebenen URLs konnten nicht verarbeitet werden.\n"
+                "Bitte versuchen Sie es erneut mit anderen.",
                 "url_results": results,
             }
 

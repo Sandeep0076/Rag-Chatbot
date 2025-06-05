@@ -886,7 +886,10 @@ class FileHandler:
                 return {
                     "file_id": None,
                     "status": "error",
-                    "message": f"Content from URL {url} is not substantive enough (only {word_count} words)",
+                    "message": (
+                        f"Die Verarbeitung von {url} ist fehlgeschlagen. "
+                        "Bitte versuchen Sie es erneut mit einer anderen Domain/einer anderen URL."
+                    ),
                     "is_image": False,
                     "is_tabular": False,
                     "url": url,
@@ -1021,123 +1024,146 @@ class FileHandler:
                 "temp_file_path": None,
             }
 
+    # Helper methods for process_urls
+    def _parse_url_list(self, urls_text: str) -> list[str]:
+        """Parses a string of URLs (separated by newlines or commas) into a list."""
+        if "\n" in urls_text:
+            url_list = [url.strip() for url in urls_text.split("\n") if url.strip()]
+        else:
+            url_list = [url.strip() for url in urls_text.split(",") if url.strip()]
+        return url_list
+
+    def _cleanup_temp_files_from_results(self, results: list[dict]):
+        """Cleans up temporary files from a list of URL processing results."""
+        for result_item in results:
+            if result_item.get("status") in ["success", "existing"] and result_item.get(
+                "temp_file_path"
+            ):
+                temp_path = result_item.get("temp_file_path")
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                        logging.info(
+                            f"Cleaned up temporary file {temp_path} after batch processing event"
+                        )
+                    except Exception as cleanup_error:
+                        logging.error(
+                            f"Failed to clean up temporary file {temp_path}: {str(cleanup_error)}"
+                        )
+
+    def _handle_batch_error(
+        self, failed_url: str, error_message: str, current_results: list[dict]
+    ) -> dict:
+        """Handles errors during batch URL processing, cleans up, and returns error response."""
+        logging.warning(
+            f"Failing entire URL batch due to error with URL {failed_url}: {error_message}"
+        )
+        self._cleanup_temp_files_from_results(current_results)
+        return {
+            "status": "error",
+            "message": error_message,
+            "url_results": current_results,
+            "is_image": False,
+            "is_tabular": False,
+        }
+
+    def _prepare_success_response(
+        self, url_list: list[str], file_ids: list[str], results: list[dict]
+    ) -> dict:
+        """Constructs the success response for process_urls."""
+        # Optional: self._cleanup_temp_files_from_results(results) # If cleanup on success is also desired
+        return {
+            "status": "success",
+            "message": f"Processed all {len(url_list)} URLs successfully",
+            "file_id": file_ids[0] if file_ids else None,  # For backward compatibility
+            "file_ids": file_ids,  # All file IDs for multi-document chat
+            "url_results": results,
+            "is_image": False,
+            "is_tabular": False,
+            "original_filename": "url_content.txt",
+            "multi_file_mode": len(file_ids) > 1,
+        }
+
     async def process_urls(
         self, urls_text, username, temp_file_id, background_tasks, embedding_handler
     ):
         """Process multiple URLs and extract content from each individually.
 
-        Args:
-            urls_text: Text containing URLs separated by commas or newlines
-            username: The username for this request
-            temp_file_id: A temporary ID (not used with individual processing)
-            background_tasks: FastAPI BackgroundTasks for async operations
-            embedding_handler: Handler for creating embeddings
+        {{ ... }}
+                    embedding_handler: Handler for creating embeddings
 
-        Returns:
-            Dict containing status and results for all URLs
+                Returns:
+                    Dict containing status and results for all URLs
         """
+        logging.info(f"Parsing URL input: {urls_text[:100]}...")
+        url_list = self._parse_url_list(urls_text)
+
+        if not url_list:
+            logging.warning("No valid URLs were provided in the input")
+            return {"status": "error", "message": "No valid URLs provided"}
+
+        logging.info(
+            f"Processing {len(url_list)} URLs individually: {', '.join(url_list)}"
+        )
+
+        results = []
+        file_ids = []
+
         try:
-            # Parse the URL list
-            logging.info(f"Parsing URL input: {urls_text[:100]}...")
-
-            if "\n" in urls_text:
-                # Split by newlines if they exist
-                url_list = [url.strip() for url in urls_text.split("\n") if url.strip()]
-            else:
-                # Otherwise split by commas
-                url_list = [url.strip() for url in urls_text.split(",") if url.strip()]
-
-            if not url_list:
-                logging.warning("No valid URLs were provided in the input")
-                return {"status": "error", "message": "No valid URLs provided"}
-
-            logging.info(
-                f"Processing {len(url_list)} URLs individually: {', '.join(url_list)}"
-            )
-
-            # Process each URL individually - if one fails, continue with others
-            results = []
             for url in url_list:
+                logging.info(f"Processing URL: {url}")
                 try:
-                    logging.info(f"Processing URL: {url}")
                     result = await self.process_single_url(
                         url, username, background_tasks, embedding_handler
                     )
                     results.append(result)
                     logging.info(f"URL processing result for {url}: {result['status']}")
+
+                    if result["status"] == "error":
+                        error_message = result.get(
+                            "message", f"Failed to process URL: {url}"
+                        )
+                        return self._handle_batch_error(url, error_message, results)
+
+                    if result.get("status") in ["success", "existing"] and result.get(
+                        "file_id"
+                    ):
+                        file_ids.append(result["file_id"])
+
                 except Exception as url_error:
-                    # Log error but continue processing other URLs
                     logging.error(
                         f"Error processing individual URL {url}: {str(url_error)}"
                     )
-                    results.append(
-                        {
-                            "file_id": None,
-                            "status": "error",
-                            "message": f"Error processing URL: {str(url_error)}",
-                            "url": url,
-                            "is_image": False,
-                            "is_tabular": False,
-                            "temp_file_path": None,
-                        }
+                    # Create an error result for the specific URL that failed
+                    error_result_for_current_url = {
+                        "file_id": None,
+                        "status": "error",
+                        "message": f"Error processing URL: {str(url_error)}",
+                        "url": url,
+                        "is_image": False,
+                        "is_tabular": False,
+                        "temp_file_path": None,
+                    }
+                    results.append(error_result_for_current_url)
+                    return self._handle_batch_error(
+                        url, f"Error processing URL {url}: {str(url_error)}", results
                     )
 
-            # Get successful URLs
-            successful_urls = [
-                r
-                for r in results
-                if r.get("status") == "success" or r.get("status") == "existing"
-            ]
-            logging.info(
-                f"Successfully processed {len(successful_urls)} out of {len(url_list)} URLs"
-            )
-
-            # Return a summary response
-            if not successful_urls:
-                logging.warning(
-                    "Could not process any of the provided URLs successfully"
-                )
-                return {
-                    "status": "error",
-                    "message": "Could not process any of the provided URLs successfully",
-                    "url_results": results,
-                }
-
-            # Return successful results
-            file_ids = [r["file_id"] for r in successful_urls if r.get("file_id")]
-
-            # Set the primary file_id for backward compatibility with the response model
-            # and add all file_ids to a separate field for multi-file chat
-            response = {
-                "status": "success",
-                "message": f"Processed {len(successful_urls)} of {len(url_list)} URLs successfully",
-                "file_id": file_ids[0]
-                if file_ids
-                else None,  # For backward compatibility
-                "file_ids": file_ids,  # All file IDs for multi-document chat
-                "url_results": results,
-                # Add required fields for the response model
-                "is_image": False,
-                "is_tabular": False,
-                "original_filename": "url_content.txt",
-                # Use the same multi_file_mode flag that's used for PDF processing
-                "multi_file_mode": len(file_ids)
-                > 1,  # Flag to enable multi-file mode in Streamlit
-            }
-
-            logging.info(f"URL processing complete, returning file_ids: {file_ids}")
-            if len(file_ids) > 1:
-                logging.info(
-                    f"Multiple documents processed. Primary file_id: {file_ids[0]}"
-                )
-            return response
+            # If loop completes, all URLs were processed successfully
+            return self._prepare_success_response(url_list, file_ids, results)
 
         except Exception as e:
-            logging.error(f"Unexpected error in process_urls: {str(e)}")
-            import traceback
-
-            logging.error(f"Traceback: {traceback.format_exc()}")
-            return {"status": "error", "message": f"Error processing URLs: {str(e)}"}
+            # This outer try-except catches unexpected errors not tied to a specific URL processing step
+            logging.error(f"Unexpected error in process_urls batch operation: {str(e)}")
+            # Attempt cleanup if results list exists
+            if "results" in locals():
+                self._cleanup_temp_files_from_results(results)
+            return {
+                "status": "error",
+                "message": f"An unexpected error occurred during batch URL processing: {str(e)}",
+                "is_image": False,
+                "is_tabular": False,
+            }
 
     async def cleanup_temp_files(self, temp_file_paths):
         """Clean up temporary files after processing.
