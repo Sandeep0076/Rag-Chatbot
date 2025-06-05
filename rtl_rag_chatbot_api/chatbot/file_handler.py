@@ -3,18 +3,17 @@ import hashlib
 import logging
 import os
 import shutil
+import uuid
 
 import aiofiles
 from fastapi import UploadFile
 
-from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
-from rtl_rag_chatbot_api.common.prompts_storage import BOILERPLATE_PROMPT
 
 
 class FileHandler:
@@ -829,221 +828,350 @@ class FileHandler:
             self.gcs_handler.find_existing_file_by_hash, file_hash
         )
 
-    async def process_urls(
-        self,
-        urls: str,
-        username: str,
-        temp_file_id: str,
-        background_tasks,
-        embedding_handler=None,
-    ):
-        """
-        Process URLs from the input and create embeddings from their content.
+    async def process_single_url(
+        self, url: str, username: str, background_tasks, embedding_handler
+    ) -> dict:
+        """Process a single URL and create embeddings for it.
 
         Args:
-            urls (str): The URLs to process, separated by commas or newlines
-            username (str): The username of the user uploading the URLs
-            temp_file_id (str): A temporary file ID for the URL content
-            background_tasks: Background tasks queue for async processing
-            embedding_handler: Optional embedding handler instance
+            url: The URL to process
+            username: The username for this request
+            background_tasks: FastAPI BackgroundTasks for async operations
+            embedding_handler: Handler for creating embeddings
 
         Returns:
-            dict: Dictionary containing file_id, status, and other metadata
+            Dict containing file_id and status information
         """
+        # Generate a unique ID for this URL
+        url_file_id = str(uuid.uuid4())
+        file_name = f"{url_file_id}_url_content.txt"
+        temp_file_path = f"local_data/{file_name}"
+        os.makedirs(os.path.dirname(temp_file_path), exist_ok=True)
+
+        # Import website handler here to avoid circular imports
         from rtl_rag_chatbot_api.chatbot.website_handler import WebsiteHandler
 
-        # Handle both comma and newline separated URLs
-        urls_normalized = urls.replace("\n", ",")
-        url_list = [url.strip() for url in urls_normalized.split(",") if url.strip()]
-
-        if not url_list:
-            from fastapi import HTTPException
-
-            raise HTTPException(status_code=400, detail="No valid URLs provided")
-
-        # We'll calculate the hash after content extraction
-        extracted_content = []
-        existing_file_id = None
-
-        # Process the URLs and save content to a text file
         website_handler = WebsiteHandler()
 
-        # Create directory if it doesn't exist
-        os.makedirs("local_data", exist_ok=True)
+        try:
+            logging.info(
+                f"Starting process_single_url for {url} with file_id {url_file_id}"
+            )
 
-        # Create a text file to store the extracted content
-        temp_file_path = f"local_data/{temp_file_id}_url_content.txt"
-
-        with open(temp_file_path, "w", encoding="utf-8") as f:
-            for i, url in enumerate(url_list):
-                # Add header for this URL with clear separation
-                f.write(f"This text is extracted from URL -- {url}\n\n")
-
-                # Helper function to count words in text
-                def count_words(text):
-                    if not text:
-                        return 0
-                    # Split by whitespace and count non-empty words
-                    words = [word for word in text.split() if word.strip()]
-                    return len(words)
-
-                # Extract content from the URL
-                try:
-                    documents = website_handler.get_vectorstore_from_url(url)
-
-                    # Check if we have valid content
-                    if documents and len(documents) > 0:
-                        content = documents[0].page_content
-                        word_count = count_words(content)
-
-                        # If word count is less than 150, use BOILERPLATE_PROMPT to verify content quality
-                        if word_count < 150:
-                            extraction_result = get_azure_non_rag_response(
-                                self.configs, BOILERPLATE_PROMPT
-                            )
-                            is_substantive = extraction_result == "True"
-                        else:
-                            # If we have more than 150 words, assume it's substantive content
-                            is_substantive = True
-
-                        if is_substantive:
-                            # Write the content to the file
-                            content = documents[0].page_content
-                            extracted_content.append(content)
-                            f.write(content)
-                            f.write(f"\n\nWord count: {word_count} words")
-                        else:
-                            # If content is not substantive, write an error message to the file
-                            # but continue processing other URLs if there are any
-                            error_msg = (
-                                f"Error: Content from {url} appears to be boilerplate "
-                                f"or insufficient (Word count: {word_count})"
-                            )
-                            f.write(error_msg)
-
-                            # If this is the only URL, return an error immediately
-                            if len(url_list) == 1:
-                                return {
-                                    "file_id": temp_file_id,
-                                    "status": "error",
-                                    "message": "The website is not allowing to extract sufficient text, "
-                                    "please try another website.",
-                                    "is_image": False,
-                                    "is_tabular": False,
-                                    "original_filename": "url_content.txt",
-                                    "temp_file_path": temp_file_path,
-                                }
-                    else:
-                        f.write(f"Error: Could not extract content from {url}")
-                        return {
-                            "file_id": temp_file_id,
-                            "status": "error",
-                            "message": "The website is not allowing to extract text, please try another website.",
-                            "is_image": False,
-                            "is_tabular": False,
-                            "original_filename": "url_content.txt",
-                            "temp_file_path": temp_file_path,
-                        }
-                except Exception as e:
-                    f.write(f"Error extracting content from {url}: {str(e)}")
-
-                # Add footer for this URL
-                f.write(f"\n\nText extraction for the website {url} finished\n\n")
-
-                # Add separator between URLs, but not after the last one
-                if i < len(url_list) - 1:
-                    f.write("-" * 80 + "\n\n")
-
-        # Check if the file contains any actual content or just error messages
-        with open(temp_file_path, "r", encoding="utf-8") as check_file:
-            file_content = check_file.read()
-            # Check if the file contains any substantive content or only error messages
-            if all(
-                f"Error: Content from {url}" in file_content for url in url_list
-            ) or all(
-                f"Error: Could not extract content from {url}" in file_content
-                for url in url_list
-            ):
-                # All URLs failed to extract substantive content
-                website_handler.cleanup()
-                # Clean up the temporary file
-                if os.path.exists(temp_file_path):
-                    os.remove(temp_file_path)
+            # Extract content from the URL
+            (
+                content,
+                title,
+                is_successful,
+            ) = website_handler.extract_content_from_single_url(url)
+            if not is_successful or not content:
+                logging.warning(f"Failed to extract content from URL: {url}")
                 return {
-                    "file_id": temp_file_id,
+                    "file_id": None,
                     "status": "error",
-                    "message": "Could not extract sufficient content from any of the "
-                    "provided URLs. Please try different URLs.",
+                    "message": f"Could not extract content from URL: {url}",
                     "is_image": False,
                     "is_tabular": False,
-                    "original_filename": "url_content.txt",
+                    "url": url,
                     "temp_file_path": None,
                 }
 
-        # Calculate hash based on all extracted content
-        combined_content = "\n".join(extracted_content).encode("utf-8")
-        content_hash = self.calculate_file_hash(combined_content)
-
-        # Check if we've already processed this content
-        existing_file_id = await self.find_existing_file_by_hash_async(content_hash)
-
-        # If we found existing content with the same hash, reuse it
-        if existing_file_id:
+            # Check content quality
+            is_substantive, word_count = website_handler.check_content_quality(content)
             logging.info(
-                f"Found existing content with ID {existing_file_id}, reusing it"
+                f"Content quality check for {url}: substantive={is_substantive}, word_count={word_count}"
             )
-            # Update the file info with the new username
-            self.gcs_handler.update_file_info(existing_file_id, {"username": username})
-            # Clean up the temporary file
+
+            if not is_substantive:
+                return {
+                    "file_id": None,
+                    "status": "error",
+                    "message": f"Content from URL {url} is not substantive enough (only {word_count} words)",
+                    "is_image": False,
+                    "is_tabular": False,
+                    "url": url,
+                    "temp_file_path": None,
+                }
+
+            try:
+                # Write content to file
+                logging.info(f"Writing content to temporary file: {temp_file_path}")
+                async with aiofiles.open(temp_file_path, "w", encoding="utf-8") as f:
+                    await f.write(content)
+
+                # Calculate hash and check existing embeddings
+                content_hash = self.calculate_file_hash(content.encode("utf-8"))
+                logging.info(f"Calculated hash for {url}: {content_hash[:16]}...")
+
+                existing_file_id = await self.find_existing_file_by_hash_async(
+                    content_hash
+                )
+
+                if existing_file_id:
+                    logging.info(
+                        f"Found existing content with ID {existing_file_id} for URL {url}, reusing it"
+                    )
+                    # Update the file info with the new username
+                    self.gcs_handler.update_file_info(
+                        existing_file_id, {"username": username}
+                    )
+                    # Clean up the temporary file
+                    if os.path.exists(temp_file_path):
+                        os.remove(temp_file_path)
+                        logging.info(
+                            f"Removed temporary file {temp_file_path} as content already exists"
+                        )
+                    return {
+                        "file_id": existing_file_id,
+                        "status": "existing",
+                        "message": f"Content from URL {url} already processed, reusing existing file",
+                        "is_image": False,
+                        "is_tabular": False,
+                        "url": url,
+                        "temp_file_path": None,
+                    }
+
+                # Create metadata for the file
+                metadata = {
+                    "file_hash": content_hash,
+                    "original_filename": title if title else "url_content.txt",
+                    "username": [username],
+                    "is_url": True,
+                    "url": url,
+                    "word_count": word_count,
+                    "file_id": url_file_id,
+                }
+
+                # Save metadata
+                logging.info(
+                    f"Saving metadata for URL {url} with file_id {url_file_id}"
+                )
+                # Set temp_metadata for embedding creation process
+                self.gcs_handler.temp_metadata = metadata
+                # Also update file info for persistence
+                self.gcs_handler.update_file_info(url_file_id, metadata)
+
+                # Import here to avoid circular imports
+                from rtl_rag_chatbot_api.app import (
+                    SessionLocal,
+                    create_embeddings_background,
+                )
+
+                # Schedule embedding creation
+                logging.info(
+                    f"Scheduling embedding creation for URL {url} with file_id {url_file_id}"
+                )
+                background_tasks.add_task(
+                    create_embeddings_background,
+                    url_file_id,
+                    temp_file_path,
+                    embedding_handler,
+                    self.configs,
+                    SessionLocal,
+                    [username],
+                )
+
+                return {
+                    "file_id": url_file_id,
+                    "status": "success",
+                    "message": f"URL {url} processed successfully",
+                    "is_image": False,
+                    "is_tabular": False,
+                    "url": url,
+                    "temp_file_path": temp_file_path,
+                    "word_count": word_count,
+                    "title": title,
+                }
+            except Exception as file_error:
+                logging.error(
+                    f"Error during file operations for URL {url}: {str(file_error)}"
+                )
+                # Clean up temp file if it exists
+                if os.path.exists(temp_file_path):
+                    try:
+                        os.remove(temp_file_path)
+                        logging.info(
+                            f"Cleaned up temporary file {temp_file_path} after error"
+                        )
+                    except Exception as cleanup_error:
+                        logging.error(
+                            f"Failed to clean up temporary file {temp_file_path}: {str(cleanup_error)}"
+                        )
+
+                raise file_error  # Re-raise to be caught by the outer exception handler
+
+        except Exception as e:
+            logging.error(f"Error processing URL {url}: {str(e)}")
+            import traceback
+
+            logging.error(f"Traceback for URL {url}: {traceback.format_exc()}")
+            # Clean up temp file if it exists
             if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+                try:
+                    os.remove(temp_file_path)
+                except Exception:
+                    pass  # Already logging the main error, don't obscure it
             return {
-                "file_id": existing_file_id,
-                "status": "existing",
-                "message": "Content already processed, reusing existing file",
+                "file_id": None,
+                "status": "error",
+                "message": f"Error processing URL {url}: {str(e)}",
                 "is_image": False,
                 "is_tabular": False,
-                "is_url": True,
-                "original_filename": "url_content.txt",
+                "url": url,
                 "temp_file_path": None,
             }
 
-        # Create metadata for the file
-        metadata = {
-            "file_hash": content_hash,
-            "original_filename": "url_content.txt",
-            "username": [username],
-            "is_url": True,
-            "urls": url_list,
-            "file_id": temp_file_id,
-        }
+    async def process_urls(
+        self, urls_text, username, temp_file_id, background_tasks, embedding_handler
+    ):
+        """Process multiple URLs and extract content from each individually.
 
-        # Save metadata
-        self.gcs_handler.temp_metadata = metadata
+        Args:
+            urls_text: Text containing URLs separated by commas or newlines
+            username: The username for this request
+            temp_file_id: A temporary ID (not used with individual processing)
+            background_tasks: FastAPI BackgroundTasks for async operations
+            embedding_handler: Handler for creating embeddings
 
-        # Import here to avoid circular imports
-        from rtl_rag_chatbot_api.app import SessionLocal, create_embeddings_background
+        Returns:
+            Dict containing status and results for all URLs
+        """
+        try:
+            # Parse the URL list
+            logging.info(f"Parsing URL input: {urls_text[:100]}...")
 
-        # Schedule background task to create embeddings
-        background_tasks.add_task(
-            create_embeddings_background,
-            temp_file_id,
-            temp_file_path,
-            embedding_handler,  # Use the embedding_handler passed as parameter
-            self.configs,
-            SessionLocal,
-            [username],
-        )
+            if "\n" in urls_text:
+                # Split by newlines if they exist
+                url_list = [url.strip() for url in urls_text.split("\n") if url.strip()]
+            else:
+                # Otherwise split by commas
+                url_list = [url.strip() for url in urls_text.split(",") if url.strip()]
 
-        # Clean up the website handler
-        website_handler.cleanup()
+            if not url_list:
+                logging.warning("No valid URLs were provided in the input")
+                return {"status": "error", "message": "No valid URLs provided"}
 
-        return {
-            "file_id": temp_file_id,
-            "status": "success",
-            "message": "URLs processed successfully",
-            "is_image": False,
-            "is_tabular": False,
-            "original_filename": "url_content.txt",
-            "temp_file_path": temp_file_path,
-        }
+            logging.info(
+                f"Processing {len(url_list)} URLs individually: {', '.join(url_list)}"
+            )
+
+            # Process each URL individually - if one fails, continue with others
+            results = []
+            for url in url_list:
+                try:
+                    logging.info(f"Processing URL: {url}")
+                    result = await self.process_single_url(
+                        url, username, background_tasks, embedding_handler
+                    )
+                    results.append(result)
+                    logging.info(f"URL processing result for {url}: {result['status']}")
+                except Exception as url_error:
+                    # Log error but continue processing other URLs
+                    logging.error(
+                        f"Error processing individual URL {url}: {str(url_error)}"
+                    )
+                    results.append(
+                        {
+                            "file_id": None,
+                            "status": "error",
+                            "message": f"Error processing URL: {str(url_error)}",
+                            "url": url,
+                            "is_image": False,
+                            "is_tabular": False,
+                            "temp_file_path": None,
+                        }
+                    )
+
+            # Get successful URLs
+            successful_urls = [
+                r
+                for r in results
+                if r.get("status") == "success" or r.get("status") == "existing"
+            ]
+            logging.info(
+                f"Successfully processed {len(successful_urls)} out of {len(url_list)} URLs"
+            )
+
+            # Return a summary response
+            if not successful_urls:
+                logging.warning(
+                    "Could not process any of the provided URLs successfully"
+                )
+                return {
+                    "status": "error",
+                    "message": "Could not process any of the provided URLs successfully",
+                    "url_results": results,
+                }
+
+            # Return successful results
+            file_ids = [r["file_id"] for r in successful_urls if r.get("file_id")]
+
+            # Set the primary file_id for backward compatibility with the response model
+            # and add all file_ids to a separate field for multi-file chat
+            response = {
+                "status": "success",
+                "message": f"Processed {len(successful_urls)} of {len(url_list)} URLs successfully",
+                "file_id": file_ids[0]
+                if file_ids
+                else None,  # For backward compatibility
+                "file_ids": file_ids,  # All file IDs for multi-document chat
+                "url_results": results,
+                # Add required fields for the response model
+                "is_image": False,
+                "is_tabular": False,
+                "original_filename": "url_content.txt",
+                # Use the same multi_file_mode flag that's used for PDF processing
+                "multi_file_mode": len(file_ids)
+                > 1,  # Flag to enable multi-file mode in Streamlit
+            }
+
+            logging.info(f"URL processing complete, returning file_ids: {file_ids}")
+            if len(file_ids) > 1:
+                logging.info(
+                    f"Multiple documents processed. Primary file_id: {file_ids[0]}"
+                )
+            return response
+
+        except Exception as e:
+            logging.error(f"Unexpected error in process_urls: {str(e)}")
+            import traceback
+
+            logging.error(f"Traceback: {traceback.format_exc()}")
+            return {"status": "error", "message": f"Error processing URLs: {str(e)}"}
+
+    async def cleanup_temp_files(self, temp_file_paths):
+        """Clean up temporary files after processing.
+
+        Args:
+            temp_file_paths: A list of temporary file paths to clean up
+
+        Returns:
+            None
+        """
+        for path in temp_file_paths:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                    logging.info(f"Cleaned up temporary file: {path}")
+                except Exception as e:
+                    logging.error(f"Error cleaning up temporary file {path}: {str(e)}")
+
+    def get_file_type(self, file_name):
+        """Determine the file type from the file name.
+
+        Args:
+            file_name: Name of the file to check
+
+        Returns:
+            str: The file type ('pdf', 'image', 'tabular', etc.)
+        """
+        ext = os.path.splitext(file_name)[1].lower()
+
+        if ext in [".pdf"]:
+            return "pdf"
+        elif ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp"]:
+            return "image"
+        elif ext in [".csv", ".xlsx", ".xls", ".db", ".sqlite"]:
+            return "tabular"
+        else:
+            return "other"

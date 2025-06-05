@@ -426,10 +426,9 @@ def handle_url_processing(url_input):
         return
 
     with st.spinner("Processing URLs..."):
-        # Use the existing file upload endpoint with is_url=True
         data = {
             "username": st.session_state.username,
-            "is_url": "true",
+            "is_url": "true",  # Maintained for now, though backend might not strictly need it
             "urls": url_input,
         }
 
@@ -437,14 +436,77 @@ def handle_url_processing(url_input):
 
         if upload_response.status_code == 200:
             upload_result = upload_response.json()
-            file_id = upload_result["file_id"]
-            st.session_state.file_id = file_id
+            logging.info(f"Received upload_result: {upload_result}")
+            if "multi_file_mode" in upload_result:
+                logging.info(
+                    f"upload_result['multi_file_mode'] value: {upload_result['multi_file_mode']},"
+                    f" type: {type(upload_result['multi_file_mode'])}"
+                )
+            else:
+                logging.info("upload_result does not contain 'multi_file_mode'")
+            if "file_ids" in upload_result:
+                logging.info(
+                    f"upload_result['file_ids'] value: {upload_result['file_ids']},\n"
+                    f"type: {type(upload_result['file_ids'])}"
+                )
+            else:
+                logging.info("upload_result does not contain 'file_ids'")
+
+            # Prioritize multi_file_mode if explicitly set to True by the backend
+            if upload_result.get("multi_file_mode") is True:  # Explicit check for True
+                if (
+                    isinstance(upload_result.get("file_ids"), list)
+                    and upload_result["file_ids"]
+                ):
+                    # Multi-URL processing successful
+                    st.session_state.multi_file_mode = True
+                    st.session_state.file_ids = list(upload_result["file_ids"])
+                    st.session_state.file_id = st.session_state.file_ids[0]
+                    logging.info(
+                        f"Multi-URL mode (explicit). st.session_state.file_ids set to: {st.session_state.file_ids}"
+                    )
+                    st.success(
+                        f"Processed {len(st.session_state.file_ids)} URLs successfully. Ready for multi-document chat."
+                    )
+                else:
+                    # multi_file_mode was true, but file_ids was missing or empty - treat as error or single
+                    logging.warning(
+                        "multi_file_mode is True but file_ids is invalid. Falling back."
+                    )
+                    if "file_id" in upload_result and upload_result["file_id"]:
+                        st.session_state.multi_file_mode = False
+                        st.session_state.file_id = upload_result["file_id"]
+                        st.session_state.file_ids = [upload_result["file_id"]]
+                        logging.info(
+                            f"Single-URL mode (fallback from multi).\n"
+                            f"st.session_state.file_ids set to: {st.session_state.file_ids}"
+                        )
+                        st.success("URL processed successfully (fallback).")
+                    else:
+                        st.error(
+                            "Error processing URLs: multi_file_mode True but no valid file_ids or file_id."
+                        )
+                        return
+            elif (
+                "file_id" in upload_result and upload_result["file_id"]
+            ):  # Check this only if multi_file_mode was not explicitly True
+                # Single URL processing successful
+                st.session_state.multi_file_mode = False
+                st.session_state.file_id = upload_result["file_id"]
+                st.session_state.file_ids = [upload_result["file_id"]]
+                logging.info(
+                    f"Single-URL mode (explicit). st.session_state.file_ids set to: {st.session_state.file_ids}"
+                )
+                st.success("URL processed successfully and ready for chat.")
+            else:
+                # Fallback or error in response structure
+                st.error(
+                    "Error processing URLs: Response format incorrect or no file IDs found."
+                )
+                return
+
             st.session_state.file_uploaded = True
-
-            st.success("URLs processed successfully and ready for chat.")
-
-            # Reset messages when new URLs are processed
-            st.session_state.messages = []
+            st.session_state.messages = []  # Reset chat history
         else:
             st.error(f"URL processing failed: {upload_response.text}")
 
@@ -725,6 +787,14 @@ def display_chat_interface():
                     for msg in st.session_state.messages[-5:]  # Get last 5 messages
                     if msg["role"] == "user"  # Only including user messages
                 ]
+
+                # Log current state before constructing payload
+                logging.info(
+                    "Preparing chat payload. Current state: "
+                    f"multi_file_mode={st.session_state.get('multi_file_mode')}, "
+                    f"file_id={st.session_state.get('file_id')}, "
+                    f"file_ids={st.session_state.get('file_ids')}"
+                )
 
                 # Prepare chat payload based on mode (single or multi-file)
                 chat_payload = {
@@ -1130,7 +1200,7 @@ def process_url_input(url_input):
     with st.spinner("Processing URLs..."):
         data = {
             "username": st.session_state.username,
-            "is_url": "true",
+            "is_url": "true",  # Maintained for now
             "urls": url_input,
         }
 
@@ -1138,12 +1208,77 @@ def process_url_input(url_input):
 
         if upload_response.status_code == 200:
             upload_result = upload_response.json()
-            file_id = upload_result["file_id"]
-            st.session_state.file_id = file_id
-            st.session_state.file_uploaded = True
+            logging.info(f"Received upload_result: {upload_result}")
+            if "multi_file_mode" in upload_result:
+                logging.info(
+                    f"upload_result['multi_file_mode'] value: {upload_result['multi_file_mode']},\n"
+                    f"type: {type(upload_result['multi_file_mode'])}"
+                )
+            else:
+                logging.info("upload_result does not contain 'multi_file_mode'")
+            if "file_ids" in upload_result:
+                logging.info(
+                    f"upload_result['file_ids'] value: {upload_result['file_ids']},\n"
+                    f"type: {type(upload_result['file_ids'])}"
+                )
+            else:
+                logging.info("upload_result does not contain 'file_ids'")
 
-            st.success("URLs processed successfully and ready for chat.")
-            st.session_state.messages = []
+            # Prioritize multi_file_mode if explicitly set to True by the backend
+            if upload_result.get("multi_file_mode") is True:  # Explicit check for True
+                if (
+                    isinstance(upload_result.get("file_ids"), list)
+                    and upload_result["file_ids"]
+                ):
+                    # Multi-URL processing successful
+                    st.session_state.multi_file_mode = True
+                    st.session_state.file_ids = list(upload_result["file_ids"])
+                    st.session_state.file_id = st.session_state.file_ids[0]
+                    logging.info(
+                        f"Multi-URL mode (explicit). st.session_state.file_ids set to: {st.session_state.file_ids}"
+                    )
+                    st.success(
+                        f"Processed {len(st.session_state.file_ids)} URLs successfully. Ready for multi-document chat."
+                    )
+                else:
+                    # multi_file_mode was true, but file_ids was missing or empty
+                    logging.warning(
+                        "multi_file_mode is True but file_ids is invalid. Falling back."
+                    )
+                    if "file_id" in upload_result and upload_result["file_id"]:
+                        st.session_state.multi_file_mode = False
+                        st.session_state.file_id = upload_result["file_id"]
+                        st.session_state.file_ids = [upload_result["file_id"]]
+                        logging.info(
+                            f"Single-URL mode (fallback from multi).\n"
+                            f"st.session_state.file_ids set to: {st.session_state.file_ids}"
+                        )
+                        st.success("URL processed successfully (fallback).")
+                    else:
+                        st.error(
+                            "Error processing URLs: multi_file_mode True but no valid file_ids or file_id."
+                        )
+                        return
+            elif (
+                "file_id" in upload_result and upload_result["file_id"]
+            ):  # Check this only if multi_file_mode was not explicitly True
+                # Single URL processing successful
+                st.session_state.multi_file_mode = False
+                st.session_state.file_id = upload_result["file_id"]
+                st.session_state.file_ids = [upload_result["file_id"]]
+                logging.info(
+                    f"Single-URL mode (explicit). st.session_state.file_ids set to: {st.session_state.file_ids}"
+                )
+                st.success("URL processed successfully and ready for chat.")
+            else:
+                # Fallback or error in response structure
+                st.error(
+                    "Error processing URLs: Response format incorrect or no file IDs found."
+                )
+                return
+
+            st.session_state.file_uploaded = True
+            st.session_state.messages = []  # Reset chat history
         else:
             st.error(f"URL processing failed: {upload_response.text}")
 

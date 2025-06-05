@@ -263,7 +263,42 @@ async def upload_file(
                     detail=url_result.get("message", "Error processing URLs"),
                 )
 
-            return url_result
+            # Format the response for multiple file IDs
+            if "file_ids" in url_result:
+                logging.info(
+                    f"Successfully processed {len(url_result['file_ids'])} URLs"
+                )
+                # Maintain backward compatibility by including file_id in response if possible
+                if url_result["file_ids"]:
+                    url_result["file_id"] = url_result["file_ids"][0]
+
+                # Ensure multi_file_mode is set if multiple files
+                if len(url_result["file_ids"]) > 1:
+                    url_result["multi_file_mode"] = True
+                    logging.info(
+                        f"Setting multi_file_mode to TRUE, file_ids: {url_result['file_ids']}"
+                    )
+
+            # Create a proper response object to ensure all fields are included
+            response_data = {
+                "file_id": url_result.get("file_id"),
+                "file_ids": url_result.get("file_ids", []),
+                "multi_file_mode": url_result.get("multi_file_mode", False),
+                "message": url_result.get("message", ""),
+                "status": url_result.get("status", ""),
+                "original_filename": url_result.get(
+                    "original_filename", "url_content.txt"
+                ),
+                "is_image": url_result.get("is_image", False),
+                "is_tabular": url_result.get("is_tabular", False),
+                "temp_file_path": url_result.get("temp_file_path"),
+            }
+
+            logging.info(
+                f"Returning URL processing response: file_ids={response_data['file_ids']}, "
+                f"multi_file_mode={response_data['multi_file_mode']}"
+            )
+            return JSONResponse(content=response_data)
 
         # Handle regular file upload
         if not file:
