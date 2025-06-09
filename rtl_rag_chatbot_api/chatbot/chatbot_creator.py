@@ -171,7 +171,7 @@ class AzureChatbot(BaseRAGHandler):
                         original_filename = file_info.get(
                             "original_filename", f"Unknown filename (ID: {file_id})"
                         )
-                        file_details.append(f"- {original_filename} (ID: {file_id})")
+                        file_details.append(f"- {original_filename}")
 
                 if file_details:
                     files_context = (
