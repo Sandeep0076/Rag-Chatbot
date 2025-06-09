@@ -562,7 +562,12 @@ def display_uploaded_files_list():
 
 
 def process_selected_files(uploaded_files, is_image):
-    """Process uploaded files that haven't been processed yet."""
+    logging.info(
+        f"[process_selected_files] Received {len(uploaded_files) if uploaded_files else 0} files from st.file_uploader."
+    )
+    """Process uploaded files that haven't been processed yet.
+    Now batches multiple files in a single request for parallel processing.
+    """
     if not st.session_state.username:
         st.error("Username is required. Please enter a username above.")
         return
@@ -570,12 +575,9 @@ def process_selected_files(uploaded_files, is_image):
     # Reset messages when new files are uploaded
     st.session_state.messages = []
 
-    # Process each uploaded file from the list that hasn't been processed yet
-    processed_a_file_this_run = False
-    for (
-        uploaded_file_obj
-    ) in uploaded_files:  # uploaded_files is st.session_state.uploaded_files_list
-        # Skip if already processed and its ID is in file_ids
+    # Filter out already processed files
+    files_to_process = []
+    for uploaded_file_obj in uploaded_files:
         if uploaded_file_obj.name in st.session_state.get("processed_file_map", {}):
             file_id_check = st.session_state["processed_file_map"][
                 uploaded_file_obj.name
@@ -585,18 +587,209 @@ def process_selected_files(uploaded_files, is_image):
                     f"Skipping already processed file: {uploaded_file_obj.name} (ID: {file_id_check})"
                 )
                 continue
+        files_to_process.append(uploaded_file_obj)
 
-        with st.spinner(f"Uploading and processing {uploaded_file_obj.name}..."):
-            processed_a_file_this_run = (
-                process_single_file(uploaded_file_obj, is_image)
-                or processed_a_file_this_run
+    if not files_to_process:
+        st.info("All files in the list are already processed and ready for chat.")
+        return
+
+    # Process files in a single batch request (even for single files)
+    logging.info(
+        "[process_selected_files] Number of files in files_to_process: "
+        f"{len(files_to_process)} before calling process_multiple_files."
+    )
+    if len(files_to_process) > 0:
+        with st.spinner(
+            f"Uploading and processing {len(files_to_process)} files in parallel..."
+        ):
+            # Always use the batch processing method for all files
+            # This ensures we use the multi-file upload endpoint even for single files
+            process_multiple_files(files_to_process, is_image)
+
+        st.success(
+            f"{len(files_to_process)} files have been processed and are ready for chat!"
+        )
+
+
+def process_multiple_files(uploaded_files, is_image):
+    logging.info(
+        f"[process_multiple_files] Received {len(uploaded_files)} files as parameter."
+    )
+    """Process multiple files in a single batch request for parallel processing."""
+    logging.info(f"Processing {len(uploaded_files)} files in parallel batch")
+
+    # FIXED: Always use 'files' parameter for batch processing, regardless of file count
+    # Create proper format for sending multiple files to FastAPI - always as a list of tuples with 'files' key
+    files_for_request = []
+
+    # Always format as a list of tuples with 'files' parameter for proper batch processing
+    for file_obj in uploaded_files:
+        files_for_request.append(
+            ("files", (file_obj.name, file_obj.getvalue(), file_obj.type))
+        )
+
+    logging.info(
+        f"Preparing {len(uploaded_files)} file(s) with key 'files' for batch upload: "
+        f"{[f[1][0] for f in files_for_request]}"
+    )
+
+    # Log the structure being sent to requests.post for debugging
+    logging.debug(
+        f"Payload for requests.post (batch upload structure with {len(uploaded_files)} files)"
+    )
+
+    logging.info(
+        f"[process_multiple_files] Constructed files_for_request payload with {len(files_for_request)} files"
+    )
+    # Prepare the data portion of the request
+    data = {
+        "is_image": str(is_image),
+        "username": st.session_state.username,
+    }
+
+    try:
+        # Send the request with our properly formatted files_for_request payload
+        upload_response = requests.post(
+            f"{API_URL}/file/upload",
+            files=files_for_request,  # Use the new payload structure
+            data=data,
+        )
+
+        logging.debug(
+            f"Request sent with {len(uploaded_files)} files. Check server logs for received parameters."
+        )
+        logging.debug(f"Response status code: {upload_response.status_code}")
+
+        if upload_response.status_code == 200:
+            upload_result = upload_response.json()
+            logging.info(
+                f"Upload successful with status code: {upload_response.status_code}"
             )
 
-    # Show a summary message if new files were processed
-    if processed_a_file_this_run:
-        st.success("Selected files have been processed and are ready for chat!")
-    else:
-        st.info("All files in the list are already processed and ready for chat.")
+            # Process response whether multi-file or single file mode
+            # The backend should always return multi_file_mode=True for our batch uploads
+            if upload_result.get("multi_file_mode", False):
+                # Handle multi-file response
+                file_ids = upload_result.get("file_ids", [])
+                filenames = upload_result.get("original_filenames", [])
+                statuses = upload_result.get("statuses", [])
+
+                logging.info(
+                    f"Received {len(file_ids)} file IDs from parallel processing"
+                )
+
+                # Map filenames to their respective file IDs for processed file tracking
+                for i, file_id in enumerate(file_ids):
+                    filename = (
+                        filenames[i] if i < len(filenames) else uploaded_files[i].name
+                    )
+                    status = statuses[i] if i < len(statuses) else "success"
+
+                    # Store in session state for the most recent file
+                    st.session_state.file_id = file_id
+                    st.session_state.file_uploaded = True
+
+                    # Track processed files to avoid reprocessing
+                    if "processed_file_map" not in st.session_state:
+                        st.session_state.processed_file_map = {}
+                    st.session_state.processed_file_map[filename] = file_id
+
+                    # Add to uploaded files list for multi-file chat
+                    if "uploaded_files" not in st.session_state or not isinstance(
+                        st.session_state.uploaded_files, dict
+                    ):
+                        st.session_state.uploaded_files = {}
+
+                    st.session_state.uploaded_files[file_id] = {
+                        "name": filename,
+                        "type": st.session_state.file_type,
+                    }
+                    st.session_state.file_names[file_id] = filename
+
+                    # Always add to file_ids list for multi-file chat
+                    if file_id not in st.session_state.file_ids:
+                        st.session_state.file_ids.append(file_id)
+                        logging.info(
+                            f"Added file {filename} (ID: {file_id}) to active list - Status: {status}"
+                        )
+            else:
+                # Handle legacy single file response (shouldn't happen with our new implementation)
+                file_id = upload_result.get("file_id")
+                filename = upload_result.get("original_filename")
+
+                logging.warning(
+                    f"Received unexpected single-file response for file: {filename}"
+                )
+
+                # Process it anyway for robustness
+                if file_id:
+                    # Same processing as above
+                    st.session_state.file_id = file_id
+                    st.session_state.file_uploaded = True
+
+                    if "processed_file_map" not in st.session_state:
+                        st.session_state.processed_file_map = {}
+                    st.session_state.processed_file_map[filename] = file_id
+
+                    if "uploaded_files" not in st.session_state or not isinstance(
+                        st.session_state.uploaded_files, dict
+                    ):
+                        st.session_state.uploaded_files = {}
+
+                    st.session_state.uploaded_files[file_id] = {
+                        "name": filename,
+                        "type": st.session_state.file_type,
+                    }
+                    st.session_state.file_names[file_id] = filename
+
+                    if file_id not in st.session_state.file_ids:
+                        st.session_state.file_ids.append(file_id)
+                        logging.info(
+                            f"Added file {filename} (ID: {file_id}) to active list (single mode)"
+                        )
+
+            return True
+        else:
+            st.error(f"Batch file upload failed: {upload_response.text}")
+            return False
+    except Exception as e:
+        logging.error(f"Error during batch file upload: {str(e)}")
+        st.error(f"Error during batch upload: {str(e)}")
+        return False
+
+
+def batch_upload_files(files_list, is_image=False):
+    """Upload multiple files in a single request with the 'files' parameter."""
+    if not files_list:
+        return None
+
+    logging.info(
+        f"[batch_upload_files] Preparing batch upload for {len(files_list)} files"
+    )
+
+    # Prepare the files for the multipart/form-data request
+    files_data = []
+    for file in files_list:
+        file_content = file.read()
+        files_data.append(("files", (file.name, file_content, file.type)))
+        file.seek(0)  # Reset file pointer
+
+    # Add additional form data
+    form_data = {
+        "username": st.session_state.username,
+        "is_image": str(is_image).lower(),
+    }
+
+    # Send the request with proper headers
+    try:
+        response = requests.post(
+            f"{API_URL}/file/upload", files=files_data, data=form_data
+        )
+        logging.info(f"[batch_upload_files] Response status: {response.status_code}")
+        return response
+    except Exception as e:
+        logging.error(f"[batch_upload_files] Error: {str(e)}")
+        return None
 
 
 def process_single_file(uploaded_file_obj, is_image):
@@ -664,14 +857,11 @@ def process_single_file(uploaded_file_obj, is_image):
 
 
 def handle_file_upload():
-    """Main function to handle file uploads, broken into smaller functions to reduce complexity."""
-    # Ensure username is available before file upload
+    """Handle file upload UI and logic."""
+    logging.info("========== ENTERING handle_file_upload ===========")
     if not st.session_state.username:
         st.warning("Please enter a username before uploading files")
         return
-
-    # Visualization is now automatically detected by the backend
-    # No need for a manual toggle
 
     is_image = st.session_state.file_type == "Image"
     file_types = {
@@ -680,49 +870,115 @@ def handle_file_upload():
         "Database": ["db", "sqlite"],
         "PDF": ["pdf"],
         "Text": ["txt", "doc", "docx"],
-        "URL": [],  # No file types for URL
+        "URL": [],
     }[st.session_state.file_type]
 
-    # Display help text for database files
     if st.session_state.file_type == "Database":
         st.info(
             "Upload SQLite database files (.db or .sqlite) to chat with their contents."
         )
 
-    # Handle URL input
     if st.session_state.file_type == "URL":
         st.info(
             "Enter one or more URLs separated by commas to chat with their contents."
         )
         url_input = st.text_area("Enter URLs (comma-separated for multiple URLs)")
-
         if url_input and st.button("Process URLs"):
             handle_url_processing(url_input)
     else:
-        # Initialize uploaded_files list in session_state if it doesn't exist
         if "uploaded_files_list" not in st.session_state:
             st.session_state.uploaded_files_list = []
 
-        # File uploader for adding new files, now accepting multiple
         _ = st.file_uploader(
             f"Select or Add {st.session_state.file_type} file(s)",
             type=file_types,
-            accept_multiple_files=True,  # Key change here
-            key="multi_file_uploader_static",  # Static key
+            accept_multiple_files=True,
+            key="multi_file_uploader_static",
             on_change=handle_file_uploader_change,
         )
-        # The logic for adding files to st.session_state.uploaded_files_list is now in the on_change callback.
 
-        # Display the list of uploaded files with an option to remove them
         display_uploaded_files_list()
-
-        # The 'uploaded_files' variable for the processing step will be the current list
         uploaded_files = st.session_state.uploaded_files_list
 
-        # Only show the upload button if we're not in URL mode and files have been selected
         if uploaded_files and len(uploaded_files) > 0:
-            if st.button("Upload and Process File(s)"):
-                process_selected_files(uploaded_files, is_image)
+            logging.info(
+                f"[handle_file_upload] Files selected: {len(uploaded_files)} - {[f.name for f in uploaded_files]}"
+            )
+            file_count = len(uploaded_files)
+            upload_button_label = (
+                f"Upload and Process ({file_count}) "
+                f"Selected File{'s' if file_count > 1 else ''}"
+            )
+            logging.info(
+                f"[handle_file_upload] Showing upload button with label: {upload_button_label}"
+            )
+
+            if st.button(upload_button_label):
+                logging.info(
+                    f"[handle_file_upload] UPLOAD BUTTON CLICKED - Processing {len(uploaded_files)} files"
+                )
+                with st.spinner(
+                    f"Uploading and processing {len(uploaded_files)} files in parallel..."
+                ):
+                    # Call batch_upload_files to send all files in one request
+                    upload_response = batch_upload_files(uploaded_files, is_image)
+
+                    if upload_response and upload_response.status_code == 200:
+                        try:
+                            result = upload_response.json()
+                            logging.info(
+                                f"Batch upload successful with status code: {upload_response.status_code}"
+                            )
+
+                            file_ids = result.get("file_ids", [])
+                            filenames = result.get("original_filenames", [])
+
+                            if file_ids:
+                                logging.info(
+                                    f"Received {len(file_ids)} file IDs from batch upload"
+                                )
+                                st.session_state.multi_file_mode = True
+
+                                if "processed_file_map" not in st.session_state:
+                                    st.session_state.processed_file_map = {}
+                                if "file_ids" not in st.session_state:
+                                    st.session_state.file_ids = []
+                                if "file_names" not in st.session_state:
+                                    st.session_state.file_names = {}
+
+                                for i, file_id in enumerate(file_ids):
+                                    filename = (
+                                        filenames[i]
+                                        if i < len(filenames)
+                                        else uploaded_files[i].name
+                                    )
+                                    st.session_state.processed_file_map[
+                                        filename
+                                    ] = file_id
+                                    if file_id not in st.session_state.file_ids:
+                                        st.session_state.file_ids.append(file_id)
+                                    st.session_state.file_names[file_id] = filename
+
+                                st.session_state.file_id = file_ids[-1]
+                                st.session_state.file_uploaded = True
+                                st.success(
+                                    f"{len(file_ids)} files processed successfully!"
+                                )
+                            else:
+                                st.error("No file IDs returned from the server.")
+                        except Exception as e:
+                            logging.error(
+                                f"Error processing batch upload response: {str(e)}"
+                            )
+                            st.error(f"Error processing server response: {str(e)}")
+                    else:
+                        error_msg = (
+                            "Unknown error"
+                            if not upload_response
+                            else upload_response.text
+                        )
+                        logging.error(f"Batch upload failed: {error_msg}")
+                        st.error(f"Failed to upload files: {error_msg}")
 
     # Display image in a dedicated section if it's an image file
     if is_image and st.session_state.uploaded_image is not None:
@@ -1415,10 +1671,21 @@ def render_sidebar():
                 if st.button(
                     f"Upload and Process ({len(uploaded_files)}) Selected File(s)"
                 ):  # Updated button label
-                    for uploaded_file_item in uploaded_files:
-                        # process_file_upload handles one file at a time
-                        # It also checks if a file has been processed before to avoid duplicates
-                        process_file_upload(uploaded_file_item, is_image)
+                    # FIXED: Use batch processing instead of calling process_file_upload in a loop
+                    # This sends all files in a single request with the 'files' parameter
+                    logging.info(
+                        f"Processing {len(uploaded_files)} files in batch mode"
+                    )
+                    with st.spinner(
+                        f"Uploading and processing {len(uploaded_files)} files in parallel..."
+                    ):
+                        success = process_multiple_files(uploaded_files, is_image)
+                        if success:
+                            st.success(
+                                f"{len(uploaded_files)} files processed successfully!"
+                            )
+                        else:
+                            st.error("Error processing files. Please check the logs.")
                     st.rerun()  # Rerun to update UI after processing all files
 
         # Display image in a dedicated section if it's an image file

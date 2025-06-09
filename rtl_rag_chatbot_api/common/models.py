@@ -19,11 +19,15 @@ class PreprocessRequest(BaseModel):
 
 class FileUploadResponse(BaseModel):
     message: str
-    file_id: str
-    original_filename: str
-    is_image: bool
+    file_id: Optional[str] = None  # Optional to support multi-file mode
+    file_ids: Optional[List[str]] = None  # For multiple file uploads
+    original_filename: Optional[str] = None  # Optional for multi-file mode
+    original_filenames: Optional[List[str]] = None  # For multiple filenames
+    is_image: bool = False
+    is_tabular: bool = False
     status: str = "success"  # Added status field with default value
     temp_file_path: Optional[str] = None
+    multi_file_mode: bool = False  # Flag to indicate multiple file processing
 
 
 class NeighborsQuery(BaseModel):

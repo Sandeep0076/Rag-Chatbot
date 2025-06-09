@@ -3,6 +3,7 @@ import hashlib
 import logging
 import os
 import shutil
+import time
 import uuid
 
 import aiofiles
@@ -829,7 +830,12 @@ class FileHandler:
         )
 
     async def process_single_url(
-        self, url: str, username: str, background_tasks, embedding_handler
+        self,
+        url: str,
+        username: str,
+        background_tasks,
+        embedding_handler,
+        custom_file_id: str = None,
     ) -> dict:
         """Process a single URL and create embeddings for it.
 
@@ -842,8 +848,8 @@ class FileHandler:
         Returns:
             Dict containing file_id and status information
         """
-        # Generate a unique ID for this URL
-        url_file_id = str(uuid.uuid4())
+        # Use provided custom_file_id or generate a new unique ID for this URL
+        url_file_id = custom_file_id if custom_file_id else str(uuid.uuid4())
         file_name = f"{url_file_id}_url_content.txt"
         temp_file_path = f"local_data/{file_name}"
         os.makedirs(os.path.dirname(temp_file_path), exist_ok=True)
@@ -1087,13 +1093,17 @@ class FileHandler:
     async def process_urls(
         self, urls_text, username, temp_file_id, background_tasks, embedding_handler
     ):
-        """Process multiple URLs and extract content from each individually.
+        """Process multiple URLs and extract content from each in parallel.
 
-        {{ ... }}
-                    embedding_handler: Handler for creating embeddings
+        Args:
+            urls_text: Text containing one or more URLs separated by commas or newlines
+            username: Username processing the URLs
+            temp_file_id: Temporary file ID (used as base for URL processing)
+            background_tasks: FastAPI background tasks object
+            embedding_handler: Handler for creating embeddings
 
-                Returns:
-                    Dict containing status and results for all URLs
+        Returns:
+            Dict containing status and results for all URLs processed in parallel
         """
         logging.info(f"Parsing URL input: {urls_text[:100]}...")
         url_list = self._parse_url_list(urls_text)
@@ -1103,54 +1113,81 @@ class FileHandler:
             return {"status": "error", "message": "No valid URLs provided"}
 
         logging.info(
-            f"Processing {len(url_list)} URLs individually: {', '.join(url_list)}"
+            f"Processing {len(url_list)} URLs in parallel with IDs: {temp_file_id}_*"
         )
+        # Log detailed URL list at debug level
+        logging.debug(f"URLs to process: {', '.join(url_list)}")
+        start_time = time.time()
 
-        results = []
-        file_ids = []
+        # Create tasks for processing each URL concurrently
+        tasks = []
+        for url in url_list:
+            # Generate a unique ID for each URL to avoid collisions
+            url_specific_id = f"{temp_file_id}_{uuid.uuid4().hex[:8]}"
+            tasks.append(
+                self.process_single_url(
+                    url, username, background_tasks, embedding_handler, url_specific_id
+                )
+            )
 
+        # Process all URLs in parallel
         try:
-            for url in url_list:
-                logging.info(f"Processing URL: {url}")
-                try:
-                    result = await self.process_single_url(
-                        url, username, background_tasks, embedding_handler
-                    )
-                    results.append(result)
-                    logging.info(f"URL processing result for {url}: {result['status']}")
+            # Execute all tasks concurrently
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                    if result["status"] == "error":
-                        error_message = result.get(
-                            "message", f"Failed to process URL: {url}"
-                        )
-                        return self._handle_batch_error(url, error_message, results)
+            # Process results and handle any exceptions
+            processed_results = []
+            file_ids = []
+            error_found = False
 
-                    if result.get("status") in ["success", "existing"] and result.get(
-                        "file_id"
-                    ):
-                        file_ids.append(result["file_id"])
+            for i, result in enumerate(results):
+                url = url_list[i] if i < len(url_list) else "unknown"
 
-                except Exception as url_error:
-                    logging.error(
-                        f"Error processing individual URL {url}: {str(url_error)}"
-                    )
-                    # Create an error result for the specific URL that failed
-                    error_result_for_current_url = {
+                # Check if this result is an exception
+                if isinstance(result, Exception):
+                    logging.error(f"Error processing URL {url}: {str(result)}")
+                    error_result = {
                         "file_id": None,
                         "status": "error",
-                        "message": f"Error processing URL: {str(url_error)}",
+                        "message": f"Error processing URL: {str(result)}",
                         "url": url,
                         "is_image": False,
                         "is_tabular": False,
                         "temp_file_path": None,
                     }
-                    results.append(error_result_for_current_url)
-                    return self._handle_batch_error(
-                        url, f"Error processing URL {url}: {str(url_error)}", results
-                    )
+                    processed_results.append(error_result)
+                    error_found = True
+                    continue
+
+                # Process successful result
+                processed_results.append(result)
+                logging.info(
+                    f"URL processing result for {url}: {result.get('status', 'unknown')}"
+                )
+
+                # Check for error status in result
+                if result.get("status") == "error":
+                    error_found = True
+                elif result.get("status") in ["success", "existing"] and result.get(
+                    "file_id"
+                ):
+                    file_ids.append(result["file_id"])
+
+            # If any errors were found, include them in the response but don't fail the whole batch
+            if error_found and not file_ids:
+                # All URLs failed - return error
+                return self._handle_batch_error(
+                    "multiple URLs", "Failed to process all URLs", processed_results
+                )
+
+            # At least some URLs succeeded
+
+            # Calculate elapsed time for all URL processing
+            elapsed = time.time() - start_time
+            logging.info(f"Completed processing {len(url_list)} URLs in {elapsed:.2f}s")
 
             # If loop completes, all URLs were processed successfully
-            return self._prepare_success_response(url_list, file_ids, results)
+            return self._prepare_success_response(url_list, file_ids, processed_results)
 
         except Exception as e:
             # This outer try-except catches unexpected errors not tied to a specific URL processing step

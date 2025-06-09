@@ -3,19 +3,22 @@ Main FastAPI application for the RAG PDF API.
 """
 
 
+import asyncio
 import json
 import logging
 import os
+import time
 import uuid
+from asyncio import Semaphore
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import uvicorn
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, File, Form, HTTPException
 from fastapi import Query as QueryParam
-from fastapi import UploadFile
+from fastapi import Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import create_engine
@@ -177,6 +180,12 @@ initialized_handlers = {}
 initialized_azure_model = None
 initialized_gemini_model = None
 
+# Concurrency control for file processing
+# This allows multiple file processing requests to run in parallel
+file_processing_semaphore = Semaphore(
+    10
+)  # Allow up to 10 concurrent file processing operations
+
 # expose prometheus metrics at /metrics rest endpoint
 app.add_middleware(
     PrometheusMiddleware,
@@ -232,10 +241,313 @@ async def info():
     }
 
 
+# Asynchronous file processing function that runs concurrently with a semaphore limit
+async def process_file_with_semaphore(file_handler, file, file_id, is_image, username):
+    async with file_processing_semaphore:
+        logging.info(
+            f"Starting parallel processing for file: {file.filename} with ID: {file_id}"
+        )
+        start_time = time.time()
+        result = await file_handler.process_file(file, file_id, is_image, username)
+        elapsed = time.time() - start_time
+        logging.info(
+            f"Completed processing for file: {file.filename} in {elapsed:.2f}s"
+        )
+        return result
+
+
+async def process_url_content(
+    file_handler, embedding_handler, urls, username, background_tasks
+):
+    """
+    Process content from URLs and create embeddings.
+
+    Args:
+        file_handler: The handler for file processing
+        embedding_handler: The handler for embedding creation
+        urls: String containing URLs (comma or newline separated)
+        username: Username for file ownership
+        background_tasks: BackgroundTasks for async operations
+
+    Returns:
+        dict: Response data including file IDs and status
+    """
+    logging.info(f"Processing URL content for user {username}")
+    temp_file_id = str(uuid.uuid4())
+
+    url_result = await file_handler.process_urls(
+        urls, username, temp_file_id, background_tasks, embedding_handler
+    )
+
+    # Check if URL processing returned an error status
+    if url_result.get("status") == "error":
+        logging.error(f"Error processing URLs: {url_result.get('message')}")
+        raise HTTPException(
+            status_code=400,
+            detail=url_result.get("message", "Error processing URLs"),
+        )
+
+    # Format the response for multiple file IDs
+    if "file_ids" in url_result:
+        logging.info(f"Successfully processed {len(url_result['file_ids'])} URLs")
+
+        # Maintain backward compatibility by including file_id in response if possible
+        if url_result["file_ids"]:
+            url_result["file_id"] = url_result["file_ids"][0]
+
+        # Ensure multi_file_mode is set if multiple files
+        if len(url_result["file_ids"]) > 1:
+            url_result["multi_file_mode"] = True
+            logging.info(
+                f"Setting multi_file_mode to TRUE, file_ids: {url_result['file_ids']}"
+            )
+
+    # Create a proper response object to ensure all fields are included
+    response_data = {
+        "file_id": url_result.get("file_id"),
+        "file_ids": url_result.get("file_ids", []),
+        "multi_file_mode": url_result.get("multi_file_mode", False),
+        "message": url_result.get("message", ""),
+        "status": url_result.get("status", ""),
+        "original_filename": url_result.get("original_filename", "url_content.txt"),
+        "is_image": url_result.get("is_image", False),
+        "is_tabular": url_result.get("is_tabular", False),
+        "temp_file_path": url_result.get("temp_file_path"),
+    }
+
+    logging.info(
+        f"Returning URL processing response: file_ids={response_data['file_ids']}, "
+        f"multi_file_mode={response_data['multi_file_mode']}"
+    )
+    return response_data
+
+
+def prepare_file_list(file, files):
+    """
+    Combine files from both the single and multiple file parameters.
+
+    Args:
+        file: Single file upload parameter
+        files: Multiple files upload parameter
+
+    Returns:
+        list: Combined list of files to process
+    """
+    all_files = []
+
+    # Add files from the 'files' parameter (multi-file)
+    if files and len(files) > 0:
+        logging.info(f"Received {len(files)} files in the 'files' parameter")
+        for i, f in enumerate(files):
+            logging.info(f"  File {i+1}: {f.filename}")
+            all_files.append(f)
+
+    # Add file from the 'file' parameter (single-file) if it exists and not already included
+    if file and (not files or file not in files):
+        logging.info(f"Received a file in the 'file' parameter: {file.filename}")
+        all_files.append(file)
+
+    return all_files
+
+
+async def process_files_in_parallel(file_handler, all_files, is_image, username):
+    """
+    Process multiple files in parallel using asyncio.
+
+    Args:
+        file_handler: The handler for file processing
+        all_files: List of files to process
+        is_image: Flag indicating if files are images
+        username: Username for file ownership
+
+    Returns:
+        tuple: (results, processed_file_ids, original_filenames, is_tabular_flags, statuses)
+    """
+    # Generate unique file_ids for each file
+    file_ids = [str(uuid.uuid4()) for _ in range(len(all_files))]
+
+    # Process all files in parallel using asyncio.gather()
+    tasks = []
+    for i, f in enumerate(all_files):
+        logging.info(f"Creating task for file {i+1}/{len(all_files)}: {f.filename}")
+        tasks.append(
+            process_file_with_semaphore(
+                file_handler, f, file_ids[i], is_image, username
+            )
+        )
+
+    # Execute all tasks in parallel
+    results = await asyncio.gather(*tasks)
+    logging.info(f"All {len(all_files)} files processed concurrently")
+
+    # Collect file_ids, filenames and other info from results
+    processed_file_ids = []
+    original_filenames = []
+    is_tabular_flags = []
+    statuses = []
+
+    for i, result in enumerate(results):
+        processed_file_ids.append(result["file_id"])
+        original_filenames.append(all_files[i].filename)
+        is_tabular_flags.append(result.get("is_tabular", False))
+        statuses.append(result.get("status", "success"))
+
+    return results, processed_file_ids, original_filenames, is_tabular_flags, statuses
+
+
+def is_tabular_file(filename):
+    """
+    Check if a file is a tabular data file (CSV, Excel, DB).
+
+    Args:
+        filename: Name of the file to check
+
+    Returns:
+        bool: True if file is tabular, False otherwise
+    """
+    return filename.lower().endswith((".csv", ".xlsx", ".xls", ".db", ".sqlite"))
+
+
+def process_tabular_file(
+    background_tasks, file_id, temp_file_path, username, filename, is_image
+):
+    """
+    Process tabular files in the background.
+
+    Args:
+        background_tasks: BackgroundTasks for async operations
+        file_id: ID of the file
+        temp_file_path: Path to the temporary file
+        username: Username for file ownership
+        filename: Original filename
+        is_image: Flag indicating if file is an image
+
+    Returns:
+        bool: True if processed as tabular, False otherwise
+    """
+    if not file_id or not temp_file_path or not os.path.exists(temp_file_path):
+        logging.warning(f"Invalid file or path for tabular processing: {filename}")
+        return False
+
+    # Prepare database in background based on the file type
+    background_tasks.add_task(
+        file_handler.prepare_db_from_file,
+        file_path=temp_file_path,
+        file_id=file_id,
+        username=username,
+    )
+
+    # For tabular files, create file_info.json immediately
+    file_metadata = {
+        "embeddings_status": "completed",  # No embeddings needed
+        "is_image": is_image,
+        "is_tabular": True,
+        "username": [username],
+        "original_filename": filename,
+        "file_id": file_id,
+    }
+
+    background_tasks.add_task(
+        gcs_handler.upload_to_gcs,
+        configs.gcp_resource.bucket_name,
+        {
+            "metadata": (
+                file_metadata,
+                f"file-embeddings/{file_id}/file_info.json",
+            )
+        },
+    )
+
+    logging.info(f"Scheduled tabular file processing for {filename} with ID {file_id}")
+    return True
+
+
+def is_document_file(file_extension, is_image):
+    """
+    Check if a file needs embeddings (PDF, TXT, etc.).
+
+    Args:
+        file_extension: Extension of the file
+        is_image: Flag indicating if file is an image
+
+    Returns:
+        bool: True if file needs document embeddings, False otherwise
+    """
+    return file_extension in [".pdf", ".txt", ".doc", ".docx"] or is_image
+
+
+def process_document_file(background_tasks, file_id, temp_file_path, username_list):
+    """
+    Process a document file that needs embeddings.
+
+    Args:
+        background_tasks: BackgroundTasks for async operations
+        file_id: ID of the file
+        temp_file_path: Path to the temporary file
+        username_list: List of usernames for file ownership
+    """
+    if not file_id or not temp_file_path:
+        logging.warning(f"Invalid file or path for document processing: {file_id}")
+        return
+
+    # Schedule embedding creation in the background
+    background_tasks.add_task(
+        create_embeddings_background,
+        file_id,
+        temp_file_path,
+        embedding_handler,
+        configs,
+        SessionLocal,
+        username_list,
+    )
+    logging.info(f"Scheduled embeddings creation for file ID {file_id}")
+
+
+def format_upload_response(processed_file_ids, original_filenames, is_tabular_flags):
+    """
+    Format the response for the upload_file endpoint.
+
+    Args:
+        processed_file_ids: List of file IDs
+        original_filenames: List of original filenames
+        is_tabular_flags: List of flags indicating if files are tabular
+
+    Returns:
+        JSONResponse: Formatted response
+    """
+    # Return a properly formatted response with all IDs
+    response_data = {
+        "file_ids": processed_file_ids,
+        "original_filenames": original_filenames,
+        "status": "success",
+        "message": f"Successfully processed {len(processed_file_ids)} files",
+    }
+
+    # Set multi_file_mode flag if more than one file
+    if len(processed_file_ids) > 1:
+        response_data["multi_file_mode"] = True
+    else:
+        response_data["multi_file_mode"] = False
+        # For backward compatibility, include single file ID and tabular flag
+        if processed_file_ids:
+            response_data["file_id"] = processed_file_ids[0]
+            response_data["is_tabular"] = (
+                is_tabular_flags[0] if is_tabular_flags else False
+            )
+
+    logging.info(
+        f"Returning file upload response: file_ids={response_data['file_ids']}, "
+        f"multi_file_mode={response_data.get('multi_file_mode', False)}"
+    )
+    return JSONResponse(content=response_data)
+
+
 @app.post("/file/upload", response_model=FileUploadResponse)
 async def upload_file(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(None),
+    files: List[UploadFile] = File(None),
     is_image: bool = Form(False),
     username: str = Form(...),
     urls: str = Form(None),
@@ -243,174 +555,145 @@ async def upload_file(
 ):
     """
     Handles file upload and automatically creates embeddings for PDFs and images.
-    Also handles URL processing when is_url is True.
-    Made asynchronous to prevent blocking during long operations.
+    Supports three modes of operation:
+    1. URL processing: Extract content from URLs and create embeddings
+    2. Multiple file upload: Process multiple files concurrently using asyncio.gather()
+    3. Single file upload: Process a single file (for backward compatibility)
+
+    All file processing is done asynchronously and in parallel when multiple files are uploaded.
+    Embeddings creation and other post-processing happens in background tasks.
     """
     try:
-        # Generate temporary file_id with UUID - will be replaced if file already exists
-        temp_file_id = str(uuid.uuid4())
         # Handle URL processing
         if urls:
-            url_result = await file_handler.process_urls(
-                urls, username, temp_file_id, background_tasks, embedding_handler
-            )
-
-            # Check if URL processing returned an error status
-            if url_result.get("status") == "error":
-                # Return the error as a HTTPException
-                raise HTTPException(
-                    status_code=400,
-                    detail=url_result.get("message", "Error processing URLs"),
-                )
-
-            # Format the response for multiple file IDs
-            if "file_ids" in url_result:
-                logging.info(
-                    f"Successfully processed {len(url_result['file_ids'])} URLs"
-                )
-                # Maintain backward compatibility by including file_id in response if possible
-                if url_result["file_ids"]:
-                    url_result["file_id"] = url_result["file_ids"][0]
-
-                # Ensure multi_file_mode is set if multiple files
-                if len(url_result["file_ids"]) > 1:
-                    url_result["multi_file_mode"] = True
-                    logging.info(
-                        f"Setting multi_file_mode to TRUE, file_ids: {url_result['file_ids']}"
-                    )
-
-            # Create a proper response object to ensure all fields are included
-            response_data = {
-                "file_id": url_result.get("file_id"),
-                "file_ids": url_result.get("file_ids", []),
-                "multi_file_mode": url_result.get("multi_file_mode", False),
-                "message": url_result.get("message", ""),
-                "status": url_result.get("status", ""),
-                "original_filename": url_result.get(
-                    "original_filename", "url_content.txt"
-                ),
-                "is_image": url_result.get("is_image", False),
-                "is_tabular": url_result.get("is_tabular", False),
-                "temp_file_path": url_result.get("temp_file_path"),
-            }
-
-            logging.info(
-                f"Returning URL processing response: file_ids={response_data['file_ids']}, "
-                f"multi_file_mode={response_data['multi_file_mode']}"
+            response_data = await process_url_content(
+                file_handler, embedding_handler, urls, username, background_tasks
             )
             return JSONResponse(content=response_data)
 
-        # Handle regular file upload
-        if not file:
-            raise HTTPException(status_code=400, detail="No file provided")
+        # Combine files from both parameters
+        all_files = prepare_file_list(file, files)
 
-        original_filename = file.filename
-        file_extension = os.path.splitext(original_filename)[1].lower()
+        # Process all files in parallel
+        if len(all_files) > 0:
+            logging.info(f"Processing {len(all_files)} files with parallel processing")
 
-        # Process the file upload asynchronously
-        # We pass temp_file_id which will be used only if this is a new file
-        result = await file_handler.process_file(file, temp_file_id, is_image, username)
-        # Use the file_id from result - this will be either the existing file_id if file exists,
-        # or the temp_file_id if it's a new file
-        file_id = result["file_id"]
-        temp_file_path = result["temp_file_path"]
-        # Handle CSV/Excel/Database files in background
-        if (
-            file_extension in [".csv", ".xlsx", ".xls", ".db", ".sqlite"]
-            and result["status"] == "new"
-        ):
-            background_tasks.add_task(prepare_sqlite_db, file_id, temp_file_path)
-            # For tabular files, we can create file_info.json immediately
-            gcs_handler.temp_metadata[
-                "embeddings_status"
-            ] = "completed"  # No embeddings needed
-            background_tasks.add_task(
-                gcs_handler.upload_to_gcs,
-                configs.gcp_resource.bucket_name,
-                {
-                    "metadata": (
-                        gcs_handler.temp_metadata,
-                        f"file-embeddings/{file_id}/file_info.json",
+            # Process files in parallel and collect results
+            (
+                results,
+                processed_file_ids,
+                original_filenames,
+                is_tabular_flags,
+                statuses,
+            ) = await process_files_in_parallel(
+                file_handler, all_files, is_image, username
+            )
+
+            # Process each file based on its type
+            for i, result in enumerate(results):
+                file_id = processed_file_ids[i]
+                temp_file_path = result.get("temp_file_path")
+
+                # Skip invalid files
+                if not file_id or not temp_file_path:
+                    logging.warning(f"Skipping invalid file: {original_filenames[i]}")
+                    continue
+
+                # Handle different file types
+                if is_tabular_file(all_files[i].filename):
+                    # Process tabular file (CSV, Excel, DB)
+                    is_tabular_flags[i] = process_tabular_file(
+                        background_tasks,
+                        file_id,
+                        temp_file_path,
+                        username,
+                        all_files[i].filename,
+                        is_image,
                     )
-                },
+                else:
+                    # Check for document files that need embeddings
+                    file_extension = os.path.splitext(all_files[i].filename)[1].lower()
+                    if is_document_file(file_extension, is_image):
+                        logging.info(
+                            f"Processing file with embedding support: {all_files[i].filename}"
+                        )
+
+                        # Process document file that needs embeddings
+                        process_document_file(
+                            background_tasks, file_id, temp_file_path, [username]
+                        )
+
+                    # Handle existing files - check if they need new embeddings
+                    if result["status"] == "existing":
+                        logging.info(
+                            f"File {file_id} already exists, checking if it needs new embeddings"
+                        )
+                        # Check if embeddings exist for both model types
+                        google_result = await embedding_handler.check_embeddings_exist(
+                            file_id, "gemini-flash"
+                        )
+                        azure_result = await embedding_handler.check_embeddings_exist(
+                            file_id, "gpt_4o_mini"
+                        )
+
+                        # If any embeddings are missing, recreate them
+                        if (
+                            not google_result["embeddings_exist"]
+                            or not azure_result["embeddings_exist"]
+                        ):
+                            logging.info(
+                                f"Recreating embeddings for existing file {file_id}"
+                            )
+                            # Get existing username list + new username
+                            username_list = result.get("username_list", [username])
+                            process_document_file(
+                                background_tasks, file_id, temp_file_path, username_list
+                            )
+
+            # Format and return the response
+            return format_upload_response(
+                processed_file_ids, original_filenames, is_tabular_flags
             )
 
-        is_supported_file = (
-            file_extension in [".pdf", ".txt", ".doc", ".docx"] or is_image
+        # No files provided case
+        return JSONResponse(
+            status_code=400,
+            content={
+                "message": "No files provided in either 'file' or 'files' parameters."
+            },
         )
-        if is_supported_file and result["status"] == "existing":
-            google_result = await embedding_handler.check_embeddings_exist(
-                file_id, "gemini-flash"
-            )
-            azure_result = await embedding_handler.check_embeddings_exist(
-                file_id, "gpt_4o_mini"
-            )
-            if (
-                not google_result["embeddings_exist"]
-                or not azure_result["embeddings_exist"]
-            ):
-                # Get the existing file_info.json to preserve username list
-                existing_file_info = gcs_handler.get_file_info(file_id)
-                existing_username_list = existing_file_info.get("username", [])
-                existing_file_id = existing_file_info.get(
-                    "file_id", file_id
-                )  # Keep the same file_id
-
-                # Delete the embeddings
-                gcs_handler.delete_embeddings(file_id)
-
-                # Add task to create new embeddings
-                background_tasks.add_task(
-                    create_embeddings_background,
-                    file_id=file_id,  # Use the existing file_id
-                    temp_file_path=temp_file_path,
-                    embedding_handler=embedding_handler,
-                    configs=configs,
-                    SessionLocal=SessionLocal,
-                    username_list=existing_username_list,  # Pass the preserved username list
-                )
-                logging.info(f"Creating new missing embeddings for file: {file_id}")
-
-        # Create embeddings for PDF, Image, and Text files in background
-        elif file_extension in [".pdf", ".txt", ".doc", ".docx"] or is_image:
-            logging.info(
-                f"Creating embeddings for file: {original_filename} with extension {file_extension}"
-            )
-            if result["status"] != "existing":  # Only create embeddings for new files
-                background_tasks.add_task(
-                    create_embeddings_background,
-                    file_id=file_id,
-                    temp_file_path=temp_file_path,
-                    embedding_handler=embedding_handler,
-                    configs=configs,
-                    SessionLocal=SessionLocal,
-                )
-                logging.info(f"Added embedding creation task for file: {file_id}")
-
-        # Clean up temporary file in background
-        if temp_file_path and os.path.exists(temp_file_path):
-            background_tasks.add_task(os.remove, temp_file_path)
-
-        response = FileUploadResponse(
-            file_id=file_id,
-            message=result["message"],
-            status="success",
-            original_filename=original_filename,
-            is_image=is_image,
-        )
-
-        return JSONResponse(content=response.dict(), background=background_tasks)
 
     except Exception as e:
-        logging.error(f"Error in upload_file: {str(e)}")
+        logging.exception(f"Error in upload_file: {str(e)}")
         # Ensure cleanup of any temporary files
         if (
             "temp_file_path" in locals()
             and temp_file_path
             and os.path.exists(temp_file_path)
         ):
-            os.remove(temp_file_path)
-        raise HTTPException(status_code=500, detail=str(e))
+            try:
+                os.remove(temp_file_path)
+                logging.info(f"Cleaned up temporary file: {temp_file_path}")
+            except Exception as cleanup_error:
+                logging.error(
+                    f"Failed to clean up temporary file: {str(cleanup_error)}"
+                )
+
+        # Return a more detailed error response with stack trace in dev mode
+        if configs.app.dev:
+            import traceback
+
+            stack_trace = traceback.format_exc()
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": str(e),
+                    "stack_trace": stack_trace,
+                    "message": "File upload failed. See error details.",
+                },
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
 
 
 async def prepare_sqlite_db(file_id: str, temp_file_path: str):
@@ -1304,8 +1587,17 @@ async def get_neighbors(query: NeighborsQuery, current_user=Depends(get_current_
 
         return {"neighbors": neighbors}
     except Exception as e:
-        logging.error(f"Error in get_neighbors: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+        logging.exception(f"Error in get_neighbors: {str(e)}")
+        # Return a more detailed error response with stack trace in dev mode
+        if configs.app.dev:
+            import traceback
+
+            stack_trace = traceback.format_exc()
+            raise HTTPException(
+                status_code=500, detail={"error": str(e), "stack_trace": stack_trace}
+            )
+        else:
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/analyze-image", response_model=Dict[str, Any])
