@@ -678,6 +678,15 @@ def process_multiple_files(uploaded_files, is_image):
                     f"Received {len(file_ids)} file IDs from parallel processing"
                 )
 
+                # Store the session_id from the new upload batch
+                session_id = upload_result.get("session_id")
+                if session_id:
+                    logging.info(f"New upload session created with ID: {session_id}")
+                    # Reset file_ids list when new files are uploaded
+                    # This is the key change for session management - each upload creates a new session
+                    st.session_state.file_ids = []
+                    st.session_state.current_session_id = session_id
+
                 # Map filenames to their respective file IDs for processed file tracking
                 for i, file_id in enumerate(file_ids):
                     filename = (
@@ -703,15 +712,15 @@ def process_multiple_files(uploaded_files, is_image):
                     st.session_state.uploaded_files[file_id] = {
                         "name": filename,
                         "type": st.session_state.file_type,
+                        "session_id": session_id,  # Track which session this file belongs to
                     }
                     st.session_state.file_names[file_id] = filename
 
-                    # Always add to file_ids list for multi-file chat
-                    if file_id not in st.session_state.file_ids:
-                        st.session_state.file_ids.append(file_id)
-                        logging.info(
-                            f"Added file {filename} (ID: {file_id}) to active list - Status: {status}"
-                        )
+                    # Add to file_ids list for the current session's files
+                    st.session_state.file_ids.append(file_id)
+                    logging.info(
+                        f"Added file {filename} (ID: {file_id}) to current session - Status: {status}"
+                    )
             else:
                 # Handle legacy single file response (shouldn't happen with our new implementation)
                 file_id = upload_result.get("file_id")
@@ -806,6 +815,16 @@ def process_single_file(uploaded_file_obj, is_image):
         upload_result = upload_response.json()
         file_id = upload_result["file_id"]
         file_name = uploaded_file_obj.name  # Use uploaded_file_obj here
+        session_id = upload_result.get("session_id")
+
+        # Store session ID and reset file_ids for new session
+        if session_id:
+            logging.info(
+                f"New single-file upload session created with ID: {session_id}"
+            )
+            # Reset file_ids list when new files are uploaded - key for session management
+            st.session_state.file_ids = []
+            st.session_state.current_session_id = session_id
 
         # Store in session state
         st.session_state.file_id = file_id
@@ -820,13 +839,13 @@ def process_single_file(uploaded_file_obj, is_image):
         st.session_state.uploaded_files[file_id] = {
             "name": file_name,
             "type": st.session_state.file_type,
+            "session_id": session_id,  # Track which session this file belongs to
         }
         st.session_state.file_names[file_id] = file_name
 
-        # Always add to file_ids list for multi-file chat
-        if file_id not in st.session_state.file_ids:
-            st.session_state.file_ids.append(file_id)
-            logging.info(f"Added file_id {file_id} to active list for chat.")
+        # Add to file_ids list for current session
+        st.session_state.file_ids.append(file_id)
+        logging.info(f"Added file_id {file_id} to current session for chat.")
 
         # Update processed_file_map
         if "processed_file_map" not in st.session_state:
@@ -1058,6 +1077,7 @@ def display_chat_interface():
                     "model_choice": st.session_state.model_choice,
                     "user_id": st.session_state.username,
                     "generate_visualization": st.session_state.generate_visualization,
+                    "session_id": st.session_state.current_session_id,  # Include current session ID for isolation
                 }
 
                 if st.session_state.multi_file_mode and st.session_state.file_ids:
@@ -1129,6 +1149,9 @@ def initialize_file_state():
     # Dictionary to store file_id -> filename mapping
     if "file_names" not in st.session_state:
         st.session_state.file_names = {}  # Maps file_id to original filename
+    # Track the current upload session ID
+    if "current_session_id" not in st.session_state:
+        st.session_state.current_session_id = None
 
     # For managing the list of files selected by the user via uploader
     if "uploaded_files_list" not in st.session_state:

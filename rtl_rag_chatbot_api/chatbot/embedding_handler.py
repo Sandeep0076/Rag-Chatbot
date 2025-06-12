@@ -1,9 +1,10 @@
+import asyncio
 import json
 import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot
 from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
@@ -26,6 +27,106 @@ class EmbeddingHandler:
         self.configs = configs
         self.gcs_handler = gcs_handler
         self.chroma_manager = ChromaDBManager()
+
+    def create_base_handler(self):
+        """
+        Create a BaseRAGHandler instance for text extraction and processing.
+
+        Returns:
+            BaseRAGHandler: A handler for RAG operations
+        """
+        return BaseRAGHandler(self.configs, self.gcs_handler)
+
+    def _prepare_file_info(
+        self,
+        file_id: str,
+        azure_result: Any,
+        gemini_result: Any,
+        file_metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Prepare file info dictionary with embeddings metadata.
+
+        Args:
+            file_id: Unique identifier for the file
+            azure_result: Result of Azure embedding creation (can be dict or other type)
+            gemini_result: Result of Gemini embedding creation (can be dict or other type)
+            file_metadata: Additional metadata for the file
+
+        Returns:
+            Dict containing file metadata and embedding status
+        """
+        # Log what we received to help debug
+        logging.info(
+            f"Preparing file_info for {file_id} with azure_result type: {type(azure_result)},"
+            f" gemini_result type: {type(gemini_result)}"
+        )
+
+        # Get metadata file_id if it exists to ensure consistency
+        metadata_file_id = file_metadata.get("file_id") if file_metadata else None
+
+        # If metadata has a file_id that differs from the passed file_id, log a warning but USE THE PASSED file_id
+        if metadata_file_id and metadata_file_id != file_id:
+            logging.warning(
+                f"Metadata file_id {metadata_file_id} differs from passed file_id "
+                f"{file_id}. Using passed file_id to avoid mix-ups."
+            )
+
+        # Ensure azure_result and gemini_result are dictionaries
+        # If they're not, convert them to dictionaries with appropriate fields
+        if not isinstance(azure_result, dict):
+            logging.warning(f"azure_result is not a dictionary: {azure_result}")
+            azure_result = {
+                "success": False,
+                "error": str(azure_result) if azure_result else "Unknown error",
+            }
+
+        if not isinstance(gemini_result, dict):
+            logging.warning(f"gemini_result is not a dictionary: {gemini_result}")
+            gemini_result = {
+                "success": False,
+                "error": str(gemini_result) if gemini_result else "Unknown error",
+            }
+
+        # Do an additional check to fix any incorrect values in the result dicts
+        if azure_result.get("error") == "completed":
+            azure_result["success"] = True
+            azure_result["error"] = None
+
+        if gemini_result.get("error") == "completed":
+            gemini_result["success"] = True
+            gemini_result["error"] = None
+
+        # Create file_info with embeddings metadata
+        file_info = {
+            **(file_metadata or {}),  # Include original metadata
+            "embeddings": {
+                "azure": azure_result,
+                "gemini": gemini_result,
+            },
+            "embeddings_status": "completed",
+            "azure_ready": azure_result.get("success", False),
+            "file_id": file_id,  # Ensure file_id consistency
+            "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
+        }
+
+        # Ensure critical fields are present
+        if (
+            "file_hash" not in file_info
+            and file_metadata
+            and "file_hash" in file_metadata
+        ):
+            file_info["file_hash"] = file_metadata["file_hash"]
+
+        # Preserve original_filename if available
+        if (
+            "original_filename" not in file_info
+            and file_metadata
+            and "original_filename" in file_metadata
+        ):
+            file_info["original_filename"] = file_metadata["original_filename"]
+
+        return file_info
 
     def embeddings_exist(self, file_id: str) -> tuple[bool, bool, bool]:
         """
@@ -72,16 +173,30 @@ class EmbeddingHandler:
             logging.error(f"Error checking embeddings existence: {str(e)}")
             return False, False, False
 
-    async def ensure_embeddings_exist(self, file_id: str, temp_file_path: str = None):
+    async def ensure_embeddings_exist(
+        self,
+        file_id: str,
+        temp_file_path: str = None,
+        file_metadata: Dict[str, Any] = None,
+    ):
         """
         Ensures embeddings exist and are valid, creates only if necessary.
         """
         try:
-            # Check temp_metadata first
-            temp_metadata = self.gcs_handler.temp_metadata
+            # Use provided file_metadata if available, otherwise fallback to global temp_metadata
+            # This prevents race conditions when processing multiple files in parallel
+            temp_metadata = (
+                file_metadata
+                if file_metadata is not None
+                else self.gcs_handler.temp_metadata
+            )
+
+            if not temp_metadata:
+                # Try to get metadata from GCS directly as a last resort
+                temp_metadata = self.gcs_handler.get_file_info(file_id)
+
             if not temp_metadata:
                 raise ValueError(f"No metadata found for file_id: {file_id}")
-            logging.info(f"temp_metadata: {temp_metadata}")
 
             # Check embeddings status
             gcs_status, local_status, all_valid = self.embeddings_exist(file_id)
@@ -122,12 +237,193 @@ class EmbeddingHandler:
             else:
                 # For non-images, use single file path
                 return await self.create_and_upload_embeddings(
-                    file_id, temp_file_path, is_image=False
+                    file_id, temp_file_path, is_image=False, file_metadata=temp_metadata
                 )
 
         except Exception as e:
             logging.error(f"Error in ensure_embeddings_exist: {str(e)}")
             raise
+
+    def _resolve_file_metadata(
+        self, file_id: str, file_metadata: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Resolves file metadata from various sources, ensuring it's valid for the given file ID.
+
+        Args:
+            file_id: Unique identifier for the file
+            file_metadata: Optional metadata provided directly
+
+        Returns:
+            Dictionary containing valid metadata for the file
+        """
+        # Check if provided file_metadata matches the requested file_id
+        if file_metadata is not None and file_metadata.get("file_id") == file_id:
+            logging.info(f"Using provided file-specific metadata for {file_id}")
+            return file_metadata
+        elif file_metadata is not None and file_metadata.get("file_id") != file_id:
+            # The provided metadata doesn't match our file_id - this is a serious issue
+            logging.warning(
+                f"Provided file_metadata has file_id {file_metadata.get('file_id')}"
+                f" which doesn't match requested file_id {file_id}"
+            )
+            # Reset file_metadata to None to force looking up the correct metadata
+            file_metadata = None
+
+        # Check temp_metadata if available
+        if file_metadata is None and self.gcs_handler.temp_metadata:
+            if self.gcs_handler.temp_metadata.get("file_id") == file_id:
+                # Create a deep copy to avoid modifying shared state
+                file_metadata = self.gcs_handler.temp_metadata.copy()
+                file_metadata["_metadata_used_for"] = file_id
+                logging.info(f"Using copied temp_metadata for {file_id}")
+            else:
+                # Wrong temp_metadata for this file_id
+                logging.warning(
+                    f"temp_metadata file_id {self.gcs_handler.temp_metadata.get('file_id')}"
+                    f" doesn't match requested file_id {file_id}"
+                )
+
+        # Try stored file info as last resort
+        if file_metadata is None:
+            file_info = self.get_embeddings_info(file_id)
+            if file_info:
+                file_metadata = file_info
+                logging.info(f"Using existing stored metadata for {file_id}")
+            else:
+                # Create minimal valid metadata
+                file_metadata = {"file_id": file_id}
+                logging.warning(
+                    f"No complete metadata available for {file_id}, using minimal metadata"
+                )
+
+        # Ensure file_id in metadata is correct
+        if file_metadata.get("file_id") != file_id:
+            logging.warning(
+                f"Correcting file_id in metadata from {file_metadata.get('file_id')} to {file_id}"
+            )
+            file_metadata["file_id"] = file_id
+
+        if "file_hash" in file_metadata:
+            logging.info(f"File hash for {file_id}: {file_metadata['file_hash']}")
+
+        return file_metadata
+
+    def _manage_temp_metadata_isolation(self, file_id: str) -> None:
+        """
+        Manages temp_metadata to prevent cross-file contamination.
+
+        Args:
+            file_id: The file ID to check against temp_metadata
+        """
+        # Skip if no temp_metadata exists
+        if not self.gcs_handler.temp_metadata:
+            return
+
+        if self.gcs_handler.temp_metadata.get("file_id") == file_id:
+            # Clear temp_metadata that belongs to current file after use
+            self.gcs_handler.temp_metadata = None
+            logging.info(f"Cleared global temp_metadata after using for {file_id}")
+        else:
+            # Add isolation marker for another file's metadata
+            logging.warning(
+                f"Not clearing global temp_metadata as it belongs to another file: "
+                f"{self.gcs_handler.temp_metadata.get('file_id')} vs requested {file_id}"
+            )
+
+            # Add isolation markers if needed
+            if (
+                isinstance(self.gcs_handler.temp_metadata, dict)
+                and "_isolation_markers" not in self.gcs_handler.temp_metadata
+            ):
+                self.gcs_handler.temp_metadata["_isolation_markers"] = []
+
+            if isinstance(self.gcs_handler.temp_metadata, dict) and isinstance(
+                self.gcs_handler.temp_metadata.get("_isolation_markers"), list
+            ):
+                self.gcs_handler.temp_metadata["_isolation_markers"].append(file_id)
+
+    async def _process_embeddings_with_timeout(
+        self,
+        file_id: str,
+        base_handler,
+        temp_file_path: str,
+        second_file_path: str = None,
+        is_image: bool = False,
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """
+        Process embeddings with timeout handling.
+
+        Args:
+            file_id: Unique identifier for the file
+            base_handler: BaseRAGHandler instance for processing
+            temp_file_path: Path to the temporary file
+            second_file_path: Optional path to second file (for images)
+            is_image: Whether the file is an image
+
+        Returns:
+            Tuple of (azure_result, gemini_result) dictionaries
+        """
+        try:
+            # Use asyncio.wait_for to add timeouts to embedding creation
+            if is_image:
+                return await asyncio.wait_for(
+                    self._process_image_file(
+                        file_id, base_handler, temp_file_path, second_file_path
+                    ),
+                    timeout=300,  # 5 minute timeout
+                )
+            else:
+                return await asyncio.wait_for(
+                    self._process_regular_file(file_id, base_handler, temp_file_path),
+                    timeout=300,  # 5 minute timeout
+                )
+        except asyncio.TimeoutError:
+            logging.error(f"Embedding creation timed out for file_id {file_id}")
+            # Check which embeddings were created successfully before timeout
+            azure_embeddings_check = await self.check_embeddings_exist(
+                file_id, "gpt_4o_mini"
+            )
+            gemini_embeddings_check = await self.check_embeddings_exist(
+                file_id, "gemini-flash"
+            )
+
+            # Convert check results to proper format
+            azure_result = {
+                "success": azure_embeddings_check.get("embeddings_exist", False),
+                "error": None
+                if azure_embeddings_check.get("embeddings_exist", False)
+                else "Embedding creation timed out",
+            }
+            gemini_result = {
+                "success": gemini_embeddings_check.get("embeddings_exist", False),
+                "error": None
+                if gemini_embeddings_check.get("embeddings_exist", False)
+                else "Embedding creation timed out",
+            }
+
+            logging.info(
+                f"Azure embeddings exist: {azure_result['success']}, "
+                f"Gemini embeddings exist: {gemini_result['success']}"
+            )
+
+            return azure_result, gemini_result
+
+    def _extract_embedding_exists_status(self, result) -> bool:
+        """
+        Safely extract embedding existence status from various result formats.
+
+        Args:
+            result: Result object from embedding creation (could be dict, bool, etc.)
+
+        Returns:
+            Boolean indicating if embeddings exist
+        """
+        if isinstance(result, dict):
+            return result.get("embeddings_exist", False) or result.get("success", False)
+        elif isinstance(result, bool):
+            return result
+        return False
 
     async def create_and_upload_embeddings(
         self,
@@ -135,152 +431,127 @@ class EmbeddingHandler:
         temp_file_path: str,
         second_file_path: str = None,
         is_image: bool = False,
+        file_metadata: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """
-        Create and upload embeddings for a file.
-        For images, creates separate embeddings for GPT-4 and Gemini analyses.
+        Creates embeddings for a file and uploads them to GCS.
 
         Args:
             file_id: Unique identifier for the file
-            temp_file_path: Path to the first analysis file (GPT-4 for images)
-            second_file_path: Path to the second analysis file (Gemini for images)
+            temp_file_path: Path to the temporary file
+            second_file_path: Optional second file path (for images with separate analysis)
             is_image: Whether the file is an image
+            file_metadata: Additional metadata for the file
+
+        Returns:
+            Dictionary with embedding status information
         """
         try:
-            # Create base handler for text extraction
+            # Resolve file metadata from various sources
+            file_metadata = self._resolve_file_metadata(file_id, file_metadata)
 
-            base_handler = BaseRAGHandler(self.configs, self.gcs_handler)
-            temp_metadata = self.gcs_handler.temp_metadata
-            # username = temp_metadata.get("username", "Unknown")
+            # Create base handler for processing
+            base_handler = self.create_base_handler()
 
-            if is_image:
-                # For images, create separate chunks for each analysis
-                logging.info("Processing image analyses separately")
+            # Manage temp_metadata to prevent cross-file contamination
+            self._manage_temp_metadata_isolation(file_id)
 
-                # Extract text from GPT-4 analysis
-                gpt4_text = base_handler.extract_text_from_file(temp_file_path)
-                if gpt4_text.startswith("ERROR:"):
-                    raise Exception(
-                        f"Error extracting text from GPT-4 analysis: {gpt4_text[7:]}"
-                    )
-                gpt4_chunks = base_handler.split_text(gpt4_text)
-                if not gpt4_chunks:
-                    return {
-                        "message": "No processable text found in the document.",
-                        "status": "error",
-                    }
+            # Log final metadata being used
+            logging.info(f"Using metadata for file_id {file_id}: {file_metadata}")
 
-                # Log chunk information
-                logging.info(f"GPT-4 analysis split into {len(gpt4_chunks)} chunks")
-                for i, chunk in enumerate(gpt4_chunks):
-                    tokens = len(base_handler.simple_tokenize(chunk))
-                    logging.info(f"GPT-4 Chunk {i}: {tokens} tokens")
-                # Create embeddings using respective models
-                azure_result = self._create_azure_embeddings(file_id, gpt4_chunks)
+            # Process embeddings with timeout handling
+            azure_result, gemini_result = await self._process_embeddings_with_timeout(
+                file_id, base_handler, temp_file_path, second_file_path, is_image
+            )
 
-                # Extract text from Gemini analysis
-                if not second_file_path:
-                    raise Exception("Second analysis file path not provided for image")
-                gemini_text = base_handler.extract_text_from_file(second_file_path)
-                if gemini_text.startswith("ERROR:"):
-                    raise Exception(
-                        f"Error extracting text from Gemini analysis: {gemini_text[7:]}"
-                    )
-                gemini_chunks = base_handler.split_text(gemini_text)
-                if not gemini_chunks:
-                    return {
-                        "message": "No processable text found in the document.",
-                        "status": "error",
-                    }
-                logging.info(f"Gemini analysis split into {len(gemini_chunks)} chunks")
-                for i, chunk in enumerate(gemini_chunks):
-                    tokens = len(base_handler.simple_tokenize(chunk))
-                    logging.info(f"Gemini Chunk {i}: {tokens} tokens")
-
-                gemini_result = self._create_gemini_embeddings(file_id, gemini_chunks)
-
-            else:
-                # For non-image files, process normally with same chunks for both models
-                logging.info("Processing non-image file")
-                text = base_handler.extract_text_from_file(temp_file_path)
-                if text.startswith("ERROR:"):
-                    raise Exception(f"Error extracting text: {text[7:]}")
-
-                text_chunks = base_handler.split_text(text)
-                if not text_chunks:
-                    raise Exception("No processable text found in the document")
-
-                # Log chunk information
-                logging.info(f"Text split into {len(text_chunks)} chunks")
-                for i, chunk in enumerate(text_chunks):
-                    tokens = len(base_handler.simple_tokenize(chunk))
-                    logging.info(f"Chunk {i}: {tokens} tokens")
-
-                # Create embeddings using both models with same chunks
-                azure_result = self._create_azure_embeddings(file_id, text_chunks)
-                gemini_result = self._create_gemini_embeddings(file_id, text_chunks)
-
+            # Upload embeddings to GCS - even partial ones
             try:
-                # Upload embeddings to GCS
-                await self._upload_embeddings_to_gcs(file_id)
-
-                # Get metadata file_id if it exists to ensure consistency
-                metadata_file_id = (
-                    temp_metadata.get("file_id") if temp_metadata else None
+                await asyncio.wait_for(
+                    self._upload_embeddings_to_gcs(file_id),
+                    timeout=120,  # 2 minute timeout
                 )
+                logging.info(f"Successfully uploaded embeddings to GCS for {file_id}")
+            except asyncio.TimeoutError:
+                logging.error(f"Embedding upload timed out for file_id {file_id}")
 
-                # If metadata has a file_id that differs from the passed file_id, use the metadata one
-                # This ensures we always use the same file_id that's in the metadata
-                consistent_file_id = metadata_file_id if metadata_file_id else file_id
+            # Update file info with embedding status
+            file_info = self._prepare_file_info(
+                file_id, azure_result, gemini_result, file_metadata
+            )
 
-                # Only create file_info.json after successful upload
-                file_info = {
-                    **temp_metadata,  # Include original metadata
-                    "embeddings": {
-                        "azure": azure_result,
-                        "gemini": gemini_result,
-                    },
-                    "embeddings_status": "completed",
-                    "azure_ready": True,
-                    "file_id": consistent_file_id,  # Ensure file_id consistency
-                    "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
-                }
-
-                # Save file_info.json using the consistent file_id for the path
+            # Upload file info to GCS
+            try:
                 self.gcs_handler.upload_to_gcs(
                     self.configs.gcp_resource.bucket_name,
                     {
                         "metadata": (
                             file_info,
-                            f"file-embeddings/{consistent_file_id}/file_info.json",
+                            f"file-embeddings/{file_id}/file_info.json",
                         )
                     },
                 )
+                logging.info(f"Successfully uploaded file_info.json for {file_id}")
+            except Exception as upload_error:
+                logging.error(f"Error uploading file_info.json: {str(upload_error)}")
 
-                # Clear temporary metadata
-                self.gcs_handler.temp_metadata = None
+            # Extract embedding existence status
+            azure_embeddings_exist = self._extract_embedding_exists_status(azure_result)
+            gemini_embeddings_exist = self._extract_embedding_exists_status(
+                gemini_result
+            )
 
-                return {
-                    "message": "Embeddings created and uploaded successfully. Ready for chat.",
-                    "status": "completed",
-                    "can_chat": True,
-                }
-
-            except Exception as e:
-                logging.error(f"Error uploading embeddings to GCS: {str(e)}")
-                # Clean up any partially created embeddings
-                await self._cleanup_failed_embeddings(file_id)
-                raise
+            return {
+                "message": "Embeddings created and uploaded successfully. Ready for chat.",
+                "status": "completed",
+                "can_chat": True,
+                "file_id": file_id,
+                "azure_embeddings_exist": azure_embeddings_exist,
+                "gemini_embeddings_exist": gemini_embeddings_exist,
+                **file_info,
+            }
 
         except Exception as e:
             logging.error(
                 f"Error in create_and_upload_embeddings: {str(e)}", exc_info=True
             )
-            return {
-                "message": "An error occurred while processing your file.",
-                "status": "error",
-                "can_chat": False,
-            }
+            # Clean up any partial embeddings
+            await self._handle_failed_embedding_cleanup(file_id)
+
+            # Return error information
+            return self._build_error_response(file_id, str(e))
+
+    async def _handle_failed_embedding_cleanup(self, file_id: str) -> None:
+        """
+        Safely clean up failed embedding artifacts.
+
+        Args:
+            file_id: The ID of the file whose embeddings failed
+        """
+        try:
+            await self._cleanup_failed_embeddings(file_id)
+        except Exception as cleanup_error:
+            logging.error(f"Error during embeddings cleanup: {str(cleanup_error)}")
+
+    def _build_error_response(self, file_id: str, error_message: str) -> Dict[str, Any]:
+        """
+        Build a standardized error response for embedding failures.
+
+        Args:
+            file_id: The ID of the file that failed
+            error_message: The error message to include
+
+        Returns:
+            Dictionary with error information
+        """
+        return {
+            "file_id": file_id,
+            "status": "error",
+            "message": "An error occurred while processing your file.",
+            "error_message": error_message,
+            "can_chat": False,
+            "azure_embeddings_exist": False,
+            "gemini_embeddings_exist": False,
+        }
 
     async def check_embeddings_exist(
         self, file_id: str, model_choice: str
@@ -321,9 +592,9 @@ class EmbeddingHandler:
             logging.error(f"Error checking embeddings: {str(e)}")
             raise Exception(f"Error checking embeddings: {str(e)}")
 
-    def _create_azure_embeddings(self, file_id: str, chunks: List[str]):
+    async def _create_azure_embeddings(self, file_id: str, chunks: List[str]):
         """Creates embeddings using Azure OpenAI."""
-        logging.info("Generating Azure embeddings...")
+        logging.info(f"Generating Azure embeddings for file_id: {file_id}...")
         try:
             # Use a default model_choice like 'gpt_4o_mini' as AzureChatbot is used here
             # primarily for its configuration and BaseRAGHandler methods for embeddings.
@@ -336,19 +607,29 @@ class EmbeddingHandler:
                 collection_name_prefix="rag_collection_",  # Ensure this matches how collection_name is formed
             )
 
-            azure_handler.create_and_store_embeddings(
-                chunks, file_id, "azure", is_embedding=True
+            # Use asyncio.to_thread for IO-bound operations
+            await asyncio.to_thread(
+                azure_handler.create_and_store_embeddings,
+                chunks,
+                file_id,
+                "azure",
+                is_embedding=True,
             )
 
-            logging.info("Azure embeddings generated successfully")
+            logging.info(
+                f"Azure embeddings generated successfully for file_id: {file_id}"
+            )
             return "completed"
         except Exception as e:
-            logging.error(f"Error creating Azure embeddings: {str(e)}", exc_info=True)
+            logging.error(
+                f"Error creating Azure embeddings for file_id {file_id}: {str(e)}",
+                exc_info=True,
+            )
             raise
 
-    def _create_gemini_embeddings(self, file_id: str, chunks: List[str]):
+    async def _create_gemini_embeddings(self, file_id: str, chunks: List[str]):
         """Creates embeddings using Gemini model."""
-        logging.info("Generating Gemini embeddings...")
+        logging.info(f"Generating Gemini embeddings for file_id: {file_id}...")
         try:
             collection_name = f"rag_collection_{file_id}"
 
@@ -360,31 +641,41 @@ class EmbeddingHandler:
                 collection_name=collection_name,
             )
 
-            gemini_handler.create_and_store_embeddings(
-                chunks, file_id, "google", is_embedding=True
+            # Use asyncio.to_thread for IO-bound operations
+            await asyncio.to_thread(
+                gemini_handler.create_and_store_embeddings,
+                chunks,
+                file_id,
+                "google",
+                is_embedding=True,
             )
 
-            logging.info("Gemini embeddings generated successfully")
+            logging.info(
+                f"Gemini embeddings generated successfully for file_id: {file_id}"
+            )
             return "completed"
         except Exception as e:
-            logging.error(f"Error creating Gemini embeddings: {str(e)}", exc_info=True)
+            logging.error(
+                f"Error creating Gemini embeddings for file_id {file_id}: {str(e)}",
+                exc_info=True,
+            )
             raise
 
     async def _upload_embeddings_to_gcs(self, file_id: str):
-        logging.info("Uploading embeddings to GCS...")
+        logging.info(f"Uploading embeddings to GCS for file_id: {file_id}...")
         try:
             # Get the temp metadata which should already have the correct file_id
             temp_metadata = self.gcs_handler.temp_metadata
 
-            # If we have temp_metadata and a file_id in it, use that to ensure consistency
+            # If we have temp_metadata and a file_id in it that differs, log a warning but KEEP using the passed file_id
             if temp_metadata and "file_id" in temp_metadata:
                 metadata_file_id = temp_metadata.get("file_id")
                 if metadata_file_id != file_id:
                     logging.warning(
                         f"Metadata file_id {metadata_file_id} differs from passed file_id "
-                        f"{file_id}. Using metadata file_id."
+                        f"{file_id}. Using passed file_id to avoid mix-ups."
                     )
-                    file_id = metadata_file_id
+                    # Continue using the passed file_id for consistency
 
             for model in ["azure", "google"]:
                 chroma_db_path = f"./chroma_db/{file_id}/{model}"
@@ -407,6 +698,244 @@ class EmbeddingHandler:
         except Exception as e:
             logging.error(f"Error uploading embeddings to GCS: {str(e)}", exc_info=True)
             raise
+
+    async def _cleanup_failed_embeddings(self, file_id: str):
+        """Remove any partially created embeddings for failed operations."""
+        try:
+            logging.info(f"Cleaning up failed embeddings for file_id: {file_id}")
+            # Clean up local files
+            for model in ["azure", "google"]:
+                local_path = f"./chroma_db/{file_id}/{model}"
+                if os.path.exists(local_path):
+                    # Use asyncio.to_thread for IO-bound operations like file deletion
+                    await asyncio.to_thread(self._remove_directory, local_path)
+                    logging.info(f"Removed local embeddings at {local_path}")
+
+            # We don't delete from GCS as it might be partial and the original data should be preserved
+            # for debugging purposes. In production, you might want to add GCS cleanup as well.
+
+            # Clean up ChromaDB instance if it exists
+            try:
+                if hasattr(self.chroma_manager, "delete_embeddings"):
+                    await asyncio.to_thread(
+                        self.chroma_manager.delete_embeddings, file_id
+                    )
+                    logging.info(f"Deleted ChromaDB instance for {file_id}")
+            except Exception as chroma_e:
+                logging.error(f"Error cleaning up ChromaDB: {str(chroma_e)}")
+
+        except Exception as e:
+            logging.error(f"Error cleaning up embeddings: {str(e)}", exc_info=True)
+            # We don't re-raise as this is a cleanup operation
+            # and we don't want it to affect the main error handling
+
+    def _remove_directory(self, path: str):
+        """Helper method to remove a directory safely."""
+        import shutil
+
+        shutil.rmtree(path, ignore_errors=True)
+
+    def _get_metadata(
+        self, file_id: str, file_metadata: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """Get metadata for a file with proper fallback mechanisms."""
+        # STEP 1: Check if provided file_metadata is valid for this file_id
+        if file_metadata is not None:
+            if file_metadata.get("file_id") == file_id:
+                logging.info(f"Using provided file-specific metadata for {file_id}")
+                return (
+                    file_metadata.copy()
+                )  # Return a copy to prevent modifications affecting the original
+            else:
+                logging.warning(
+                    f"Provided file_metadata has incorrect file_id: {file_metadata.get('file_id')} vs {file_id}"
+                )
+                # Don't use this metadata as it belongs to another file
+                file_metadata = None
+
+        # STEP 2: Check if global temp_metadata is valid for this file_id
+        if self.gcs_handler.temp_metadata:
+            if self.gcs_handler.temp_metadata.get("file_id") == file_id:
+                metadata_copy = self.gcs_handler.temp_metadata.copy()
+                # Mark that we've accessed this to track potential cross-contamination
+                metadata_copy["_accessed_by"] = file_id
+
+                # Check if this file_id is in the isolation markers
+                isolation_markers = self.gcs_handler.temp_metadata.get(
+                    "_isolation_markers", []
+                )
+                if file_id in isolation_markers:
+                    logging.warning(
+                        f"Found file_id {file_id} in isolation markers, this metadata should not be used"
+                    )
+                    # Don't use this metadata as it's explicitly marked as not for this file
+                    return self._get_metadata_from_gcs(file_id)
+
+                # Clear the global temp_metadata after use to prevent it affecting other files
+                self.gcs_handler.temp_metadata = None
+                logging.info(
+                    f"Cleared global temp_metadata after copying for {file_id}"
+                )
+                return metadata_copy
+            else:
+                logging.warning(
+                    f"Global temp_metadata has incorrect file_id:"
+                    f" {self.gcs_handler.temp_metadata.get('file_id')} vs {file_id}"
+                )
+
+        # STEP 3: Try to get metadata from GCS as a last resort
+        return self._get_metadata_from_gcs(file_id)
+
+    def _get_metadata_from_gcs(self, file_id: str) -> Dict[str, Any]:
+        """Helper method to get metadata from GCS with error handling."""
+        temp_metadata = self.gcs_handler.get_file_info(file_id)
+        if not temp_metadata:
+            raise ValueError(f"No metadata found for file_id: {file_id}")
+
+        logging.info(
+            f"Retrieved metadata from GCS for file_id {file_id}: {temp_metadata}"
+        )
+        return temp_metadata
+
+    def _extract_and_chunk_text(
+        self, base_handler, file_path: str
+    ) -> tuple[str, List[str]]:
+        """Extract text from file and split into chunks."""
+        text = base_handler.extract_text_from_file(file_path)
+        if text.startswith("ERROR:"):
+            raise Exception(f"Error extracting text: {text[7:]}")
+
+        text_chunks = base_handler.split_text(text)
+        if not text_chunks:
+            raise Exception("No processable text found in the document")
+
+        return text, text_chunks
+
+    def _log_chunk_info(self, base_handler, chunks: List[str], prefix: str = ""):
+        """Log information about chunks."""
+        prefix_str = f"{prefix} " if prefix else ""
+        logging.info(f"{prefix_str}Text split into {len(chunks)} chunks")
+
+        for i, chunk in enumerate(chunks):
+            tokens = len(base_handler.simple_tokenize(chunk))
+            logging.info(f"{prefix_str}Chunk {i}: {tokens} tokens")
+
+    async def _process_image_file(
+        self, file_id: str, base_handler, temp_file_path: str, second_file_path: str
+    ) -> tuple[Dict, Dict]:
+        """Process image file with separate GPT-4 and Gemini analysis files."""
+        logging.info("Processing image analyses separately")
+
+        # Process GPT-4 analysis
+        _, gpt4_chunks = self._extract_and_chunk_text(base_handler, temp_file_path)
+        self._log_chunk_info(base_handler, gpt4_chunks, "GPT-4")
+        azure_result = self._create_azure_embeddings(file_id, gpt4_chunks)
+
+        # Process Gemini analysis
+        if not second_file_path:
+            raise Exception("Second analysis file path not provided for image")
+
+        _, gemini_chunks = self._extract_and_chunk_text(base_handler, second_file_path)
+        self._log_chunk_info(base_handler, gemini_chunks, "Gemini")
+        gemini_result = self._create_gemini_embeddings(file_id, gemini_chunks)
+
+        return azure_result, gemini_result
+
+    async def _process_regular_file(
+        self, file_id: str, base_handler, temp_file_path: str
+    ) -> tuple[Dict, Dict]:
+        """Process regular (non-image) file with same chunks for both models."""
+        logging.info(f"Processing non-image file with file_id: {file_id}")
+
+        # Extract text and create chunks
+        _, text_chunks = self._extract_and_chunk_text(base_handler, temp_file_path)
+        self._log_chunk_info(base_handler, text_chunks)
+
+        # Create embeddings using both models with same chunks in parallel
+        logging.info(f"Starting parallel embedding generation for file_id: {file_id}")
+        azure_task = self._create_azure_embeddings(file_id, text_chunks)
+        gemini_task = self._create_gemini_embeddings(file_id, text_chunks)
+
+        # Wait for both embedding generation tasks to complete
+        azure_result, gemini_result = await asyncio.gather(
+            azure_task,
+            gemini_task,
+            return_exceptions=True,  # Continue if one fails, handle exceptions later
+        )
+
+        # Handle any exceptions that occurred during parallel processing
+        if isinstance(azure_result, Exception):
+            logging.error(
+                f"Azure embedding generation failed for {file_id}: {str(azure_result)}"
+            )
+            azure_result = {"status": "failed", "error": str(azure_result)}
+
+        if isinstance(gemini_result, Exception):
+            logging.error(
+                f"Gemini embedding generation failed for {file_id}: {str(gemini_result)}"
+            )
+            gemini_result = {"status": "failed", "error": str(gemini_result)}
+
+        logging.info(f"Completed parallel embedding generation for file_id: {file_id}")
+        return azure_result, gemini_result
+
+    async def _create_file_info(
+        self,
+        file_id: str,
+        temp_metadata: Dict[str, Any],
+        azure_result: Dict,
+        gemini_result: Dict,
+    ) -> Dict[str, Any]:
+        """Create file info dictionary with embeddings metadata."""
+        # Get metadata file_id if it exists to ensure consistency
+        metadata_file_id = temp_metadata.get("file_id") if temp_metadata else None
+
+        # If metadata has a file_id that differs from the passed file_id, log a warning but USE THE PASSED file_id
+        # This prevents file_id mix-up during parallel processing
+        if metadata_file_id and metadata_file_id != file_id:
+            logging.warning(
+                f"Metadata file_id {metadata_file_id} differs from passed file_id "
+                f"{file_id}. Using passed file_id to avoid mix-ups."
+            )
+
+        # Always use the passed file_id to avoid mix-ups in concurrent processing
+        consistent_file_id = file_id
+
+        # Create file_info with embeddings metadata
+        file_info = {
+            **temp_metadata,  # Include original metadata
+            "embeddings": {
+                "azure": azure_result,
+                "gemini": gemini_result,
+            },
+            "embeddings_status": "completed",
+            "azure_ready": True,
+            "file_id": consistent_file_id,  # Ensure file_id consistency
+            "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
+        }
+
+        # Ensure critical fields are present
+        # If we're missing file_hash but have it in GCS, retrieve it from there
+        if "file_hash" not in file_info:
+            logging.warning(
+                f"file_hash missing in metadata for {file_id}, attempting to retrieve from GCS"
+            )
+            gcs_metadata = self.gcs_handler.get_file_info(file_id)
+            if gcs_metadata and "file_hash" in gcs_metadata:
+                file_info["file_hash"] = gcs_metadata["file_hash"]
+                logging.info(f"Retrieved file_hash from GCS: {file_info['file_hash']}")
+            else:
+                logging.error(f"Unable to retrieve file_hash for {file_id} from GCS")
+
+        # Preserve original_filename if available
+        if (
+            "original_filename" not in file_info
+            and temp_metadata
+            and "original_filename" in temp_metadata
+        ):
+            file_info["original_filename"] = temp_metadata["original_filename"]
+
+        return file_info
 
     def get_embeddings_info(self, file_id: str):
         # Retrieve embeddings info from GCS

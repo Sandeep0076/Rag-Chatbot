@@ -1,3 +1,4 @@
+import uuid
 from typing import List, Optional, Union
 
 from pydantic import BaseModel, Field
@@ -9,6 +10,7 @@ class Query(BaseModel):
     file_ids: Optional[List[str]] = None  # For multiple files
     model_choice: str = Field(..., description="The chosen language model")
     user_id: str
+    session_id: Optional[str] = None  # For session-based file isolation
     model_config = {"protected_namespaces": ()}
 
 
@@ -28,6 +30,9 @@ class FileUploadResponse(BaseModel):
     status: str = "success"  # Added status field with default value
     temp_file_path: Optional[str] = None
     multi_file_mode: bool = False  # Flag to indicate multiple file processing
+    session_id: str = Field(
+        default_factory=lambda: str(uuid.uuid4())
+    )  # Unique session identifier for tracking upload groups
 
 
 class NeighborsQuery(BaseModel):

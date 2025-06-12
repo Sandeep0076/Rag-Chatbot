@@ -302,6 +302,9 @@ async def process_url_content(
                 f"Setting multi_file_mode to TRUE, file_ids: {url_result['file_ids']}"
             )
 
+    # Generate a unique session_id for this URL content batch
+    session_id = str(uuid.uuid4())
+
     # Create a proper response object to ensure all fields are included
     response_data = {
         "file_id": url_result.get("file_id"),
@@ -313,6 +316,7 @@ async def process_url_content(
         "is_image": url_result.get("is_image", False),
         "is_tabular": url_result.get("is_tabular", False),
         "temp_file_path": url_result.get("temp_file_path"),
+        "session_id": session_id,  # Include the session_id in the response
     }
 
     logging.info(
@@ -476,7 +480,9 @@ def is_document_file(file_extension, is_image):
     return file_extension in [".pdf", ".txt", ".doc", ".docx"] or is_image
 
 
-def process_document_file(background_tasks, file_id, temp_file_path, username_list):
+def process_document_file(
+    background_tasks, file_id, temp_file_path, username_list, file_metadata=None
+):
     """
     Process a document file that needs embeddings.
 
@@ -485,10 +491,19 @@ def process_document_file(background_tasks, file_id, temp_file_path, username_li
         file_id: ID of the file
         temp_file_path: Path to the temporary file
         username_list: List of usernames for file ownership
+        file_metadata: Optional file-specific metadata to pass through the chain
     """
     if not file_id or not temp_file_path:
         logging.warning(f"Invalid file or path for document processing: {file_id}")
         return
+
+    # Get existing metadata from GCS handler if available
+    if not file_metadata:
+        file_metadata = gcs_handler.temp_metadata
+
+    logging.info(
+        f"Processing document with file_id {file_id}, metadata: {file_metadata}"
+    )
 
     # Schedule embedding creation in the background
     background_tasks.add_task(
@@ -499,6 +514,7 @@ def process_document_file(background_tasks, file_id, temp_file_path, username_li
         configs,
         SessionLocal,
         username_list,
+        file_metadata,
     )
     logging.info(f"Scheduled embeddings creation for file ID {file_id}")
 
@@ -515,12 +531,16 @@ def format_upload_response(processed_file_ids, original_filenames, is_tabular_fl
     Returns:
         JSONResponse: Formatted response
     """
+    # Generate a unique session_id for this upload batch
+    session_id = str(uuid.uuid4())
+
     # Return a properly formatted response with all IDs
     response_data = {
         "file_ids": processed_file_ids,
         "original_filenames": original_filenames,
         "status": "success",
         "message": f"Successfully processed {len(processed_file_ids)} files",
+        "session_id": session_id,  # Include the session_id in the response
     }
 
     # Set multi_file_mode flag if more than one file
@@ -540,6 +560,157 @@ def format_upload_response(processed_file_ids, original_filenames, is_tabular_fl
         f"multi_file_mode={response_data.get('multi_file_mode', False)}"
     )
     return JSONResponse(content=response_data)
+
+
+async def process_files_by_type(
+    background_tasks,
+    all_files,
+    results,
+    processed_file_ids,
+    original_filenames,
+    is_tabular_flags,
+    is_image,
+    username,
+):
+    """Process each uploaded file based on its type (tabular or document)."""
+
+    for i, result in enumerate(results):
+        file_id = processed_file_ids[i]
+        temp_file_path = result.get("temp_file_path")
+
+        # Skip invalid files
+        if not file_id or not temp_file_path:
+            logging.warning(f"Skipping invalid file: {original_filenames[i]}")
+            continue
+
+        # Process file based on type
+        if is_tabular_file(all_files[i].filename):
+            # Handle tabular file (CSV, Excel, DB)
+            is_tabular_flags[i] = process_tabular_file(
+                background_tasks,
+                file_id,
+                temp_file_path,
+                username,
+                all_files[i].filename,
+                is_image,
+            )
+        else:
+            # Handle document file
+            await process_document_type_file(
+                background_tasks,
+                file_id,
+                temp_file_path,
+                all_files[i].filename,
+                result,
+                username,
+                is_image,
+            )
+
+
+async def process_document_type_file(
+    background_tasks, file_id, temp_file_path, filename, result, username, is_image
+):
+    """Process a document file, handling new uploads and existing files differently."""
+
+    # Check for document files that need embeddings
+    file_extension = os.path.splitext(filename)[1].lower()
+
+    # Process new document file
+    if is_document_file(file_extension, is_image):
+        logging.info(f"Processing file with embedding support: {filename}")
+
+        # Get document metadata
+        file_metadata = result.get("metadata")
+        if not file_metadata:
+            local_gcs_handler = GCSHandler(configs)
+            file_metadata = local_gcs_handler.get_file_info(file_id)
+
+        # Create embeddings for document file
+        process_document_file(
+            background_tasks, file_id, temp_file_path, [username], file_metadata
+        )
+
+    # Handle existing files - check if they need new embeddings
+    if result["status"] == "existing":
+        await handle_existing_file(
+            background_tasks, file_id, temp_file_path, username, result
+        )
+
+
+async def handle_existing_file(
+    background_tasks, file_id, temp_file_path, username, result
+):
+    """Handle an existing file, checking if embeddings need to be recreated."""
+
+    logging.info(f"File {file_id} already exists, checking if it needs new embeddings")
+
+    # Check if embeddings exist for both model types
+    google_result = await embedding_handler.check_embeddings_exist(
+        file_id, "gemini-flash"
+    )
+    azure_result = await embedding_handler.check_embeddings_exist(
+        file_id, "gpt_4o_mini"
+    )
+
+    # Get existing username list to ensure we preserve all users
+    gcs_handler = GCSHandler(configs)
+    current_file_info = gcs_handler.get_file_info(file_id)
+    current_username_list = current_file_info.get("username", [])
+
+    # Ensure current_username_list is a list
+    if not isinstance(current_username_list, list):
+        current_username_list = [current_username_list]
+
+    # If embeddings already exist, just update the username list directly
+    if google_result["embeddings_exist"] and azure_result["embeddings_exist"]:
+        await update_username_for_existing_file(
+            file_id, username, current_username_list
+        )
+    # If any embeddings are missing, recreate them
+    else:
+        await recreate_embeddings_for_existing_file(
+            background_tasks,
+            file_id,
+            temp_file_path,
+            username,
+            result,
+            current_username_list,
+        )
+
+
+async def update_username_for_existing_file(file_id, username, current_username_list):
+    """Update the username list for an existing file with valid embeddings."""
+
+    logging.info(
+        f"Valid embeddings exist for file_id {file_id}, updating username list only"
+    )
+
+    # Add new username if not already present
+    if username not in current_username_list:
+        current_username_list.append(username)
+
+    # Update username list directly
+    gcs_handler = GCSHandler(configs)
+    gcs_handler.update_username_list(file_id, current_username_list)
+    logging.info(f"Updated username list for existing file: {current_username_list}")
+
+
+async def recreate_embeddings_for_existing_file(
+    background_tasks, file_id, temp_file_path, username, result, current_username_list
+):
+    """Recreate embeddings for an existing file with missing embeddings."""
+
+    logging.info(f"Recreating embeddings for existing file {file_id}")
+
+    # Get existing username list + new username
+    username_list = result.get("username_list", [username])
+
+    # Ensure current usernames are preserved
+    for current_user in current_username_list:
+        if current_user not in username_list:
+            username_list.append(current_user)
+
+    process_document_file(background_tasks, file_id, temp_file_path, username_list)
 
 
 @app.post("/file/upload", response_model=FileUploadResponse)
@@ -590,65 +761,16 @@ async def upload_file(
             )
 
             # Process each file based on its type
-            for i, result in enumerate(results):
-                file_id = processed_file_ids[i]
-                temp_file_path = result.get("temp_file_path")
-
-                # Skip invalid files
-                if not file_id or not temp_file_path:
-                    logging.warning(f"Skipping invalid file: {original_filenames[i]}")
-                    continue
-
-                # Handle different file types
-                if is_tabular_file(all_files[i].filename):
-                    # Process tabular file (CSV, Excel, DB)
-                    is_tabular_flags[i] = process_tabular_file(
-                        background_tasks,
-                        file_id,
-                        temp_file_path,
-                        username,
-                        all_files[i].filename,
-                        is_image,
-                    )
-                else:
-                    # Check for document files that need embeddings
-                    file_extension = os.path.splitext(all_files[i].filename)[1].lower()
-                    if is_document_file(file_extension, is_image):
-                        logging.info(
-                            f"Processing file with embedding support: {all_files[i].filename}"
-                        )
-
-                        # Process document file that needs embeddings
-                        process_document_file(
-                            background_tasks, file_id, temp_file_path, [username]
-                        )
-
-                    # Handle existing files - check if they need new embeddings
-                    if result["status"] == "existing":
-                        logging.info(
-                            f"File {file_id} already exists, checking if it needs new embeddings"
-                        )
-                        # Check if embeddings exist for both model types
-                        google_result = await embedding_handler.check_embeddings_exist(
-                            file_id, "gemini-flash"
-                        )
-                        azure_result = await embedding_handler.check_embeddings_exist(
-                            file_id, "gpt_4o_mini"
-                        )
-
-                        # If any embeddings are missing, recreate them
-                        if (
-                            not google_result["embeddings_exist"]
-                            or not azure_result["embeddings_exist"]
-                        ):
-                            logging.info(
-                                f"Recreating embeddings for existing file {file_id}"
-                            )
-                            # Get existing username list + new username
-                            username_list = result.get("username_list", [username])
-                            process_document_file(
-                                background_tasks, file_id, temp_file_path, username_list
-                            )
+            await process_files_by_type(
+                background_tasks,
+                all_files,
+                results,
+                processed_file_ids,
+                original_filenames,
+                is_tabular_flags,
+                is_image,
+                username,
+            )
 
             # Format and return the response
             return format_upload_response(
@@ -665,20 +787,6 @@ async def upload_file(
 
     except Exception as e:
         logging.exception(f"Error in upload_file: {str(e)}")
-        # Ensure cleanup of any temporary files
-        if (
-            "temp_file_path" in locals()
-            and temp_file_path
-            and os.path.exists(temp_file_path)
-        ):
-            try:
-                os.remove(temp_file_path)
-                logging.info(f"Cleaned up temporary file: {temp_file_path}")
-            except Exception as cleanup_error:
-                logging.error(
-                    f"Failed to clean up temporary file: {str(cleanup_error)}"
-                )
-
         # Return a more detailed error response with stack trace in dev mode
         if configs.app.dev:
             import traceback
@@ -789,6 +897,7 @@ async def create_embeddings_background(
     configs,
     SessionLocal,
     username_list=None,
+    file_metadata=None,
 ):
     """Background task for creating embeddings.
 
@@ -801,9 +910,64 @@ async def create_embeddings_background(
         username_list: Optional list of usernames to preserve in file_info.json
     """
     try:
-        # Create embeddings
+        # Initialize GCS handler to get file-specific metadata
+        gcs_handler = GCSHandler(configs)
+
+        # If file_metadata wasn't provided, try to get it from GCS
+        if not file_metadata:
+            file_metadata = gcs_handler.get_file_info(file_id)
+            if not file_metadata:
+                logging.info(
+                    f"No metadata found in GCS for {file_id}, creating new metadata"
+                )
+
+                # Try to calculate file hash if the temp file exists
+                file_hash = None
+                if temp_file_path and os.path.exists(temp_file_path):
+                    try:
+                        with open(temp_file_path, "rb") as f:
+                            file_content = f.read()
+                            from rtl_rag_chatbot_api.chatbot.file_handler import (
+                                FileHandler,
+                            )
+
+                            dummy_handler = FileHandler(configs, gcs_handler)
+                            file_hash = dummy_handler.calculate_file_hash(file_content)
+                            del file_content  # Free memory
+                            logging.info(
+                                f"Calculated file_hash {file_hash} for {file_id}"
+                            )
+                    except Exception as hash_error:
+                        logging.error(
+                            f"Failed to calculate file hash: {str(hash_error)}"
+                        )
+
+                # Create basic metadata if it doesn't exist yet
+                file_metadata = {
+                    "file_id": file_id,
+                    "username": username_list if username_list else [],
+                }
+
+                # Add file hash if we were able to calculate it
+                if file_hash:
+                    file_metadata["file_hash"] = file_hash
+
+        # Verify file metadata has the correct file_id and file_hash before using it
+        if file_metadata and file_metadata.get("file_id") != file_id:
+            logging.warning(
+                f"Metadata file_id mismatch: {file_metadata.get('file_id')} != {file_id}"
+            )
+            # Fix the file_id in the metadata
+            file_metadata["file_id"] = file_id
+
+        # Log details about the metadata including file_hash
+        file_hash = file_metadata.get("file_hash") if file_metadata else None
+        logging.info(f"Using file-specific metadata for {file_id}: {file_metadata}")
+        logging.info(f"File hash for {file_id}: {file_hash}")
+
+        # Create embeddings with file-specific metadata
         embedding_result = await embedding_handler.ensure_embeddings_exist(
-            file_id=file_id, temp_file_path=temp_file_path
+            file_id=file_id, temp_file_path=temp_file_path, file_metadata=file_metadata
         )
 
         # If embeddings were created successfully and we have a username list to preserve
@@ -812,10 +976,26 @@ async def create_embeddings_background(
                 # Initialize GCS handler
                 gcs_handler = GCSHandler(configs)
 
-                # Update the file_info.json with the preserved username list
-                gcs_handler.update_username_list(file_id, username_list)
+                # Get current file info to preserve existing usernames
+                current_file_info = gcs_handler.get_file_info(file_id)
+                current_username_list = current_file_info.get("username", [])
+
+                # Ensure current_username_list is a list
+                if not isinstance(current_username_list, list):
+                    current_username_list = [current_username_list]
+
+                # Merge username lists without duplicates
+                merged_usernames = list(set(current_username_list))
+
+                # Add any new usernames that aren't in the merged list
+                for username in username_list:
+                    if username not in merged_usernames:
+                        merged_usernames.append(username)
+
+                # Update the file_info.json with the combined username list
+                gcs_handler.update_username_list(file_id, merged_usernames)
                 logging.info(
-                    f"Updated username list for file_id {file_id} with preserved usernames"
+                    f"Updated username list for file_id {file_id} with preserved usernames: {merged_usernames}"
                 )
             except Exception as update_error:
                 logging.error(f"Error updating username list: {str(update_error)}")
@@ -1270,13 +1450,17 @@ async def _process_file_info(
     Helper function to process file information for chat queries.
 
     Args:
-        query: Query containing file_id or file_ids
+        query: Query containing file_id or file_ids and optional session_id
         gcs_handler: GCS handler for file operations
         generate_visualization: Whether visualization was requested
 
     Returns:
         Dictionary containing processed file information
     """
+    # Log session ID if provided
+    if query.session_id:
+        logging.info(f"Request contains session_id: {query.session_id}")
+
     is_multi_file = bool(query.file_ids and len(query.file_ids) > 0)
     all_file_infos = {}
     model_key = ""
@@ -1295,6 +1479,19 @@ async def _process_file_info(
             )
         file_id_logging = f"file_ids: {query.file_ids}"
         logging.info(f"Multi-file chat request for {file_id_logging}")
+
+        # The frontend is responsible for sending only the file_ids relevant to the current session
+        # We trust that the file_ids provided in the query belong to the current session
+        if query.session_id:
+            logging.info(
+                f"Processing files for session {query.session_id}: {query.file_ids}"
+            )
+
+        if not query.file_ids:
+            raise HTTPException(
+                status_code=404,
+                detail="No files specified for this chat session. Please upload files first.",
+            )
 
         # Check each file to see if it's tabular
         for f_id in query.file_ids:
@@ -1352,6 +1549,12 @@ async def _process_file_info(
         file_id_logging = f"file_id: {query.file_id}"
         logging.info(f"Single-file chat request for {file_id_logging}")
         file_info_single = gcs_handler.get_file_info(query.file_id)
+
+        # Log session information if provided
+        if query.session_id:
+            logging.info(
+                f"Processing single file {query.file_id} for session {query.session_id}"
+            )
         if not file_info_single:
             embeddings_status = gcs_handler.check_embeddings_status(query.file_id)
             if embeddings_status == "in_progress":

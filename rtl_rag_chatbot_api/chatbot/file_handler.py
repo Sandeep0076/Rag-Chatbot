@@ -265,6 +265,7 @@ class FileHandler:
             "message": "File processed and ready for querying.",
             "status": "success",
             "temp_file_path": temp_file_path,
+            "metadata": metadata,  # Include file-specific metadata
         }
 
     async def _handle_existing_tabular_data(
@@ -423,11 +424,36 @@ class FileHandler:
         Returns:
             bool: True if upload succeeded, False otherwise
         """
-        # Todo:: Check if encrypted file is already in gcp, if yes no need to encrypt
         if not encrypted_file_path:
             return False
 
         try:
+            # Extract file_id from destination path to check for conflicts
+            # Expected format: "file-embeddings/{file_id}/{filename}.encrypted"
+            path_parts = destination_path.split("/")
+            if len(path_parts) >= 3:
+                file_id = path_parts[1]
+
+                # Check if there are any other encrypted files in this folder with different names
+                prefix = f"file-embeddings/{file_id}/"
+                blobs = list(self.gcs_handler.bucket.list_blobs(prefix=prefix))
+
+                for blob in blobs:
+                    # Check if we have a different PDF already in this directory
+                    if (
+                        blob.name.endswith(".encrypted")
+                        and blob.name != destination_path
+                        and not blob.name.endswith(f"{original_filename}.encrypted")
+                    ):
+                        logging.warning(
+                            f"Found conflicting file in {file_id} directory: {blob.name} vs {destination_path}"
+                        )
+                        # Log this as an error for investigation
+                        logging.error(
+                            f"CONFLICT DETECTED: Multiple PDFs in same directory. "
+                            f"Existing: {blob.name}, New: {destination_path}"
+                        )
+
             files_to_upload = {
                 "encrypted_file": (
                     encrypted_file_path,
@@ -614,6 +640,16 @@ class FileHandler:
 
         # For images, we only need the embeddings to chat
         if is_image:
+            # Get existing file metadata to ensure we have correct hash and other properties
+            file_metadata = self.gcs_handler.get_file_info(existing_file_id) or {}
+
+            # Ensure username is included
+            if (
+                "username" in file_metadata
+                and username not in file_metadata["username"]
+            ):
+                file_metadata["username"].append(username)
+
             return {
                 "file_id": existing_file_id,
                 "is_image": is_image,
@@ -621,6 +657,7 @@ class FileHandler:
                 "message": "File already exists and has embeddings.",
                 "status": "existing",
                 "temp_file_path": temp_file_path,  # Keep original temp file for reference
+                "metadata": file_metadata,  # Include file-specific metadata
             }
 
         # Copy the temp file to match the existing file ID path
@@ -628,6 +665,13 @@ class FileHandler:
         os.makedirs(os.path.dirname(existing_temp_path), exist_ok=True)
         shutil.copy2(temp_file_path, existing_temp_path)
         temp_file_path = existing_temp_path
+
+        # Get existing file metadata to ensure we have correct hash and other properties
+        file_metadata = self.gcs_handler.get_file_info(existing_file_id) or {}
+
+        # Ensure username is included
+        if "username" in file_metadata and username not in file_metadata["username"]:
+            file_metadata["username"].append(username)
 
         return {
             "file_id": existing_file_id,
@@ -638,6 +682,7 @@ class FileHandler:
             else "File already exists and has embeddings.",
             "status": "existing",
             "temp_file_path": temp_file_path,
+            "metadata": file_metadata,  # Include file-specific metadata
         }
 
     async def process_file(
@@ -664,15 +709,45 @@ class FileHandler:
 
             existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
             if existing_file_id:
-                # Get embedding status for existing file
-                embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
-                google_result = await embedding_handler.check_embeddings_exist(
-                    existing_file_id, "gemini-flash"
+                # Verify this isn't a case of hash collision by checking filename
+                # This helps prevent multiple PDFs ending up in the same directory
+                gcs_file_path = (
+                    f"file-embeddings/{existing_file_id}/{original_filename}.encrypted"
                 )
-                azure_result = await embedding_handler.check_embeddings_exist(
-                    existing_file_id, "gpt_4o_mini"
+                file_exists = await asyncio.to_thread(
+                    self.gcs_handler.check_file_exists, gcs_file_path
                 )
-                logging.info(f"Existing file found with hash: {existing_file_id}")
+
+                # If we find a file with the same hash but different filename, treat as a new file
+                if not file_exists:
+                    # Check if there are other PDFs in this directory
+                    prefix = f"file-embeddings/{existing_file_id}/"
+                    blobs = list(self.gcs_handler.bucket.list_blobs(prefix=prefix))
+
+                    for blob in blobs:
+                        if blob.name.endswith(".encrypted") and not blob.name.endswith(
+                            f"{original_filename}.encrypted"
+                        ):
+                            logging.warning(
+                                f"Found hash match but with different filename: {blob.name}"
+                            )
+                            # Use the new file_id instead to avoid conflicts
+                            existing_file_id = None
+                            logging.info(
+                                f"Treating as new file with ID: {file_id} to avoid conflicts"
+                            )
+                            break
+
+                # If we're still using the existing_file_id, get embedding status
+                if existing_file_id:
+                    embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
+                    google_result = await embedding_handler.check_embeddings_exist(
+                        existing_file_id, "gemini-flash"
+                    )
+                    azure_result = await embedding_handler.check_embeddings_exist(
+                        existing_file_id, "gpt_4o_mini"
+                    )
+                    logging.info(f"Existing file found with hash: {existing_file_id}")
 
             # Create necessary directories
             await self._prepare_file_directories(file_id, existing_file_id)
@@ -717,7 +792,10 @@ class FileHandler:
 
             # Add encryption status to metadata
             metadata["is_encrypted"] = encrypted_file_path is not None
-            self.gcs_handler.temp_metadata = metadata
+
+            # Update temp_metadata but also ensure metadata is explicitly returned with the result
+            # This prevents metadata sharing between concurrent file uploads
+            self.gcs_handler.temp_metadata = metadata.copy()
 
             # If it's a new tabular file, prepare SQLite database
             if (is_tabular or is_database) and not existing_file_id:
@@ -746,15 +824,46 @@ class FileHandler:
             if existing_file_result:
                 return existing_file_result
 
-            # Upload the encrypted file to GCS if available (skip for tabular files - handled separately)
+            # Check for potential conflicts before uploading
             if not is_tabular and encrypted_file_path:
+                # Check if there's already a different PDF in this directory
+                prefix = f"file-embeddings/{actual_file_id}/"
+                has_conflict = False
+
+                blobs = await asyncio.to_thread(
+                    list, self.gcs_handler.bucket.list_blobs(prefix=prefix)
+                )
+
+                for blob in blobs:
+                    if blob.name.endswith(".encrypted") and not blob.name.endswith(
+                        f"{original_filename}.encrypted"
+                    ):
+                        has_conflict = True
+                        logging.warning(
+                            f"Detected potential conflict: {blob.name} vs {original_filename}.encrypted"
+                        )
+                        break
+
+                if has_conflict:
+                    # Generate a new file_id to avoid conflicts
+                    new_file_id = str(uuid.uuid4())
+                    logging.info(
+                        f"Avoiding conflict by using new file_id: {new_file_id} instead of {actual_file_id}"
+                    )
+                    actual_file_id = new_file_id
+                    # Update metadata with new file_id
+                    metadata["file_id"] = actual_file_id
+                    self.gcs_handler.temp_metadata = metadata.copy()
+
+                # Upload the encrypted file
                 await self._upload_encrypted_file(
                     encrypted_file_path,
                     f"file-embeddings/{actual_file_id}/{original_filename}.encrypted",
                     original_filename,
                 )
 
-            # Return response for new files
+            # Return response for new files with explicit metadata inclusion
+            # This ensures metadata is passed through the processing chain
             return {
                 "file_id": actual_file_id,  # Always use the consistent file_id
                 "is_image": is_image,
@@ -766,6 +875,7 @@ class FileHandler:
                 "temp_file_path": analysis_files[0]
                 if is_image and analysis_files
                 else temp_file_path,
+                "metadata": metadata,  # Include metadata explicitly with the result
             }
 
         except Exception as e:
@@ -955,8 +1065,23 @@ class FileHandler:
                 logging.info(
                     f"Saving metadata for URL {url} with file_id {url_file_id}"
                 )
-                # Set temp_metadata for embedding creation process
+                # Update GCS metadata but also return it directly
+                # This ensures file-specific metadata is passed through the chain
+                # without relying on shared state in self.gcs_handler.temp_metadata
                 self.gcs_handler.temp_metadata = metadata
+                result = {
+                    "file_id": url_file_id,
+                    "status": "success",
+                    "message": f"URL {url} processed successfully",
+                    "is_image": False,
+                    "is_tabular": False,
+                    "url": url,
+                    "temp_file_path": temp_file_path,
+                    "word_count": word_count,
+                    "title": title,
+                }
+                # Return metadata explicitly to ensure file-specific handling
+                return {"metadata": metadata, **result}
                 # Also update file info for persistence
                 self.gcs_handler.update_file_info(url_file_id, metadata)
 
