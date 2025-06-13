@@ -12,6 +12,9 @@ from fastapi import UploadFile
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
+from rtl_rag_chatbot_api.chatbot.utils.file_encryption_manager import (
+    FileEncryptionManager,
+)
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
@@ -42,6 +45,7 @@ class FileHandler:
         self.configs = configs
         self.gcs_handler = gcs_handler
         self.gemini_handler = gemini_handler
+        self.encryption_manager = FileEncryptionManager(gcs_handler)
 
     def calculate_file_hash(self, file_content):
         """
@@ -237,7 +241,8 @@ class FileHandler:
 
         # Upload metadata and encrypted database
         try:
-            encrypted_db_path = encrypt_file(db_path)
+            # Run encryption in a thread to avoid blocking
+            encrypted_db_path = await asyncio.to_thread(encrypt_file, db_path)
             try:
                 files_to_upload = {
                     "metadata": (metadata, f"file-embeddings/{file_id}/file_info.json"),
@@ -391,96 +396,6 @@ class FileHandler:
                 os.remove(db_path)
             raise
 
-    async def _encrypt_file(self, file_path: str, file_name: str) -> str:
-        """
-        Encrypt a file and return the path to the encrypted file.
-
-        Args:
-            file_path (str): Path to the file to encrypt
-            file_name (str): Name of the file for logging purposes
-
-        Returns:
-            str: Path to the encrypted file, or None if encryption failed
-        """
-        try:
-            encrypted_file_path = await asyncio.to_thread(encrypt_file, file_path)
-            logging.info(f"Successfully encrypted file: {file_name}")
-            return encrypted_file_path
-        except Exception as e:
-            logging.error(f"Error encrypting file {file_name}: {str(e)}")
-            return None
-
-    async def _upload_encrypted_file(
-        self, encrypted_file_path: str, destination_path: str, original_filename: str
-    ):
-        """
-        Upload an encrypted file to GCS and clean it up afterwards.
-
-        Args:
-            encrypted_file_path (str): Path to the encrypted file
-            destination_path (str): Destination path in GCS
-            original_filename (str): Original filename for logging purposes
-
-        Returns:
-            bool: True if upload succeeded, False otherwise
-        """
-        if not encrypted_file_path:
-            return False
-
-        try:
-            # Todo : check if already encrypted file is there so no encrypt
-            # Extract file_id from destination path to check for conflicts
-            # Expected format: "file-embeddings/{file_id}/{filename}.encrypted"
-            path_parts = destination_path.split("/")
-            if len(path_parts) >= 3:
-                file_id = path_parts[1]
-
-                # Check if there are any other encrypted files in this folder with different names
-                prefix = f"file-embeddings/{file_id}/"
-                blobs = list(self.gcs_handler.bucket.list_blobs(prefix=prefix))
-
-                for blob in blobs:
-                    # Check if we have a different PDF already in this directory
-                    if (
-                        blob.name.endswith(".encrypted")
-                        and blob.name != destination_path
-                        and not blob.name.endswith(f"{original_filename}.encrypted")
-                    ):
-                        logging.warning(
-                            f"Found conflicting file in {file_id} directory: {blob.name} vs {destination_path}"
-                        )
-                        # Log this as an error for investigation
-                        logging.error(
-                            f"CONFLICT DETECTED: Multiple PDFs in same directory. "
-                            f"Existing: {blob.name}, New: {destination_path}"
-                        )
-
-            files_to_upload = {
-                "encrypted_file": (
-                    encrypted_file_path,
-                    destination_path,
-                )
-            }
-            await asyncio.to_thread(
-                self.gcs_handler.upload_to_gcs,
-                self.configs.gcp_resource.bucket_name,
-                files_to_upload,
-            )
-            logging.info(
-                f"Successfully uploaded encrypted file for {original_filename}"
-            )
-
-            # Clean up encrypted file after upload
-            if os.path.exists(encrypted_file_path):
-                os.remove(encrypted_file_path)
-            return True
-        except Exception as e:
-            logging.error(f"Error uploading encrypted file: {str(e)}")
-            # Clean up encrypted file in case of error
-            if os.path.exists(encrypted_file_path):
-                os.remove(encrypted_file_path)
-            return False
-
     async def _determine_file_types(self, original_filename):
         """Determine file types based on extension."""
         file_extension = os.path.splitext(original_filename)[1].lower()
@@ -562,31 +477,11 @@ class FileHandler:
         is_tabular,
         is_database,
     ):
-        """Check and handle encryption for existing files."""
-        # Check if encrypted file exists in GCS
-        encrypted_file_exists = await asyncio.to_thread(
-            self.gcs_handler.check_file_exists,
-            f"file-embeddings/{existing_file_id}/{original_filename}.encrypted",
+        """Check and handle encryption for existing files using the FileEncryptionManager."""
+        # Delegate the encryption logic to our FileEncryptionManager
+        await self.encryption_manager.ensure_file_encryption(
+            existing_file_id, original_filename, temp_file_path, is_tabular, is_database
         )
-
-        # If encrypted file doesn't exist, encrypt and upload the current file
-        if not encrypted_file_exists and not is_tabular and not is_database:
-            # For existing files, we need to ensure we have an encrypted version
-            existing_encrypted_file_path = encrypted_file_path
-
-            # Encrypt the file if it wasn't encrypted earlier
-            if not existing_encrypted_file_path:
-                existing_encrypted_file_path = await self._encrypt_file(
-                    temp_file_path, original_filename
-                )
-
-            # Upload the encrypted file
-            if existing_encrypted_file_path:
-                await self._upload_encrypted_file(
-                    existing_encrypted_file_path,
-                    f"file-embeddings/{existing_file_id}/{original_filename}.encrypted",
-                    original_filename,
-                )
 
     async def _handle_existing_file(
         self,
@@ -692,95 +587,52 @@ class FileHandler:
     ) -> dict:
         """Process uploaded file including handling images, tabular data and existing files."""
         try:
-            # Sanitize filename
+            # Sanitize filename and read file content
             original_filename = self._sanitize_filename(file.filename)
+            (
+                file_content,
+                file_hash,
+                file_types,
+            ) = await self._read_and_process_file_content(file, original_filename)
+            is_tabular, is_database, is_text = file_types
 
-            # Read and hash file content
-            file_content = await file.read()
-            file_hash = self.calculate_file_hash(file_content)
-            # Determine file types
-            is_tabular, is_database, is_text = await self._determine_file_types(
-                original_filename
+            # Check for existing file
+            (
+                existing_file_id,
+                google_result,
+                azure_result,
+            ) = await self._check_for_existing_file(
+                file_hash, original_filename, file_id
             )
 
-            # Check for existing file and get embedding status
-            existing_file_id = None
-            google_result = {"embeddings_exist": False}
-            azure_result = {"embeddings_exist": False}
+            # Create directories and save file
+            temp_file_path = await self._save_file_locally(
+                file_id, original_filename, file_content
+            )
+            del file_content  # Free memory
 
-            existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
-            if existing_file_id:
-                # Verify this isn't a case of hash collision by checking filename
-                # This helps prevent multiple PDFs ending up in the same directory
-                gcs_file_path = (
-                    f"file-embeddings/{existing_file_id}/{original_filename}.encrypted"
-                )
-                file_exists = await asyncio.to_thread(
-                    self.gcs_handler.check_file_exists, gcs_file_path
-                )
+            # Handle file encryption
+            encrypted_file_path = await self._handle_file_encryption(
+                is_tabular,
+                is_database,
+                existing_file_id,
+                temp_file_path,
+                original_filename,
+                file_id,
+            )
 
-                # If we find a file with the same hash but different filename, treat as a new file
-                if not file_exists:
-                    # Check if there are other PDFs in this directory
-                    prefix = f"file-embeddings/{existing_file_id}/"
-                    blobs = list(self.gcs_handler.bucket.list_blobs(prefix=prefix))
-
-                    for blob in blobs:
-                        if blob.name.endswith(".encrypted") and not blob.name.endswith(
-                            f"{original_filename}.encrypted"
-                        ):
-                            logging.warning(
-                                f"Found hash match but with different filename: {blob.name}"
-                            )
-                            # Use the new file_id instead to avoid conflicts
-                            existing_file_id = None
-                            logging.info(
-                                f"Treating as new file with ID: {file_id} to avoid conflicts"
-                            )
-                            break
-
-                # If we're still using the existing_file_id, get embedding status
-                if existing_file_id:
-                    embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
-                    google_result = await embedding_handler.check_embeddings_exist(
-                        existing_file_id, "gemini-flash"
-                    )
-                    azure_result = await embedding_handler.check_embeddings_exist(
-                        existing_file_id, "gpt_4o_mini"
-                    )
-                    logging.info(f"Existing file found with hash: {existing_file_id}")
-
-            # Create necessary directories
-            await self._prepare_file_directories(file_id, existing_file_id)
-
-            # Save file locally
-            temp_file_path = f"local_data/{file_id}_{original_filename}"
-            async with aiofiles.open(temp_file_path, "wb") as buffer:
-                await buffer.write(file_content)
-            del file_content
-
-            # Encrypt the original uploaded file (tabular files are handled separately)
-            encrypted_file_path = None
-            # should only encrypt if it is not a tabular and not an existing file
-            if not is_tabular and not existing_file_id:
-                encrypted_file_path = await self._encrypt_file(
-                    temp_file_path, original_filename
-                )
-
-            # Determine the actual file_id to use - if an existing file is found, use that ID
+            # Determine final file_id and prepare metadata
             actual_file_id = existing_file_id if existing_file_id else file_id
+            metadata = self._prepare_file_metadata(
+                is_image,
+                is_tabular,
+                is_database,
+                file_hash,
+                username,
+                original_filename,
+                actual_file_id,
+            )
 
-            # Prepare metadata for file with consistent file_id
-            metadata = {
-                "is_image": is_image,
-                "is_tabular": is_tabular or is_database,
-                "file_hash": file_hash,
-                "username": [username],  # Store username as an array
-                "original_filename": original_filename,
-                "file_id": actual_file_id,  # Always use the actual file_id (existing or new)
-            }
-
-            # Process based on file type
             # Process image analysis if needed
             analysis_files = await self._process_image_analysis(
                 is_image,
@@ -792,14 +644,11 @@ class FileHandler:
                 metadata,
             )
 
-            # Add encryption status to metadata
+            # Update metadata with encryption status
             metadata["is_encrypted"] = encrypted_file_path is not None
-
-            # Update temp_metadata but also ensure metadata is explicitly returned with the result
-            # This prevents metadata sharing between concurrent file uploads
             self.gcs_handler.temp_metadata = metadata.copy()
 
-            # If it's a new tabular file, prepare SQLite database
+            # Handle tabular data for new files
             if (is_tabular or is_database) and not existing_file_id:
                 return await self._handle_new_tabular_data(
                     actual_file_id,
@@ -826,81 +675,33 @@ class FileHandler:
             if existing_file_result:
                 return existing_file_result
 
-            # Check for potential conflicts before uploading
-            if not is_tabular and encrypted_file_path:
-                # Check if there's already a different PDF in this directory
-                prefix = f"file-embeddings/{actual_file_id}/"
-                has_conflict = False
+            # Handle potential file conflicts
+            (
+                actual_file_id,
+                encrypted_file_path,
+                metadata,
+            ) = await self._handle_file_conflicts(
+                is_tabular,
+                encrypted_file_path,
+                actual_file_id,
+                original_filename,
+                temp_file_path,
+                metadata,
+            )
 
-                blobs = await asyncio.to_thread(
-                    list, self.gcs_handler.bucket.list_blobs(prefix=prefix)
-                )
-
-                for blob in blobs:
-                    if blob.name.endswith(".encrypted") and not blob.name.endswith(
-                        f"{original_filename}.encrypted"
-                    ):
-                        has_conflict = True
-                        logging.warning(
-                            f"Detected potential conflict: {blob.name} vs {original_filename}.encrypted"
-                        )
-                        break
-
-                if has_conflict:
-                    # Generate a new file_id to avoid conflicts
-                    new_file_id = str(uuid.uuid4())
-                    logging.info(
-                        f"Avoiding conflict by using new file_id: {new_file_id} instead of {actual_file_id}"
-                    )
-                    actual_file_id = new_file_id
-                    # Update metadata with new file_id
-                    metadata["file_id"] = actual_file_id
-                    self.gcs_handler.temp_metadata = metadata.copy()
-
-                # Upload the encrypted file
-                # todo: check if encryption is already done
-                await self._upload_encrypted_file(
-                    encrypted_file_path,
-                    f"file-embeddings/{actual_file_id}/{original_filename}.encrypted",
-                    original_filename,
-                )
-
-            # Return response for new files with explicit metadata inclusion
-            # This ensures metadata is passed through the processing chain
-            return {
-                "file_id": actual_file_id,  # Always use the consistent file_id
-                "is_image": is_image,
-                "is_tabular": is_tabular,
-                "message": "File processed and ready for embedding creation."
-                if not is_tabular
-                else "File processed and ready for use.",
-                "status": "success",
-                "temp_file_path": analysis_files[0]
-                if is_image and analysis_files
-                else temp_file_path,
-                "metadata": metadata,  # Include metadata explicitly with the result
-            }
+            # Return final response
+            return self._prepare_file_success_response(
+                actual_file_id,
+                is_image,
+                is_tabular,
+                temp_file_path,
+                analysis_files,
+                metadata,
+            )
 
         except Exception as e:
             logging.error(f"Exception in process_file: {str(e)}")
-            # Clean up temp files in case of error
-            if "temp_file_path" in locals() and os.path.exists(temp_file_path):
-                await asyncio.to_thread(os.remove, temp_file_path)
-            if (
-                "encrypted_file_path" in locals()
-                and encrypted_file_path
-                and os.path.exists(encrypted_file_path)
-            ):
-                await asyncio.to_thread(os.remove, encrypted_file_path)
-            # We don't need to check for existing_encrypted_file_path as it's not defined in this scope
-            # This was likely added during refactoring but is not needed here
-            if (
-                "analysis_files" in locals()
-                and analysis_files
-                and all(os.path.exists(path) for path in analysis_files)
-            ):
-                await asyncio.to_thread(os.remove, analysis_files[0])
-                await asyncio.to_thread(os.remove, analysis_files[1])
+            await self._cleanup_on_error(locals())
             return {
                 "status": "error",
                 "message": str(e),
@@ -915,6 +716,217 @@ class FileHandler:
             ext = os.path.splitext(filename)[1]
             return filename[:96] + ext
         return filename
+
+    async def _read_and_process_file_content(
+        self, file: UploadFile, original_filename: str
+    ):
+        """Read file content and process it to get hash and file types"""
+        file_content = await file.read()
+        file_hash = self.calculate_file_hash(file_content)
+        file_types = await self._determine_file_types(original_filename)
+        return file_content, file_hash, file_types
+
+    async def _check_for_existing_file(
+        self, file_hash: str, original_filename: str, file_id: str
+    ):
+        """Check if a file with the same hash already exists and verify it's not a hash collision"""
+        google_result = {"embeddings_exist": False}
+        azure_result = {"embeddings_exist": False}
+
+        existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
+        if not existing_file_id:
+            return None, google_result, azure_result
+
+        # Verify this isn't a case of hash collision by checking filename
+        gcs_file_path = (
+            f"file-embeddings/{existing_file_id}/{original_filename}.encrypted"
+        )
+        file_exists = await asyncio.to_thread(
+            self.gcs_handler.check_file_exists, gcs_file_path
+        )
+
+        if not file_exists:
+            # Check if there are other PDFs in this directory
+            prefix = f"file-embeddings/{existing_file_id}/"
+            blobs = list(self.gcs_handler.bucket.list_blobs(prefix=prefix))
+
+            for blob in blobs:
+                if blob.name.endswith(".encrypted") and not blob.name.endswith(
+                    f"{original_filename}.encrypted"
+                ):
+                    logging.warning(
+                        f"Found hash match but with different filename: {blob.name}"
+                    )
+                    # Use the new file_id instead to avoid conflicts
+                    logging.info(
+                        f"Treating as new file with ID: {file_id} to avoid conflicts"
+                    )
+                    return None, google_result, azure_result
+
+        # If we're still using the existing_file_id, get embedding status
+        embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
+        google_result = await embedding_handler.check_embeddings_exist(
+            existing_file_id, "gemini-flash"
+        )
+        azure_result = await embedding_handler.check_embeddings_exist(
+            existing_file_id, "gpt_4o_mini"
+        )
+        logging.info(f"Existing file found with hash: {existing_file_id}")
+
+        return existing_file_id, google_result, azure_result
+
+    async def _save_file_locally(
+        self, file_id: str, original_filename: str, file_content: bytes
+    ):
+        """Save file content to local storage"""
+        await self._prepare_file_directories(file_id, None)
+        temp_file_path = f"local_data/{file_id}_{original_filename}"
+        async with aiofiles.open(temp_file_path, "wb") as buffer:
+            await buffer.write(file_content)
+        return temp_file_path
+
+    async def _handle_file_encryption(
+        self,
+        is_tabular: bool,
+        is_database: bool,
+        existing_file_id: str,
+        temp_file_path: str,
+        original_filename: str,
+        file_id: str,
+    ):
+        """Handle encryption of the file if needed"""
+        # Encrypt the original uploaded file (tabular files are handled separately)
+        if not is_tabular and not is_database and not existing_file_id:
+            # Use the FileEncryptionManager to handle encryption
+            (
+                success,
+                encrypted_file_path,
+            ) = await self.encryption_manager.encrypt_and_upload(
+                temp_file_path, original_filename, file_id
+            )
+            return encrypted_file_path
+
+        return None
+
+    def _prepare_file_metadata(
+        self,
+        is_image: bool,
+        is_tabular: bool,
+        is_database: bool,
+        file_hash: str,
+        username: str,
+        original_filename: str,
+        file_id: str,
+    ):
+        """Prepare metadata for the processed file"""
+        return {
+            "is_image": is_image,
+            "is_tabular": is_tabular or is_database,
+            "file_hash": file_hash,
+            "username": [username],  # Store username as an array
+            "original_filename": original_filename,
+            "file_id": file_id,  # Always use the actual file_id (existing or new)
+        }
+
+    async def _handle_file_conflicts(
+        self,
+        is_tabular: bool,
+        encrypted_file_path,
+        actual_file_id: str,
+        original_filename: str,
+        temp_file_path: str,
+        metadata: dict,
+    ):
+        """Check for and handle potential file conflicts"""
+        if is_tabular or not encrypted_file_path:
+            return actual_file_id, encrypted_file_path, metadata
+
+        # Check if there's already a different PDF in this directory
+        prefix = f"file-embeddings/{actual_file_id}/"
+        has_conflict = False
+
+        blobs = await asyncio.to_thread(
+            list, self.gcs_handler.bucket.list_blobs(prefix=prefix)
+        )
+
+        for blob in blobs:
+            if blob.name.endswith(".encrypted") and not blob.name.endswith(
+                f"{original_filename}.encrypted"
+            ):
+                has_conflict = True
+                logging.warning(
+                    f"Detected potential conflict: {blob.name} vs {original_filename}.encrypted"
+                )
+                break
+
+        if has_conflict:
+            # Generate a new file_id to avoid conflicts
+            new_file_id = str(uuid.uuid4())
+            logging.info(
+                f"Avoiding conflict by using new file_id: {new_file_id} instead of {actual_file_id}"
+            )
+            actual_file_id = new_file_id
+            # Update metadata with new file_id
+            metadata["file_id"] = actual_file_id
+
+            # Re-encrypt and upload with the new file_id
+            (
+                success,
+                new_encrypted_file_path,
+            ) = await self.encryption_manager.encrypt_and_upload(
+                temp_file_path, original_filename, actual_file_id
+            )
+            if (
+                new_encrypted_file_path
+                and new_encrypted_file_path != encrypted_file_path
+            ):
+                encrypted_file_path = new_encrypted_file_path
+
+        return actual_file_id, encrypted_file_path, metadata
+
+    def _prepare_file_success_response(
+        self,
+        actual_file_id: str,
+        is_image: bool,
+        is_tabular: bool,
+        temp_file_path: str,
+        analysis_files: list,
+        metadata: dict,
+    ):
+        """Prepare the success response for process_file"""
+        return {
+            "file_id": actual_file_id,  # Always use the consistent file_id
+            "is_image": is_image,
+            "is_tabular": is_tabular,
+            "message": "File processed and ready for embedding creation."
+            if not is_tabular
+            else "File processed and ready for use.",
+            "status": "success",
+            "temp_file_path": analysis_files[0]
+            if is_image and analysis_files
+            else temp_file_path,
+            "metadata": metadata,  # Include metadata explicitly with the result
+        }
+
+    async def _cleanup_on_error(self, context):
+        """Clean up temporary files in case of an error"""
+        if "temp_file_path" in context and os.path.exists(context["temp_file_path"]):
+            await asyncio.to_thread(os.remove, context["temp_file_path"])
+
+        if (
+            "encrypted_file_path" in context
+            and context["encrypted_file_path"]
+            and os.path.exists(context["encrypted_file_path"])
+        ):
+            await asyncio.to_thread(os.remove, context["encrypted_file_path"])
+
+        if (
+            "analysis_files" in context
+            and context["analysis_files"]
+            and all(os.path.exists(path) for path in context["analysis_files"])
+        ):
+            await asyncio.to_thread(os.remove, context["analysis_files"][0])
+            await asyncio.to_thread(os.remove, context["analysis_files"][1])
 
     async def download_existing_file(self, file_id: str):
         """
