@@ -371,12 +371,12 @@ class EmbeddingHandler:
                     self._process_image_file(
                         file_id, base_handler, temp_file_path, second_file_path
                     ),
-                    timeout=300,  # 5 minute timeout
+                    timeout=900,  # 15 minute timeout
                 )
             else:
                 return await asyncio.wait_for(
                     self._process_regular_file(file_id, base_handler, temp_file_path),
-                    timeout=300,  # 5 minute timeout
+                    timeout=900,  # 15 minute timeout
                 )
         except asyncio.TimeoutError:
             logging.error(f"Embedding creation timed out for file_id {file_id}")
@@ -465,6 +465,7 @@ class EmbeddingHandler:
             )
 
             # Upload embeddings to GCS - even partial ones
+            # TODO: decouple upload embeddings from embedding creation
             try:
                 await asyncio.wait_for(
                     self._upload_embeddings_to_gcs(file_id),
@@ -475,6 +476,7 @@ class EmbeddingHandler:
                 logging.error(f"Embedding upload timed out for file_id {file_id}")
 
             # Update file info with embedding status
+            # TODO: decouple file info creation from embedding creation and save file info to local
             file_info = self._prepare_file_info(
                 file_id, azure_result, gemini_result, file_metadata
             )
@@ -851,17 +853,28 @@ class EmbeddingHandler:
         _, text_chunks = self._extract_and_chunk_text(base_handler, temp_file_path)
         self._log_chunk_info(base_handler, text_chunks)
 
-        # Create embeddings using both models with same chunks in parallel
-        logging.info(f"Starting parallel embedding generation for file_id: {file_id}")
-        azure_task = self._create_azure_embeddings(file_id, text_chunks)
-        gemini_task = self._create_gemini_embeddings(file_id, text_chunks)
+        # Create embeddings using both models with same chunks SEQUENTIALLY
+        logging.info(f"Starting sequential embedding generation for file_id: {file_id}")
 
-        # Wait for both embedding generation tasks to complete
-        azure_result, gemini_result = await asyncio.gather(
-            azure_task,
-            gemini_task,
-            return_exceptions=True,  # Continue if one fails, handle exceptions later
-        )
+        # First create Azure embeddings
+        logging.info(f"Starting Azure embedding generation for file_id: {file_id}")
+        try:
+            azure_result = await self._create_azure_embeddings(file_id, text_chunks)
+            logging.info(f"Completed Azure embedding generation for file_id: {file_id}")
+        except Exception as e:
+            azure_result = e
+            logging.error(f"Azure embedding generation failed for {file_id}: {str(e)}")
+
+        # Then create Gemini embeddings
+        logging.info(f"Starting Gemini embedding generation for file_id: {file_id}")
+        try:
+            gemini_result = await self._create_gemini_embeddings(file_id, text_chunks)
+            logging.info(
+                f"Completed Gemini embedding generation for file_id: {file_id}"
+            )
+        except Exception as e:
+            gemini_result = e
+            logging.error(f"Gemini embedding generation failed for {file_id}: {str(e)}")
 
         # Handle any exceptions that occurred during parallel processing
         if isinstance(azure_result, Exception):

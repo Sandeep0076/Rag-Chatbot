@@ -248,6 +248,7 @@ async def process_file_with_semaphore(file_handler, file, file_id, is_image, use
             f"Starting parallel processing for file: {file.filename} with ID: {file_id}"
         )
         start_time = time.time()
+        # below function is for new file only encrypts and uploads to GCS
         result = await file_handler.process_file(file, file_id, is_image, username)
         elapsed = time.time() - start_time
         logging.info(
@@ -506,6 +507,7 @@ def process_document_file(
     )
 
     # Schedule embedding creation in the background
+
     background_tasks.add_task(
         create_embeddings_background,
         file_id,
@@ -969,7 +971,7 @@ async def create_embeddings_background(
         embedding_result = await embedding_handler.ensure_embeddings_exist(
             file_id=file_id, temp_file_path=temp_file_path, file_metadata=file_metadata
         )
-
+        # breakpoint()
         # If embeddings were created successfully and we have a username list to preserve
         if embedding_result["status"] != "error" and username_list:
             try:

@@ -428,6 +428,7 @@ class FileHandler:
             return False
 
         try:
+            # Todo : check if already encrypted file is there so no encrypt
             # Extract file_id from destination path to check for conflicts
             # Expected format: "file-embeddings/{file_id}/{filename}.encrypted"
             path_parts = destination_path.split("/")
@@ -629,6 +630,7 @@ class FileHandler:
 
         # Check if local embeddings exist first
         local_exists = await self._check_local_embeddings(existing_file_id)
+        logging.info(f"Local embeddings exist: {local_exists}")
 
         # Download embeddings if they exist remotely but not locally
         if (
@@ -690,7 +692,6 @@ class FileHandler:
     ) -> dict:
         """Process uploaded file including handling images, tabular data and existing files."""
         try:
-            # breakpoint()
             # Sanitize filename
             original_filename = self._sanitize_filename(file.filename)
 
@@ -760,7 +761,8 @@ class FileHandler:
 
             # Encrypt the original uploaded file (tabular files are handled separately)
             encrypted_file_path = None
-            if not is_tabular:
+            # should only encrypt if it is not a tabular and not an existing file
+            if not is_tabular and not existing_file_id:
                 encrypted_file_path = await self._encrypt_file(
                     temp_file_path, original_filename
                 )
@@ -856,6 +858,7 @@ class FileHandler:
                     self.gcs_handler.temp_metadata = metadata.copy()
 
                 # Upload the encrypted file
+                # todo: check if encryption is already done
                 await self._upload_encrypted_file(
                     encrypted_file_path,
                     f"file-embeddings/{actual_file_id}/{original_filename}.encrypted",

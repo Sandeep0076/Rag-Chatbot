@@ -146,8 +146,37 @@ class GeminiHandler(BaseRAGHandler):
 
             for i in range(0, len(texts), batch_size):
                 batch = texts[i : i + batch_size]
-                embeddings = self.embedding_model.get_embeddings(batch)
-                all_embeddings.extend([embedding.values for embedding in embeddings])
+                # Implement retry logic with exponential backoff
+                max_retries = 3
+                retry_delay = 1  # Initial delay in seconds
+                attempt = 0
+
+                while attempt < max_retries:
+                    try:
+                        embeddings = self.embedding_model.get_embeddings(batch)
+                        all_embeddings.extend(
+                            [embedding.values for embedding in embeddings]
+                        )
+                        break  # Success, exit retry loop
+                    except Exception as e:
+                        attempt += 1
+                        if attempt >= max_retries:
+                            logger.error(
+                                f"Failed to get embeddings after {max_retries} attempts: {str(e)}"
+                            )
+                            raise  # Re-raise the exception after all retries failed
+
+                        # Log the retry attempt
+                        logger.warning(
+                            f"Embedding API error (attempt {attempt}/{max_retries}):"
+                            f" {str(e)}. Retrying in {retry_delay}s..."
+                        )
+
+                        # Sleep with exponential backoff
+                        import time
+
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
 
             return all_embeddings
         except Exception as e:
