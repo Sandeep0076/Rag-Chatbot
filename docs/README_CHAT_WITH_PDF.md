@@ -50,11 +50,11 @@ For new PDFs only:
 For new PDFs only:
 
 1. **Generate Local Embeddings (Immediate Use)**
-   - Uses Azure OpenAI and Google Gemini embedding models
-   - Generates vector embeddings for each text chunk
-   - Stores embeddings locally in ChromaDB
+   - Uses only Azure OpenAI embedding model for all chat models (including Gemini)
+   - Generates vector embeddings (1536 dimensions) for each text chunk
+   - Stores unified embeddings locally in ChromaDB
    - Sets embedding status to "ready_for_chat"
-   - Makes document immediately available for chat
+   - Makes document immediately available for chat with any model
 
 2. **Background Cloud Upload (Asynchronous)**
    - Uploads embeddings to Google Cloud Storage in the background

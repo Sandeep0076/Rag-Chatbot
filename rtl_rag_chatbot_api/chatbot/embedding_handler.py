@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot
-from rtl_rag_chatbot_api.chatbot.gemini_handler import GeminiHandler
 from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 
@@ -129,7 +128,9 @@ class EmbeddingHandler:
 
     def embeddings_exist(self, file_id: str) -> tuple[bool, bool, bool]:
         """
-        Check if embeddings exist and are valid both in GCS and locally.
+        Check if Azure embeddings exist and are valid both in GCS and locally.
+        With the unified embedding approach, we only need to check for Azure embeddings.
+
         Returns tuple of (gcs_status, local_status, all_valid)
         """
         try:
@@ -151,38 +152,35 @@ class EmbeddingHandler:
                 except Exception as e:
                     logging.warning(f"Error reading local file_info.json: {str(e)}")
 
-            # If we didn't find valid status in file_info.json, check GCS status
+            # If we didn't find valid status in file_info.json, check local Azure embeddings
             azure_path = f"./chroma_db/{file_id}/azure"
-            gemini_path = f"./chroma_db/{file_id}/google"
 
-            local_files_exist = (
-                os.path.exists(azure_path)
-                and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
-                and os.path.exists(gemini_path)
-                and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
+            # Now we only check for Azure embeddings, since we use them for all models
+            local_files_exist = os.path.exists(azure_path) and os.path.exists(
+                os.path.join(azure_path, "chroma.sqlite3")
             )
 
-            # If local files exist, we consider them valid
+            # If local Azure files exist, we consider them valid for all models
             if local_files_exist:
+                logging.info(
+                    f"Found valid local Azure embeddings for file_id: {file_id}"
+                )
                 return True, True, True
 
-            # Check GCS embeddings
+            # Check GCS Azure embeddings only
             azure_gcs_prefix = f"file-embeddings/{file_id}/azure/"
-            gemini_gcs_prefix = f"file-embeddings/{file_id}/google/"
 
             azure_blobs = list(
                 self.gcs_handler.bucket.list_blobs(prefix=azure_gcs_prefix)
             )
-            gemini_blobs = list(
-                self.gcs_handler.bucket.list_blobs(prefix=gemini_gcs_prefix)
+
+            # Now we only check for Azure embeddings in GCS
+            gcs_files_exist = len(azure_blobs) > 0 and any(
+                blob.name.endswith("chroma.sqlite3") for blob in azure_blobs
             )
 
-            gcs_files_exist = (
-                len(azure_blobs) > 0
-                and len(gemini_blobs) > 0
-                and any(blob.name.endswith("chroma.sqlite3") for blob in azure_blobs)
-                and any(blob.name.endswith("chroma.sqlite3") for blob in gemini_blobs)
-            )
+            if gcs_files_exist:
+                logging.info(f"Found valid GCS Azure embeddings for file_id: {file_id}")
 
             return gcs_files_exist, False, False
 
@@ -617,7 +615,7 @@ class EmbeddingHandler:
     ) -> Dict[str, Any]:
         """
         Check if embeddings exist for a specific file and model.
-        With the decoupled approach, checks local files first before GCS.
+        With our unified embedding approach, we always check for Azure embeddings.
 
         Args:
             file_id (str): The ID of the file to check
@@ -632,8 +630,8 @@ class EmbeddingHandler:
         """
         try:
             model_choice = model_choice.lower()
+            # For compatibility, we still return the original model_type based on model_choice
             model_type = "azure" if "gpt" in model_choice else "google"
-            folder_name = "azure" if model_type == "azure" else "google"
 
             # First check file_info.json for embedding status
             local_info_path = os.path.join("./chroma_db", file_id, "file_info.json")
@@ -650,22 +648,26 @@ class EmbeddingHandler:
 
                     # Check if embeddings are ready for chat or completed
                     if embeddings_status in ["ready_for_chat", "completed"]:
-                        # Now check if the specific model type folder exists locally
-                        model_path = os.path.join(
-                            "./chroma_db", file_id, folder_name, "chroma.sqlite3"
+                        # IMPORTANT: Always check the Azure directory regardless of model choice
+                        azure_path = os.path.join(
+                            "./chroma_db", file_id, "azure", "chroma.sqlite3"
                         )
-                        if os.path.exists(model_path):
+                        if os.path.exists(azure_path):
+                            logging.info(
+                                f"Found Azure embeddings for file {file_id} (using with {model_choice})"
+                            )
                             return {
                                 "embeddings_exist": True,
-                                "model_type": model_type,
+                                "model_type": model_type,  # Return original model_type for compatibility
                                 "file_id": file_id,
                                 "status": embeddings_status,
                             }
                 except Exception as e:
                     logging.warning(f"Error reading local file_info.json: {str(e)}")
 
-            # If no valid local embeddings, check GCS
-            gcs_prefix = f"file-embeddings/{file_id}/{folder_name}/"
+            # If no valid local embeddings, check GCS for Azure embeddings
+            # IMPORTANT: Always check for Azure embeddings in GCS regardless of model
+            gcs_prefix = f"file-embeddings/{file_id}/azure/"
             blobs = list(self.gcs_handler.bucket.list_blobs(prefix=gcs_prefix))
 
             embeddings_exist = len(blobs) > 0 and any(
@@ -681,15 +683,21 @@ class EmbeddingHandler:
                         "embeddings_status", "not_started"
                     )
 
+            logging.info(
+                f"Checked embeddings for file {file_id} with {model_choice}:"
+                f" exist={embeddings_exist}, status={embeddings_status}"
+            )
             return {
                 "embeddings_exist": embeddings_exist,
-                "model_type": model_type,
+                "model_type": model_type,  # Still return original model_type for compatibility
                 "file_id": file_id,
                 "status": embeddings_status,
             }
 
         except Exception as e:
-            logging.error(f"Error checking embeddings: {str(e)}")
+            logging.error(
+                f"Error checking embeddings for {file_id} with {model_choice}: {str(e)}"
+            )
             raise Exception(f"Error checking embeddings: {str(e)}")
 
     async def _create_azure_embeddings(self, file_id: str, chunks: List[str]):
@@ -728,38 +736,14 @@ class EmbeddingHandler:
             raise
 
     async def _create_gemini_embeddings(self, file_id: str, chunks: List[str]):
-        """Creates embeddings using Gemini model."""
-        logging.info(f"Generating Gemini embeddings for file_id: {file_id}...")
-        try:
-            collection_name = f"rag_collection_{file_id}"
-
-            gemini_handler = GeminiHandler(self.configs, self.gcs_handler)
-            gemini_handler.initialize(
-                model="gemini-pro",
-                file_id=file_id,
-                embedding_type="google",
-                collection_name=collection_name,
-            )
-
-            # Use asyncio.to_thread for IO-bound operations
-            await asyncio.to_thread(
-                gemini_handler.create_and_store_embeddings,
-                chunks,
-                file_id,
-                "google",
-                is_embedding=True,
-            )
-
-            logging.info(
-                f"Gemini embeddings generated successfully for file_id: {file_id}"
-            )
-            return "completed"
-        except Exception as e:
-            logging.error(
-                f"Error creating Gemini embeddings for file_id {file_id}: {str(e)}",
-                exc_info=True,
-            )
-            raise
+        """
+        No-op method that returns success without creating any embeddings.
+        We now use Azure embeddings for all LLM types.
+        """
+        logging.info(
+            f"Skipping Gemini embedding creation for file_id: {file_id} (using Azure embeddings)"
+        )
+        return {"success": True, "status": "completed"}
 
     async def _upload_embeddings_to_gcs_background(self, file_id: str):
         """
@@ -1014,71 +998,107 @@ class EmbeddingHandler:
     async def _process_image_file(
         self, file_id: str, base_handler, temp_file_path: str, second_file_path: str
     ) -> tuple[Dict, Dict]:
-        """Process image file with separate GPT-4 and Gemini analysis files."""
-        logging.info("Processing image analyses separately")
+        """Process image file using only Azure embeddings for all models."""
+        logging.info(f"Processing image file {file_id} with Azure-only embeddings")
 
-        # Process GPT-4 analysis
-        _, gpt4_chunks = self._extract_and_chunk_text(base_handler, temp_file_path)
-        self._log_chunk_info(base_handler, gpt4_chunks, "GPT-4")
-        azure_result = self._create_azure_embeddings(file_id, gpt4_chunks)
+        try:
+            # Process only GPT-4 analysis for embeddings
+            _, gpt4_chunks = self._extract_and_chunk_text(base_handler, temp_file_path)
+            self._log_chunk_info(base_handler, gpt4_chunks, "GPT-4")
+            azure_result = await self._create_azure_embeddings(file_id, gpt4_chunks)
+            logging.info(
+                f"Completed Azure embedding generation for image file_id: {file_id}"
+            )
 
-        # Process Gemini analysis
-        if not second_file_path:
-            raise Exception("Second analysis file path not provided for image")
+            # Update metadata to indicate unified embeddings
+            metadata_file = os.path.join("./chroma_db", file_id, "file_info.json")
+            if os.path.exists(metadata_file):
+                try:
+                    with open(metadata_file, "r") as f:
+                        metadata = json.load(f)
 
-        _, gemini_chunks = self._extract_and_chunk_text(base_handler, second_file_path)
-        self._log_chunk_info(base_handler, gemini_chunks, "Gemini")
-        gemini_result = self._create_gemini_embeddings(file_id, gemini_chunks)
+                    # Update metadata to show unified embeddings approach
+                    metadata["uses_unified_embeddings"] = True
+                    metadata["embedding_provider"] = "azure"
 
-        return azure_result, gemini_result
+                    with open(metadata_file, "w") as f:
+                        json.dump(metadata, f, indent=2)
+                except Exception as e:
+                    logging.warning(
+                        f"Failed to update unified embedding metadata for image: {str(e)}"
+                    )
+
+            # Return success for both without creating Gemini embeddings
+            gemini_result = {"success": True, "status": "completed"}
+            logging.info(
+                f"Using Azure embeddings for all models for image file_id: {file_id}"
+            )
+
+            return azure_result, gemini_result
+
+        except Exception as e:
+            logging.error(f"Error processing image file {file_id}: {str(e)}")
+            return {"status": "failed", "error": str(e)}, {
+                "status": "failed",
+                "error": str(e),
+            }
 
     async def _process_regular_file(
         self, file_id: str, base_handler, temp_file_path: str
     ) -> tuple[Dict, Dict]:
-        """Process regular (non-image) file with same chunks for both models."""
+        """Process regular (non-image) file using only Azure embeddings for all models."""
         logging.info(f"Processing non-image file with file_id: {file_id}")
 
         # Extract text and create chunks
         _, text_chunks = self._extract_and_chunk_text(base_handler, temp_file_path)
         self._log_chunk_info(base_handler, text_chunks)
 
-        # Create embeddings using both models with same chunks SEQUENTIALLY
-        logging.info(f"Starting sequential embedding generation for file_id: {file_id}")
+        # Create only Azure embeddings for all use cases
+        logging.info(f"Creating Azure-only embeddings for file_id: {file_id}")
 
-        # First create Azure embeddings
-        logging.info(f"Starting Azure embedding generation for file_id: {file_id}")
+        # Create Azure embeddings
         try:
             azure_result = await self._create_azure_embeddings(file_id, text_chunks)
             logging.info(f"Completed Azure embedding generation for file_id: {file_id}")
+
+            # Set up metadata to indicate we're using Azure embeddings for all LLMs
+            metadata_file = os.path.join("./chroma_db", file_id, "file_info.json")
+            if os.path.exists(metadata_file):
+                try:
+                    with open(metadata_file, "r") as f:
+                        metadata = json.load(f)
+
+                    # Update metadata to show all models use Azure embeddings
+                    metadata["uses_unified_embeddings"] = True
+                    metadata["embedding_provider"] = "azure"
+
+                    with open(metadata_file, "w") as f:
+                        json.dump(metadata, f, indent=2)
+                except Exception as e:
+                    logging.warning(
+                        f"Failed to update unified embedding metadata: {str(e)}"
+                    )
+
+            # Return the same result for both model types
+            # This maintains API compatibility with existing code expecting both results
+            gemini_result = {"success": True, "status": "completed"}
+
         except Exception as e:
             azure_result = e
+            gemini_result = {"status": "failed", "error": str(e)}
             logging.error(f"Azure embedding generation failed for {file_id}: {str(e)}")
 
-        # Then create Gemini embeddings
-        logging.info(f"Starting Gemini embedding generation for file_id: {file_id}")
-        try:
-            gemini_result = await self._create_gemini_embeddings(file_id, text_chunks)
-            logging.info(
-                f"Completed Gemini embedding generation for file_id: {file_id}"
-            )
-        except Exception as e:
-            gemini_result = e
-            logging.error(f"Gemini embedding generation failed for {file_id}: {str(e)}")
-
-        # Handle any exceptions that occurred during parallel processing
+        # Handle any exceptions that occurred during processing
         if isinstance(azure_result, Exception):
             logging.error(
                 f"Azure embedding generation failed for {file_id}: {str(azure_result)}"
             )
             azure_result = {"status": "failed", "error": str(azure_result)}
+            gemini_result = {"status": "failed", "error": str(azure_result)}
 
-        if isinstance(gemini_result, Exception):
-            logging.error(
-                f"Gemini embedding generation failed for {file_id}: {str(gemini_result)}"
-            )
-            gemini_result = {"status": "failed", "error": str(gemini_result)}
-
-        logging.info(f"Completed parallel embedding generation for file_id: {file_id}")
+        logging.info(
+            f"Completed Azure-only embedding generation for file_id: {file_id}"
+        )
         return azure_result, gemini_result
 
     async def _create_file_info(
@@ -1138,6 +1158,39 @@ class EmbeddingHandler:
             file_info["original_filename"] = temp_metadata["original_filename"]
 
         return file_info
+
+    def has_local_embeddings(self, file_id: str) -> bool:
+        """
+        Check if local embeddings exist for immediate use without waiting for GCS uploads.
+
+        Args:
+            file_id: Unique identifier for the file
+
+        Returns:
+            bool: True if local embeddings exist and are ready for immediate use
+        """
+        # Check for the local embeddings directories and SQLite files
+        azure_path = f"./chroma_db/{file_id}/azure/chroma.sqlite3"
+        gemini_path = f"./chroma_db/{file_id}/google/chroma.sqlite3"
+        return os.path.exists(azure_path) and os.path.exists(gemini_path)
+
+    def all_files_have_local_embeddings(self, file_ids: List[str]) -> bool:
+        """
+        Check if all files in a list have local embeddings available.
+
+        Args:
+            file_ids: List of file IDs to check
+
+        Returns:
+            bool: True if all files have local embeddings, False otherwise
+        """
+        if not file_ids:
+            return False
+
+        for file_id in file_ids:
+            if not self.has_local_embeddings(file_id):
+                return False
+        return True
 
     def get_embeddings_info(self, file_id: str):
         # Retrieve embeddings info from GCS

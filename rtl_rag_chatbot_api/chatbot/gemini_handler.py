@@ -1,7 +1,10 @@
 import logging
+import time
 from typing import List
 
+# Import Azure OpenAI for embeddings
 import vertexai
+from openai import AzureOpenAI
 from vertexai.generative_models import GenerativeModel
 from vertexai.preview.generative_models import (
     GenerationConfig,
@@ -34,13 +37,29 @@ class GeminiHandler(BaseRAGHandler):
         user_id: str = None,
     ):
         super().__init__(configs, gcs_handler)
+        # Initialize Gemini
         vertexai.init(project=configs.gemini.project, location=configs.gemini.location)
         logger.info(
             f"Initialized Gemini with project: {configs.gemini.project}, location: {configs.gemini.location}"
         )
-        self.embedding_model = TextEmbeddingModel.from_pretrained(
+
+        # Initialize both Gemini and Azure embedding models
+        # Keep Gemini embedding model for backward compatibility
+        self.gemini_embedding_model = TextEmbeddingModel.from_pretrained(
             "textembedding-gecko@latest"
         )
+
+        # Initialize Azure OpenAI client for embeddings
+        # This is critical for our unified embedding approach
+        self.azure_client = AzureOpenAI(
+            api_key=configs.azure_embedding.azure_embedding_api_key,
+            azure_endpoint=configs.azure_embedding.azure_embedding_endpoint,
+            api_version=configs.azure_embedding.azure_embedding_api_version,
+        )
+        self.azure_embedding_deployment = (
+            configs.azure_embedding.azure_embedding_deployment
+        )
+
         self.generative_model = None
         self.MAX_TOKENS_PER_REQUEST = 15000
 
@@ -49,6 +68,10 @@ class GeminiHandler(BaseRAGHandler):
         self.model_choice = model_choice
         self.user_id = user_id
         self.all_file_infos = all_file_infos if all_file_infos else {}
+
+        # Flag to control which embedding system to use
+        # With our unified approach, we always use Azure embeddings
+        self.use_azure_embeddings = True
         self._collection_name_prefix = collection_name_prefix
         self.active_file_ids: List[str] = []
         self.is_multi_file = False
@@ -138,49 +161,111 @@ class GeminiHandler(BaseRAGHandler):
             self.is_multi_file = False
 
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Get embeddings for texts, using Azure embeddings for unified approach.
+
+        This method has been updated to use Azure embeddings to match the stored embeddings.
+        Since we're using a unified embedding approach where all models use Azure embeddings,
+        we need to make sure our query embeddings also use Azure's embedding model
+        to match the dimensionality (1536 vs 768 for Gemini).
+
+        Args:
+            texts: List of text strings to get embeddings for
+
+        Returns:
+            List of embedding vectors
+        """
         try:
-            logger.info(f"Getting Gemini embeddings for {len(texts)} texts")
-            # Process in smaller batches if needed
-            all_embeddings = []
-            batch_size = min(len(texts), self.BATCH_SIZE)
+            # Use Azure embeddings (to match dimensionality with stored embeddings)
+            if self.use_azure_embeddings:
+                logger.info(
+                    f"Getting Azure embeddings for {len(texts)} texts (for unified embedding approach)"
+                )
+                all_embeddings = []
+                batch_size = min(len(texts), self.BATCH_SIZE)
 
-            for i in range(0, len(texts), batch_size):
-                batch = texts[i : i + batch_size]
-                # Implement retry logic with exponential backoff
-                max_retries = 3
-                retry_delay = 1  # Initial delay in seconds
-                attempt = 0
+                for i in range(0, len(texts), batch_size):
+                    batch = texts[i : i + batch_size]
+                    # Implement retry logic with exponential backoff
+                    max_retries = 3
+                    retry_delay = 1  # Initial delay in seconds
+                    attempt = 0
 
-                while attempt < max_retries:
-                    try:
-                        embeddings = self.embedding_model.get_embeddings(batch)
-                        all_embeddings.extend(
-                            [embedding.values for embedding in embeddings]
-                        )
-                        break  # Success, exit retry loop
-                    except Exception as e:
-                        attempt += 1
-                        if attempt >= max_retries:
-                            logger.error(
-                                f"Failed to get embeddings after {max_retries} attempts: {str(e)}"
+                    while attempt < max_retries:
+                        try:
+                            # Use Azure OpenAI embedding API
+                            response = self.azure_client.embeddings.create(
+                                input=batch, model=self.azure_embedding_deployment
                             )
-                            raise  # Re-raise the exception after all retries failed
 
-                        # Log the retry attempt
-                        logger.warning(
-                            f"Embedding API error (attempt {attempt}/{max_retries}):"
-                            f" {str(e)}. Retrying in {retry_delay}s..."
-                        )
+                            # Extract embeddings from response
+                            batch_embeddings = [
+                                item.embedding for item in response.data
+                            ]
+                            all_embeddings.extend(batch_embeddings)
+                            break  # Success, exit retry loop
+                        except Exception as e:
+                            attempt += 1
+                            if attempt >= max_retries:
+                                logger.error(
+                                    f"Failed to get Azure embeddings after {max_retries} attempts: {str(e)}"
+                                )
+                                raise  # Re-raise the exception after all retries failed
 
-                        # Sleep with exponential backoff
-                        import time
+                            # Log the retry attempt
+                            logger.warning(
+                                f"Azure Embedding API error (attempt {attempt}/{max_retries}):"
+                                f" {str(e)}. Retrying in {retry_delay}s..."
+                            )
 
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
+                            # Sleep with exponential backoff
+                            time.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
 
-            return all_embeddings
+                return all_embeddings
+
+            # Fallback to Gemini embeddings (not used with unified approach, but keeping for backward compatibility)
+            else:
+                logger.info(f"Getting Gemini embeddings for {len(texts)} texts")
+                all_embeddings = []
+                batch_size = min(len(texts), self.BATCH_SIZE)
+
+                for i in range(0, len(texts), batch_size):
+                    batch = texts[i : i + batch_size]
+                    # Implement retry logic with exponential backoff
+                    max_retries = 3
+                    retry_delay = 1  # Initial delay in seconds
+                    attempt = 0
+
+                    while attempt < max_retries:
+                        try:
+                            embeddings = self.gemini_embedding_model.get_embeddings(
+                                batch
+                            )
+                            all_embeddings.extend(
+                                [embedding.values for embedding in embeddings]
+                            )
+                            break  # Success, exit retry loop
+                        except Exception as e:
+                            attempt += 1
+                            if attempt >= max_retries:
+                                logger.error(
+                                    f"Failed to get Gemini embeddings after {max_retries} attempts: {str(e)}"
+                                )
+                                raise  # Re-raise the exception after all retries failed
+
+                            # Log the retry attempt
+                            logger.warning(
+                                f"Gemini Embedding API error (attempt {attempt}/{max_retries}):"
+                                f" {str(e)}. Retrying in {retry_delay}s..."
+                            )
+
+                            # Sleep with exponential backoff
+                            time.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
+
+                return all_embeddings
         except Exception as e:
-            logging.error(f"Error getting Gemini embeddings: {str(e)}")
+            logging.error(f"Error getting embeddings: {str(e)}")
             raise
 
     def get_gemini_response_stream(self, prompt: str) -> str:
@@ -204,7 +289,9 @@ class GeminiHandler(BaseRAGHandler):
             )
 
             all_relevant_docs = []
-            embedding_model_for_rag = "google"  # GeminiHandler uses Google embeddings
+            # IMPORTANT: Use Azure embeddings for all models including Gemini
+            # With our unified embedding approach, all models use Azure embeddings
+            embedding_model_for_rag = "azure"  # Use Azure embeddings for RAG
 
             # Handle multi-file or single-file mode appropriately
             if self.is_multi_file:

@@ -18,15 +18,19 @@ The multi-file chat feature extends the RAG (Retrieval Augmented Generation) sys
    - Files can also be sourced from URLs using the `urls` parameter
    - Each file receives a unique `file_id`
 
-2. **Embedding Generation**
-   - For each file, embeddings are created using Azure OpenAI's text-embedding-ada-002 model
-   - Embeddings are stored in ChromaDB with a collection name pattern: `{collection_name_prefix}{file_id}`
+2. **Parallel Embedding Generation**
+   - Multiple files are processed concurrently using parallel embedding creation
+   - The system automatically detects which files need embeddings vs. which need username updates
+   - For each file, embeddings are created using only Azure OpenAI embedding model (1536 dimensions)
+   - These unified embeddings are used by all models (including Gemini)
+   - Embeddings are stored in ChromaDB with collection path: `./chroma_db/{file_id}/azure`
+   - Concurrency is controlled via semaphores to prevent resource exhaustion
    - Each file's metadata is stored in a `file_info.json` file containing:
      - Original filename
      - Upload timestamp
      - File type
-     - Username(s) associated with the file
-     - Embedding status
+     - Username(s) associated with the file (merged across users automatically)
+     - Embedding status (in_progress → ready_for_chat → completed)
 
 ### Multi-File Chat Workflow
 
@@ -111,6 +115,7 @@ This critical data structure maps file IDs to their metadata, containing:
 
 1. **`_process_file_info`** - Processes file metadata for multi-file chat requests:
    - Determines if request is multi-file
+   - Verifies embeddings exist for all files before proceeding
    - Builds the `all_file_infos` dictionary
    - Classifies files as tabular or non-tabular
    - Creates a unique model key for caching
@@ -158,14 +163,27 @@ This critical data structure maps file IDs to their metadata, containing:
 
 ## Implementation Notes
 
-1. **Memory Efficiency**
+1. **Parallel Processing**
+   - The system uses parallel processing at multiple levels:
+     - Multiple files are processed concurrently during upload
+     - File existence and embedding checks happen in parallel
+     - Embedding creation tasks are distributed across a semaphore-controlled task pool
+     - Background tasks handle GCS uploads without blocking chat availability
+
+2. **Memory Efficiency**
    - The system uses reference counting to manage ChromaDB resources
    - Background cleanup processes help manage temporary files and resources
+   - Resource cleanup happens asynchronously after embedding operations
 
-2. **File Source Annotation**
+3. **File Source Annotation**
    - Document chunks are annotated with source file IDs to help trace information
    - Format: `[Source: {file_id}] {document_text}`
 
-3. **Model Caching**
+4. **Model Caching**
    - Models are cached using a unique key pattern: `"multi_{sorted_file_ids}_{user_id}_{model_choice}"`
    - This prevents redundant model initialization for the same file combinations
+
+5. **Multi-Worker Server Support**
+   - The application can be run with multiple worker processes using `start_multi_workers.sh`
+   - Each worker processes requests independently while sharing the file system
+   - This provides true parallelism beyond just async concurrency
