@@ -486,6 +486,8 @@ def process_document_file(
 ):
     """
     Process a document file that needs embeddings.
+    With the decoupled approach, local embeddings are generated immediately
+    and cloud operations run as background tasks.
 
     Args:
         background_tasks: BackgroundTasks for async operations
@@ -502,12 +504,21 @@ def process_document_file(
     if not file_metadata:
         file_metadata = gcs_handler.temp_metadata
 
+    # Add username_list to metadata
+    if file_metadata and username_list:
+        file_metadata["username"] = username_list
+
     logging.info(
         f"Processing document with file_id {file_id}, metadata: {file_metadata}"
     )
 
-    # Schedule embedding creation in the background
+    # Initialize local embeddings_status if not present
+    if file_metadata and "embeddings_status" not in file_metadata:
+        file_metadata["embeddings_status"] = "in_progress"
 
+    # Schedule embedding creation in the background
+    # The modified embedding_handler will mark embeddings as "ready_for_chat"
+    # as soon as local embeddings are available
     background_tasks.add_task(
         create_embeddings_background,
         file_id,
@@ -902,6 +913,8 @@ async def create_embeddings_background(
     file_metadata=None,
 ):
     """Background task for creating embeddings.
+    With the decoupled approach, local embeddings are created first,
+    marked as 'ready_for_chat', and cloud operations happen in the background.
 
     Args:
         file_id: The ID of the file to create embeddings for
@@ -910,6 +923,7 @@ async def create_embeddings_background(
         configs: Application configuration
         SessionLocal: Database session factory
         username_list: Optional list of usernames to preserve in file_info.json
+        file_metadata: Optional file metadata to pass through the chain
     """
     try:
         # Initialize GCS handler to get file-specific metadata
@@ -948,6 +962,7 @@ async def create_embeddings_background(
                 file_metadata = {
                     "file_id": file_id,
                     "username": username_list if username_list else [],
+                    "embeddings_status": "in_progress",  # Initial status
                 }
 
                 # Add file hash if we were able to calculate it
@@ -962,16 +977,22 @@ async def create_embeddings_background(
             # Fix the file_id in the metadata
             file_metadata["file_id"] = file_id
 
+        # Ensure embeddings_status is set in metadata
+        if file_metadata and "embeddings_status" not in file_metadata:
+            file_metadata["embeddings_status"] = "in_progress"
+
         # Log details about the metadata including file_hash
         file_hash = file_metadata.get("file_hash") if file_metadata else None
         logging.info(f"Using file-specific metadata for {file_id}: {file_metadata}")
         logging.info(f"File hash for {file_id}: {file_hash}")
 
         # Create embeddings with file-specific metadata
+        # The refactored ensure_embeddings_exist will create local embeddings first,
+        # mark them as "ready_for_chat", and handle cloud uploads in background
         embedding_result = await embedding_handler.ensure_embeddings_exist(
             file_id=file_id, temp_file_path=temp_file_path, file_metadata=file_metadata
         )
-        # breakpoint()
+
         # If embeddings were created successfully and we have a username list to preserve
         if embedding_result["status"] != "error" and username_list:
             try:
@@ -1018,30 +1039,104 @@ async def create_embeddings_background(
 @app.post("/embeddings/check", response_model=Dict[str, Any])
 async def check_embeddings(
     request: EmbeddingsCheckRequest, current_user=Depends(get_current_user)
-) -> Dict[str, Any]:
+):
     """
-    # TODO: Uncomment and implement when ready for user-specific cleanup model.
+    Check if embeddings exist for the specified file and model choice.
 
-      Args:
-          request (EmbeddingsCheckRequest): Request containing file_id and model_choice
-          current_user: Authenticated user information
+    Args:
+        request (EmbeddingsCheckRequest): Request containing file_id and model_choice
+        current_user: Authenticated user information
 
-      Returns:
-          Dict containing:
-              - embeddings_exist (bool): Whether embeddings exist
-              - model_type (str): Type of model (azure/google)
-              - file_id (str): The checked file ID
+    Returns:
+        Dict containing:
+            - embeddings_exist (bool): Whether embeddings exist
+            - model_type (str): Type of model (azure/google)
+            - file_id (str): The checked file ID
     """
     try:
-        embedding_handler = EmbeddingHandler(configs, gcs_handler)
-        return await embedding_handler.check_embeddings_exist(
+        # Initialize the embedding handler
+        embedding_handler = EmbeddingHandler(
+            configs=configs, gcs_handler=gcs_handler, file_info=[]
+        )
+
+        # Check if embeddings exist
+        result = await embedding_handler.check_embeddings_exist(
             file_id=request.file_id, model_choice=request.model_choice
         )
+        return result
+
     except Exception as e:
         logging.error(f"Error checking embeddings: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Error checking embeddings: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/embeddings/status/{file_id}", response_model=Dict[str, Any])
+async def get_embedding_status(file_id: str, current_user=Depends(get_current_user)):
+    """
+    Get the current status of embeddings for a specific file.
+    The frontend can poll this endpoint to know when embeddings are ready for chat.
+
+    Args:
+        file_id: The ID of the file to check
+        current_user: Authenticated user information
+
+    Returns:
+        Dict containing:
+            - status: Current status of embeddings ("not_started", "in_progress", "ready_for_chat", or "completed")
+            - can_chat: Whether chat is available with this file
+            - file_id: The checked file ID
+            - message: Human-readable message about the current status
+    """
+    try:
+        # Check local file_info.json first
+        local_info_path = os.path.join("./chroma_db", file_id, "file_info.json")
+
+        if os.path.exists(local_info_path):
+            with open(local_info_path, "r") as f:
+                file_info = json.load(f)
+
+            status = file_info.get("embeddings_status", "not_started")
+            can_chat = status in ["ready_for_chat", "completed"]
+
+            return {
+                "status": status,
+                "can_chat": can_chat,
+                "file_id": file_id,
+                "message": "Ready for chat" if can_chat else "Embeddings not ready yet",
+            }
+
+        # If no local file, check GCS
+        try:
+            # Download and check file_info.json from GCS
+            file_info = gcs_handler.get_file_info(file_id)
+
+            if file_info:
+                status = file_info.get("embeddings_status", "not_started")
+                can_chat = status in ["ready_for_chat", "completed"]
+
+                return {
+                    "status": status,
+                    "can_chat": can_chat,
+                    "file_id": file_id,
+                    "message": "Ready for chat"
+                    if can_chat
+                    else "Embeddings not ready yet",
+                }
+
+        except Exception as gcs_error:
+            logging.warning(f"Could not get file info from GCS: {str(gcs_error)}")
+
+        # If we get here, embeddings don't exist or are in an unknown state
+        return {
+            "status": "not_started",
+            "can_chat": False,
+            "file_id": file_id,
+            "message": "Embeddings not found or still being generated",
+        }
+
+    except Exception as e:
+        logging.error(f"Error checking embedding status: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def check_db_existence(
@@ -1110,7 +1205,8 @@ def initialize_rag_model(
 
     # If local embeddings don't exist, check GCS
     if not os.path.exists(model_path):
-        if not file_info.get("embeddings_status") == "completed":
+        # Accept both "ready_for_chat" and "completed" as valid states
+        if file_info.get("embeddings_status") not in ["ready_for_chat", "completed"]:
             raise HTTPException(
                 status_code=400,
                 detail="Embeddings are not ready yet. Please wait a moment.",

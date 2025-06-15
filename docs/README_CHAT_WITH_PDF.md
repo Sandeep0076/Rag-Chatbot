@@ -49,15 +49,18 @@ For new PDFs only:
 
 For new PDFs only:
 
-1. **Generate Embeddings**
-   - Uses Azure OpenAI embedding model
+1. **Generate Local Embeddings (Immediate Use)**
+   - Uses Azure OpenAI and Google Gemini embedding models
    - Generates vector embeddings for each text chunk
-   - Stores embeddings in ChromaDB
-   - Uploads embeddings backup to Google Cloud Storage
+   - Stores embeddings locally in ChromaDB
+   - Sets embedding status to "ready_for_chat"
+   - Makes document immediately available for chat
 
-2. **Status Update**
-   - Updates metadata with embedding status
-   - Marks document as ready for chat
+2. **Background Cloud Upload (Asynchronous)**
+   - Uploads embeddings to Google Cloud Storage in the background
+   - Updates metadata with username lists and embedding information
+   - Sets embedding status to "completed" after successful upload
+   - All operations run as non-blocking background tasks
 
 ### Step 4: Chat Process
 

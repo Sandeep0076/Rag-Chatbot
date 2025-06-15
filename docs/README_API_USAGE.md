@@ -89,7 +89,8 @@ Check if embeddings exist for a specific file and model.
   {
     "embeddings_exist": true,
     "model_type": "azure",
-    "file_id": "uuid-string"
+    "file_id": "uuid-string",
+    "status": "ready_for_chat"
   }
   ```
 - **Usage Example**:
@@ -99,6 +100,36 @@ Check if embeddings exist for a specific file and model.
   4. Go to the "Body" tab and select "raw" and "JSON"
   5. Enter the JSON request body with the file_id and model_choice
   6. Click "Send" to check if embeddings exist
+
+### Check Embedding Status
+
+Get the current status of embeddings for a specific file. The frontend can poll this endpoint to know when embeddings are ready for chat.
+
+- **Endpoint URL**: `/embeddings/status/{file_id}`
+- **HTTP Method**: GET
+- **Request Headers**:
+  - `Authorization`: Your auth token
+- **Path Parameters**:
+  - `file_id`: The ID of the file to check
+- **Response Format**:
+  ```json
+  {
+    "status": "ready_for_chat",
+    "can_chat": true,
+    "file_id": "uuid-string",
+    "message": "Embeddings are ready for chat. Background upload still in progress."
+  }
+  ```
+- **Possible Status Values**:
+  - `not_started`: Embeddings generation has not started
+  - `in_progress`: Embeddings are being generated
+  - `ready_for_chat`: Local embeddings are ready for chat, but cloud upload may still be in progress
+  - `completed`: Embeddings are fully generated and uploaded to cloud storage
+- **Usage Example**:
+  1. Create a new request in Postman
+  2. Set the request method to GET
+  3. Enter the URL: `http://your-api-domain/embeddings/status/{your-file-id}`
+  4. Click "Send" to check the embedding status
 
 ### Chat with File
 
