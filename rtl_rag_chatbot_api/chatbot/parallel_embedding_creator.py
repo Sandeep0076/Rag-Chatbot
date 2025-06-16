@@ -9,6 +9,8 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
+from fastapi import BackgroundTasks
+
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
 
 
@@ -18,6 +20,7 @@ async def create_embeddings_parallel(
     embedding_handler: EmbeddingHandler,
     configs: Dict[str, Any],
     session_local: Any,
+    background_tasks: BackgroundTasks = None,
     username_lists: Optional[List[List[str]]] = None,
     file_metadata_list: Optional[List[Dict[str, Any]]] = None,
     max_concurrent_tasks: int = 4,
@@ -66,6 +69,7 @@ async def create_embeddings_parallel(
                     session_local,
                     username_list,
                     file_metadata,
+                    background_tasks,
                 )
                 return {"file_id": file_id, "status": "success", "result": result}
             except Exception as e:

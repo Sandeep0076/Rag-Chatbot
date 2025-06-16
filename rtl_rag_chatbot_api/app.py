@@ -636,7 +636,10 @@ async def process_files_by_type(
 
     # Process document files in parallel if there are multiple
     if len(document_files) > 1:
-        await process_document_files_parallel(document_files, username, is_image)
+        # Pass background_tasks to enable non-blocking GCS uploads after local embedding creation
+        await process_document_files_parallel(
+            document_files, username, is_image, background_tasks
+        )
     # Process single document file normally
     elif len(document_files) == 1:
         file_info = document_files[0]
@@ -681,7 +684,9 @@ async def process_document_type_file(
         )
 
 
-async def process_document_files_parallel(document_files, username, is_image):
+async def process_document_files_parallel(
+    document_files, username, is_image, background_tasks: BackgroundTasks = None
+):
     """
     Process multiple document files in parallel, handling both new uploads and existing files.
     This significantly speeds up embedding creation when multiple files are uploaded.
@@ -787,13 +792,14 @@ async def process_document_files_parallel(document_files, username, is_image):
             f"Starting parallel embedding creation for {len(files_to_process)} files with {max_concurrent} workers"
         )
 
-        # Run parallel embedding creation
+        # Run parallel embedding creation with BackgroundTasks for non-blocking uploads
         await create_embeddings_parallel(
             file_ids,
             file_paths,
             embedding_handler,
             configs,
             SessionLocal,
+            background_tasks,
             username_lists,
             file_metadata_list,
             max_concurrent,
@@ -1249,11 +1255,12 @@ async def create_embeddings_background(
     SessionLocal,
     username_list=None,
     file_metadata=None,
+    background_tasks: BackgroundTasks = None,
 ):
     """
     Background task for creating embeddings.
-    With the decoupled approach, local embeddings are created first,
-    marked as 'ready_for_chat', and cloud operations happen in the background.
+    With the decoupled approach, local embeddings are created first (blocking),
+    marked as 'ready_for_chat', and then cloud operations happen in the background (non-blocking).
 
     This function is optimized for parallel execution with multiple files.
 
@@ -1286,20 +1293,39 @@ async def create_embeddings_background(
         logging.info(f"Using file-specific metadata for {file_id}: {file_metadata}")
         logging.info(f"File hash for {file_id}: {file_hash}")
 
-        # CRITICAL SECTION: Create embeddings with file-specific metadata
-        # This is the core functionality that must be completed before returning
-        embedding_result = await embedding_handler.ensure_embeddings_exist(
-            file_id=file_id, temp_file_path=temp_file_path, file_metadata=file_metadata
+        # CRITICAL SECTION: Create local embeddings (blocking operation)
+        # This must be completed before returning to allow chat to begin
+        is_image = file_metadata.get("is_image", False) if file_metadata else False
+        embedding_result = await embedding_handler.create_embeddings(
+            file_id=file_id,
+            temp_file_path=temp_file_path,
+            is_image=is_image,
+            file_metadata=file_metadata,
         )
 
-        # Process username updates in background if embedding creation succeeded
-        if embedding_result["status"] != "error" and username_list:
-            asyncio.create_task(
-                update_usernames_in_background(configs, file_id, username_list)
-            )
+        # If embeddings were created successfully, trigger background upload
+        if embedding_result["status"] == "ready_for_chat":
+            # Start the GCS upload as a non-blocking operation using background_tasks if available
+            if background_tasks:
+                # Use FastAPI's BackgroundTasks for proper non-blocking execution
+                background_tasks.add_task(embedding_handler.upload_embeddings, file_id)
+                logging.info(
+                    f"Scheduled background upload for file_id: {file_id} using BackgroundTasks"
+                )
+            else:
+                # Fallback to creating a new task for backward compatibility
+                asyncio.create_task(embedding_handler.upload_embeddings(file_id))
+                logging.info(
+                    f"Triggered background upload for file_id: {file_id} using asyncio.create_task"
+                )
 
-        # Handle errors in embedding creation
-        if embedding_result["status"] == "error":
+            # Process username updates in background if embedding creation succeeded
+            if username_list:
+                asyncio.create_task(
+                    update_usernames_in_background(configs, file_id, username_list)
+                )
+        else:
+            # Handle errors in embedding creation
             logging.error(
                 f"Error creating embeddings for {file_id}: {embedding_result.get('message', 'Unknown error')}"
             )
@@ -1312,7 +1338,11 @@ async def create_embeddings_background(
         logging.error(f"Error in create_embeddings_background for {file_id}: {str(e)}")
         # Run cleanup in background to avoid blocking
         asyncio.create_task(run_cleanup_after_error(configs, SessionLocal, file_id))
-        return {"status": "error", "message": str(e), "file_id": file_id}
+        return {
+            "status": "error",
+            "message": f"Failed to create embeddings: {str(e)}",
+            "file_id": file_id,
+        }
 
 
 @app.post("/embeddings/check", response_model=Dict[str, Any])

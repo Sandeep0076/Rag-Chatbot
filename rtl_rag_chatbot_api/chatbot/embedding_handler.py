@@ -102,7 +102,8 @@ class EmbeddingHandler:
                 "azure": azure_result,
                 "gemini": gemini_result,
             },
-            "embeddings_status": "completed",
+            # Set status to ready_for_chat for local embeddings, will be updated to completed after GCS upload
+            "embeddings_status": "ready_for_chat",
             "azure_ready": azure_result.get("success", False),
             "file_id": file_id,  # Ensure file_id consistency
             "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
@@ -440,7 +441,7 @@ class EmbeddingHandler:
             return result
         return False
 
-    async def create_and_upload_embeddings(
+    async def create_embeddings(
         self,
         file_id: str,
         temp_file_path: str,
@@ -449,7 +450,7 @@ class EmbeddingHandler:
         file_metadata: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """
-        Creates embeddings for a file and uploads them to GCS.
+        Creates embeddings for a file locally. This is a blocking operation.
 
         Args:
             file_id: Unique identifier for the file
@@ -479,7 +480,7 @@ class EmbeddingHandler:
                 file_id, base_handler, temp_file_path, second_file_path, is_image
             )
 
-            # Extract embedding existence status first - needed for file_info
+            # Extract embedding existence status
             azure_embeddings_exist = self._extract_embedding_exists_status(azure_result)
             gemini_embeddings_exist = self._extract_embedding_exists_status(
                 gemini_result
@@ -495,45 +496,8 @@ class EmbeddingHandler:
             # Save file_info locally to make chat available immediately
             self._save_file_info_locally(file_id, file_info)
 
-            # Start background upload of embeddings to GCS - after local save
-            # This decouples the upload from the embedding creation
-            try:
-                asyncio.create_task(self._upload_embeddings_to_gcs_background(file_id))
-                logging.info(
-                    f"Started background upload of embeddings to GCS for {file_id}"
-                )
-            except Exception as e:
-                logging.error(f"Error starting background upload: {str(e)}")
-
-            # File info has already been updated and saved locally earlier
-            # This is now a no-op to maintain code structure
-
-            # Save file_info locally first to make chat available immediately
-            self._save_file_info_locally(file_id, file_info)
-
-            # Upload file info to GCS in the background
-            try:
-                self.gcs_handler.upload_to_gcs(
-                    self.configs.gcp_resource.bucket_name,
-                    {
-                        "metadata": (
-                            file_info,
-                            f"file-embeddings/{file_id}/file_info.json",
-                        )
-                    },
-                )
-                logging.info(f"Successfully uploaded file_info.json for {file_id}")
-            except Exception as upload_error:
-                logging.error(f"Error uploading file_info.json: {str(upload_error)}")
-
-            # Extract embedding existence status
-            azure_embeddings_exist = self._extract_embedding_exists_status(azure_result)
-            gemini_embeddings_exist = self._extract_embedding_exists_status(
-                gemini_result
-            )
-
             return {
-                "message": "Embeddings created and uploaded successfully. Ready for chat.",
+                "message": "Embeddings created successfully. Ready for chat.",
                 "status": "ready_for_chat",
                 "can_chat": True,
                 "file_id": file_id,
@@ -543,13 +507,73 @@ class EmbeddingHandler:
             }
 
         except Exception as e:
+            logging.error(f"Error in create_embeddings: {str(e)}", exc_info=True)
+            # Clean up any partial embeddings
+            await self._handle_failed_embedding_cleanup(file_id)
+            return self._build_error_response(file_id, str(e))
+
+    async def upload_embeddings(self, file_id: str) -> None:
+        """
+        Uploads embeddings to GCS. This should be called as a non-blocking operation
+        after create_embeddings has completed.
+
+        Args:
+            file_id: Unique identifier for the file
+        """
+        try:
+            # Execute the upload function directly
+            # When called via background_tasks.add_task, this will run in the background
+            await self._upload_embeddings_to_gcs_background(file_id)
+            logging.info(
+                f"Completed background upload of embeddings to GCS for {file_id}"
+            )
+        except Exception as e:
+            logging.error(f"Error during background upload: {str(e)}", exc_info=True)
+
+    async def create_and_upload_embeddings(
+        self,
+        file_id: str,
+        temp_file_path: str,
+        second_file_path: str = None,
+        is_image: bool = False,
+        file_metadata: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        Creates embeddings for a file and uploads them to GCS.
+        This is maintained for backward compatibility but uses the new separate methods.
+
+        Args:
+            file_id: Unique identifier for the file
+            temp_file_path: Path to the temporary file
+            second_file_path: Optional second file path (for images with separate analysis)
+            is_image: Whether the file is an image
+            file_metadata: Additional metadata for the file
+
+        Returns:
+            Dictionary with embedding status information
+        """
+        try:
+            # Create embeddings first (blocking operation)
+            result = await self.create_embeddings(
+                file_id, temp_file_path, second_file_path, is_image, file_metadata
+            )
+
+            # If embeddings were created successfully, start the upload in the background
+            if result.get("status") == "ready_for_chat":
+                # Create a new task to handle the upload in the background
+                asyncio.create_task(self.upload_embeddings(file_id))
+                logging.info(
+                    f"Started background upload via create_and_upload_embeddings for {file_id}"
+                )
+
+            return result
+
+        except Exception as e:
             logging.error(
                 f"Error in create_and_upload_embeddings: {str(e)}", exc_info=True
             )
             # Clean up any partial embeddings
             await self._handle_failed_embedding_cleanup(file_id)
-
-            # Return error information
             return self._build_error_response(file_id, str(e))
 
     def _save_file_info_locally(self, file_id: str, file_info: Dict[str, Any]) -> None:
@@ -636,7 +660,9 @@ class EmbeddingHandler:
             # First check file_info.json for embedding status
             local_info_path = os.path.join("./chroma_db", file_id, "file_info.json")
             embeddings_status = "not_started"
+            embeddings_exist = False
 
+            # Check local embeddings first (most reliable and up-to-date source)
             # If local file_info.json exists, check it first
             if os.path.exists(local_info_path):
                 try:
@@ -646,45 +672,74 @@ class EmbeddingHandler:
                             "embeddings_status", "not_started"
                         )
 
-                    # Check if embeddings are ready for chat or completed
-                    if embeddings_status in ["ready_for_chat", "completed"]:
-                        # IMPORTANT: Always check the Azure directory regardless of model choice
-                        azure_path = os.path.join(
-                            "./chroma_db", file_id, "azure", "chroma.sqlite3"
-                        )
-                        if os.path.exists(azure_path):
-                            logging.info(
-                                f"Found Azure embeddings for file {file_id} (using with {model_choice})"
+                    logging.info(
+                        f"Local file_info.json for {file_id} shows status: {embeddings_status}"
+                    )
+
+                    # Consider in_progress status as valid if embedding files exist
+                    # This is needed because sometimes the status update from in_progress to ready_for_chat
+                    # might not be immediate, but embeddings are already created
+                    if embeddings_status in [
+                        "in_progress",
+                        "ready_for_chat",
+                        "completed",
+                    ]:
+                        # Check if the actual embedding files exist
+                        azure_dir = os.path.join("./chroma_db", file_id, "azure")
+                        azure_db = os.path.join(azure_dir, "chroma.sqlite3")
+
+                        # If we have the directory and either the DB or any files in the directory
+                        if os.path.exists(azure_dir) and (
+                            os.path.exists(azure_db)
+                            or any(
+                                os.path.isfile(os.path.join(azure_dir, f))
+                                for f in os.listdir(azure_dir)
+                                if f
                             )
+                        ):
+                            logging.info(
+                                f"Found valid local Azure embeddings for file {file_id} (using with {model_choice})"
+                            )
+                            embeddings_exist = True
                             return {
                                 "embeddings_exist": True,
                                 "model_type": model_type,  # Return original model_type for compatibility
                                 "file_id": file_id,
                                 "status": embeddings_status,
                             }
+                        else:
+                            logging.warning(
+                                f"File {file_id} has status {embeddings_status}"
+                                " but no valid embedding files found locally"
+                            )
                 except Exception as e:
                     logging.warning(f"Error reading local file_info.json: {str(e)}")
 
-            # If no valid local embeddings, check GCS for Azure embeddings
-            # IMPORTANT: Always check for Azure embeddings in GCS regardless of model
+            # If no valid local embeddings or status, check GCS as fallback
             gcs_prefix = f"file-embeddings/{file_id}/azure/"
             blobs = list(self.gcs_handler.bucket.list_blobs(prefix=gcs_prefix))
 
-            embeddings_exist = len(blobs) > 0 and any(
+            gcs_embeddings_exist = len(blobs) > 0 and any(
                 blob.name.endswith("chroma.sqlite3") for blob in blobs
             )
 
-            # If we found embeddings in GCS but not locally, we might need to download them
-            if embeddings_exist:
-                # Check GCS file_info.json for status
-                file_info = self.gcs_handler.get_file_info(file_id)
-                if file_info:
-                    embeddings_status = file_info.get(
-                        "embeddings_status", "not_started"
-                    )
+            # Only update embeddings_exist if we found them in GCS and not locally
+            if gcs_embeddings_exist and not embeddings_exist:
+                embeddings_exist = True
+                logging.info(
+                    f"Found embeddings in GCS for {file_id} (not found locally)"
+                )
+
+                # Update status from GCS if needed
+                if embeddings_status == "not_started":
+                    file_info = self.gcs_handler.get_file_info(file_id)
+                    if file_info:
+                        embeddings_status = file_info.get(
+                            "embeddings_status", "not_started"
+                        )
 
             logging.info(
-                f"Checked embeddings for file {file_id} with {model_choice}:"
+                f"Final check for file {file_id} with {model_choice}:"
                 f" exist={embeddings_exist}, status={embeddings_status}"
             )
             return {

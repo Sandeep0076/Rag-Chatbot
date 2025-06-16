@@ -189,6 +189,7 @@ class BaseRAGHandler:
 
             # Store the embedding_id for reference
             self.embedding_id = embedding_id
+            logging.info(f"For {self.file_id}  embeddings are created successfully")
             return "completed"
         except Exception as e:
             logging.error(f"Error in create_and_store_embeddings: {str(e)}")
