@@ -724,9 +724,10 @@ async def process_document_files_parallel(
             existing_file_info = gcs_handler.get_file_info(file_id)
             if existing_file_info:
                 # Check if embeddings exist
-                embeddings_exist = embedding_handler.check_embeddings_exist(
+                embeddings_result = await embedding_handler.check_embeddings_exist(
                     file_id, "default"
-                )["embeddings_exist"]
+                )
+                embeddings_exist = embeddings_result["embeddings_exist"]
                 if embeddings_exist:
                     # Just update username - this is fast so we can do it synchronously
                     current_username_list = existing_file_info.get("username", [])
