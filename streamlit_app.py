@@ -570,6 +570,8 @@ def display_chat_interface():
                                     f"visualization: {chart_config['title']}"
                                 ),
                             }
+                            # Removed unused image size and num_images selectors
+                            # These were likely intended for image generation but not connected to any functionality
                             st.session_state.messages.append(ai_message)
 
                             with st.chat_message("assistant"):
@@ -626,6 +628,8 @@ def initialize_session_state():
                 st.session_state.model_types = {
                     "text": text_models,
                     "image": image_models,
+                    "size": "",
+                    "n": 1,
                 }
         else:
             st.session_state.available_models = ["gpt_4o_mini", "gemini-pro"]

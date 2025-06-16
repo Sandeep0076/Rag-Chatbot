@@ -13,17 +13,23 @@ class CombinedImageGenerator:
     Simply uses instances of the individual generators without duplicating their logic.
     """
 
-    def __init__(self, configs):
+    def __init__(self, configs, dalle_generator=None, imagen_generator=None):
         """
         Initialize combined image generator with configurations.
 
         Args:
             configs: Application configuration object
+            dalle_generator: Optional existing DalleImageGenerator instance
+            imagen_generator: Optional existing ImagenGenerator instance
         """
         self.configs = configs
-        # Create instances of individual generators
-        self.dalle_generator = DalleImageGenerator(configs)
-        self.imagen_generator = ImagenGenerator(configs)
+        # Use existing generators if provided, otherwise create new ones
+        self.dalle_generator = (
+            dalle_generator if dalle_generator else DalleImageGenerator(configs)
+        )
+        self.imagen_generator = (
+            imagen_generator if imagen_generator else ImagenGenerator(configs)
+        )
 
     async def generate_images(
         self, prompt: str, size: str = "1024x1024", n: int = 1, **kwargs
@@ -50,16 +56,23 @@ class CombinedImageGenerator:
             with ThreadPoolExecutor(max_workers=2) as executor:
                 # Create async tasks for both model executions
                 loop = asyncio.get_event_loop()
+
+                # DALL-E 3 can only generate 1 image per API call, always use n=1
                 dalle_future = loop.run_in_executor(
                     executor,
                     lambda: self.dalle_generator.generate_image(
-                        prompt=prompt, size=size, n=n, **kwargs
+                        prompt=prompt, size=size, n=1, **kwargs  # Force n=1 for DALL-E
                     ),
                 )
+
+                # Imagen can generate multiple images as requested
                 imagen_future = loop.run_in_executor(
                     executor,
                     lambda: self.imagen_generator.generate_image(
-                        prompt=prompt, size=size, n=n, **kwargs
+                        prompt=prompt,
+                        size=size,
+                        n=n,
+                        **kwargs,  # Use requested n for Imagen
                     ),
                 )
 
