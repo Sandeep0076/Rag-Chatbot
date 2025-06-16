@@ -67,6 +67,47 @@ For new PDFs only:
    - Initializes chosen LLM (Azure GPT or Gemini)
    - Creates new chat session
 
+   **How Embeddings are Loaded During Chat:**
+
+   1. **Initial Request Processing**:
+      - The chat endpoint in `app.py` receives a query containing the `file_id` and `model_choice`
+      - The system first checks if the file info exists by calling `gcs_handler.get_file_info(query.file_id)`
+      - If file info doesn't exist, it checks embeddings status with `gcs_handler.check_embeddings_status(query.file_id)`
+
+   2. **Model Initialization**:
+      - The system creates a model key using `f"{query.file_id}_{query.user_id}_{query.model_choice}"`
+      - It checks if a model is already initialized for this key in the `initialized_models` dictionary
+      - If not, it calls `check_db_existence` for tabular data or `initialize_rag_model` for documents
+
+   3. **Embedding Location Check**:
+      - In `initialize_rag_model`, the system first checks for local embeddings in `chroma_path = f"./chroma_db/{query.file_id}"`
+      - It determines the embedding type based on model choice (`google` for Gemini models, `azure` for others)
+      - It looks for the specific embedding database at `model_path = os.path.join(chroma_path, embedding_type, "chroma.sqlite3")`
+
+   4. **Embedding Download (if needed)**:
+      - If local embeddings don't exist, it checks if embeddings are ready in GCS by verifying `file_info.get("embeddings_status") == "completed"`
+      - If embeddings are ready in GCS but not locally, it downloads them with `gcs_handler.download_files_from_folder_by_id(query.file_id)`
+      - This maintains the same directory structure locally as in GCS
+
+   5. **ChromaDB Collection Initialization**:
+      - The appropriate model (Gemini or Azure) is initialized with the file_id, embedding_type, and collection name
+      - The model connects to the ChromaDB collection through the `ChromaDBManager` singleton
+      - The collection path is constructed as `./chroma_db/{file_id}/{embedding_type}`
+      - For user-specific sessions, it uses `{file_id}/{embedding_type}/user_{user_id}` as the instance key
+
+   6. **Embedding Retrieval During Chat**:
+      - When the user asks a question, the model calls `query_chroma` in `BaseRAGHandler`
+      - This method gets the user's query embedding using the model's `get_embeddings` method
+      - It then retrieves the ChromaDB collection using `_get_chroma_collection()`
+      - The collection is queried with the embedding to find the most relevant document chunks
+      - These chunks are used as context for generating the response
+
+   7. **Optimizations for Performance**:
+      - The system supports both "ready_for_chat" and "completed" embedding statuses
+      - Local embeddings are prioritized over GCS embeddings for faster access
+      - The `ChromaDBManager` singleton ensures efficient reuse of ChromaDB instances
+      - User-specific instances are tracked to maintain separate chat contexts
+
 2. **For Each User Query**:
    a. **Query Processing**
       - Sanitizes user input
