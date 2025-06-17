@@ -241,14 +241,15 @@ class EmbeddingHandler:
             # To DO
             if temp_metadata.get("is_image"):
                 gpt4_path = temp_metadata.get("gpt4_analysis_path")
-                gemini_path = temp_metadata.get("gemini_analysis_path")
-                logging.info(f"Creating new embeddings for : {gpt4_path}")
-                logging.info(f"Creating new embeddings for : {gemini_path}")
-                if not gpt4_path or not gemini_path:
-                    raise ValueError("Missing analysis paths for image")
+                logging.info(
+                    f"Creating new embeddings for image analysis file : {gpt4_path}"
+                )
+                if not gpt4_path:
+                    raise ValueError("Missing analysis path for image")
 
+                # Only pass single analysis file – unified embeddings.
                 return await self.create_and_upload_embeddings(
-                    file_id, gpt4_path, second_file_path=gemini_path, is_image=True
+                    file_id, gpt4_path, is_image=True
                 )
             else:
                 # For non-images, use single file path
@@ -1226,8 +1227,7 @@ class EmbeddingHandler:
         """
         # Check for the local embeddings directories and SQLite files
         azure_path = f"./chroma_db/{file_id}/azure/chroma.sqlite3"
-        gemini_path = f"./chroma_db/{file_id}/google/chroma.sqlite3"
-        return os.path.exists(azure_path) and os.path.exists(gemini_path)
+        return os.path.exists(azure_path)
 
     def all_files_have_local_embeddings(self, file_ids: List[str]) -> bool:
         """

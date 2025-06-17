@@ -460,13 +460,12 @@ class FileHandler:
     async def _check_local_embeddings(self, existing_file_id):
         """Check if local embeddings exist."""
         azure_path = f"./chroma_db/{existing_file_id}/azure"
-        gemini_path = f"./chroma_db/{existing_file_id}/google"
-        return (
-            os.path.exists(azure_path)
-            and os.path.exists(gemini_path)
-            and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
-            and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
-        )
+        # With unified Azure embeddings used for both Azure GPT and Gemini models,
+        # we only need to verify the Azure directory. Requiring the legacy
+        # `google` directory falsely flags missing embeddings and triggers an
+        # unnecessary GCS download.
+        sqlite_path = os.path.join(azure_path, "chroma.sqlite3")
+        return os.path.exists(sqlite_path)
 
     async def _handle_existing_file_encryption(
         self,
