@@ -293,20 +293,22 @@ class GeminiHandler(BaseRAGHandler):
             # With our unified embedding approach, all models use Azure embeddings
             embedding_model_for_rag = "azure"  # Use Azure embeddings for RAG
 
+            # Compute embedding only once per request to avoid making the same
+            # Azure embedding call for each file.
+            query_embedding = self.get_embeddings([query])[0]
+
             # Handle multi-file or single-file mode appropriately
             if self.is_multi_file:
                 # Query each file and collect relevant documents
                 for f_id in self.active_file_ids:
                     # Construct collection name specific to this file_id
-                    current_collection_name = f"{self._collection_name_prefix}{f_id}"
-                    logger.info(
-                        f"Querying ChromaDB for file: {f_id}, collection: {current_collection_name}"
-                    )
                     try:
-                        # Get embeddings for the query
-                        query_embedding = self.get_embeddings([query])[0]
-
-                        # Get the collection for this file
+                        current_collection_name = (
+                            f"{self._collection_name_prefix}{f_id}"
+                        )
+                        logger.info(
+                            f"Querying ChromaDB for file: {f_id}, collection: {current_collection_name}"
+                        )
                         chroma_collection = self.chroma_manager.get_collection(
                             file_id=f_id,
                             embedding_type=embedding_model_for_rag,

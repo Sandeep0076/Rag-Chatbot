@@ -115,6 +115,12 @@ class AzureChatbot(BaseRAGHandler):
             all_relevant_docs = []
             embedding_model_for_rag = "azure"  # AzureChatbot uses Azure embeddings
 
+            # Compute the embedding **once** for the whole request to avoid
+            # redundant Azure OpenAI /embeddings calls when querying multiple
+            # files. This removes N-1 identical HTTP requests and speeds up
+            # multi-file chat dramatically.
+            query_embedding = self.get_embeddings([query])[0]
+
             for f_id in self.active_file_ids:
                 # Construct collection name specific to this file_id
                 current_collection_name = f"{self._collection_name_prefix}{f_id}"
@@ -126,7 +132,7 @@ class AzureChatbot(BaseRAGHandler):
                     # We need to ensure query_chroma can be called with a specific collection
                     # if it's not using self.collection_name. For now, let's assume
                     # direct ChromaManager usage for flexibility here.
-                    query_embedding = self.get_embeddings([query])[0]
+
                     chroma_collection = self.chroma_manager.get_collection(
                         file_id=f_id,  # Used for path generation by chroma_manager
                         embedding_type=embedding_model_for_rag,  # 'azure' or 'google'
