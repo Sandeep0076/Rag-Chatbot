@@ -392,7 +392,16 @@ async def process_files_in_parallel(file_handler, all_files, is_image, username)
     statuses = []
 
     for i, result in enumerate(results):
-        processed_file_ids.append(result["file_id"])
+        # Use the file_id returned from process_file, which could be different
+        # from the original file_id if existing embeddings were found
+        if result.get("status") == "error":
+            # For error cases, use the original file_id to maintain tracking
+            processed_file_ids.append(file_ids[i])
+            logging.warning(f"Skipping invalid file: {all_files[i].filename}")
+        else:
+            # For successful cases, use the returned file_id which might be from existing embeddings
+            processed_file_ids.append(result["file_id"])
+
         original_filenames.append(all_files[i].filename)
         is_tabular_flags.append(result.get("is_tabular", False))
         statuses.append(result.get("status", "success"))

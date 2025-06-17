@@ -614,10 +614,34 @@ class FileHandler:
                 "embeddings_exist": False
             }  # Always false with unified Azure approach
 
-            # Create directories and save file
-            temp_file_path = await self._save_file_locally(
-                file_id, original_filename, file_content
+            # Only create directories and save file if embeddings don't exist or we need to process the file
+            embeddings_exist = existing_file_id and azure_result.get(
+                "embeddings_exist", False
             )
+            if not embeddings_exist:
+                # Create directories and save file
+                temp_file_path = await self._save_file_locally(
+                    file_id, original_filename, file_content
+                )
+            else:
+                # If embeddings exist, we don't need to save the file
+                # Just set the path but don't actually create the file
+                temp_file_path = None
+                logging.info(f"Found embeddings for: {original_filename}")
+
+                # Update username list using the more comprehensive method
+                self.gcs_handler.update_username_list(existing_file_id, [username])
+                logging.info(f"Updated username list for existing file: {username}")
+
+                # Return early with existing file information
+                return {
+                    "status": "success",
+                    "file_id": existing_file_id,  # Use existing file ID
+                    "is_image": is_image,
+                    "embeddings_exist": True,
+                    "temp_file_path": None,
+                }
+
             del file_content  # Free memory
 
             # Handle file encryption
@@ -801,16 +825,22 @@ class FileHandler:
         file_id: str,
     ):
         """Handle encryption of the file if needed"""
+        # Skip encryption if we have an existing file with embeddings
+        if existing_file_id:
+            return None
+
         # Encrypt the original uploaded file (tabular files are handled separately)
-        if not is_tabular and not is_database and not existing_file_id:
-            # Use the FileEncryptionManager to handle encryption
-            (
-                success,
-                encrypted_file_path,
-            ) = await self.encryption_manager.encrypt_and_upload(
-                temp_file_path, original_filename, file_id
-            )
-            return encrypted_file_path
+        if not is_tabular and not is_database:
+            # Check if the temp_file_path actually exists (it might not if we skipped file saving)
+            if os.path.exists(temp_file_path):
+                # Use the FileEncryptionManager to handle encryption
+                (
+                    success,
+                    encrypted_file_path,
+                ) = await self.encryption_manager.encrypt_and_upload(
+                    temp_file_path, original_filename, file_id
+                )
+                return encrypted_file_path
 
         return None
 
