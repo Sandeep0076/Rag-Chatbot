@@ -121,7 +121,7 @@ class BaseRAGHandler:
         Args:
             chunks (List[str]): List of text chunks to be embedded
             file_id (str): Unique identifier for the file being processed
-            subfolder (str): Storage subfolder ('azure' or 'google') determining model type
+            subfolder (str): Storage subfolder (standardized on 'azure' for unified embedding approach)
 
         Returns:
             str: Status string ('completed' on success)
@@ -130,7 +130,7 @@ class BaseRAGHandler:
             # Get collection with explicit subfolder path
             collection = self.chroma_manager.get_collection(
                 file_id=file_id,
-                embedding_type=subfolder,  # 'azure' or 'google'
+                embedding_type=subfolder,  # Always 'azure' in the unified embedding approach
                 collection_name=self.collection_name,
                 user_id=None,  # No user filtering for embeddings creation
                 is_embedding=is_embedding,
@@ -302,13 +302,8 @@ class BaseRAGHandler:
         current_chunk = []
         current_chunk_tokens = 0
 
-        # Get appropriate token limit based on model type
-        if self.embedding_type == "azure":
-            max_tokens = self.AZURE_MAX_TOKENS
-        elif self.embedding_type == "google":
-            max_tokens = self.GEMINI_MAX_TOKENS
-        else:
-            max_tokens = self.max_tokens
+        # Get appropriate token limit - always use Azure max tokens since we've unified on Azure embeddings
+        max_tokens = self.AZURE_MAX_TOKENS
 
         for paragraph in paragraphs:
             paragraph_tokens = len(self.simple_tokenize(paragraph))

@@ -429,18 +429,23 @@ class FileHandler:
         self,
         is_image,
         existing_file_id,
-        google_result,
+        google_result,  # Kept for backwards compatibility
         azure_result,
         actual_file_id,
         temp_file_path,
         metadata,
     ):
-        """Process image analysis for new or incomplete embeddings."""
-        if not is_image or (
-            existing_file_id
-            and google_result["embeddings_exist"]
-            and azure_result["embeddings_exist"]
-        ):
+        """Process image analysis for new or incomplete embeddings.
+
+        Parameters:
+        -----------
+        google_result : dict
+            Kept for backwards compatibility but not used in the unified Azure approach
+        """
+        # Skip image analysis if:
+        #   • file is not an image, or
+        #   • we already have Azure embeddings for this image (unified embedding approach)
+        if not is_image or (existing_file_id and azure_result["embeddings_exist"]):
             return []
 
         analysis_files = []
@@ -492,10 +497,18 @@ class FileHandler:
         is_tabular,
         is_database,
         username,
-        google_result,
+        google_result,  # Kept for backwards compatibility
         azure_result,
     ):
-        """Handle processing for files that already exist in the system."""
+        """Handle processing for files that already exist in the system.
+
+        Parameters:
+        -----------
+        google_result : dict
+            Kept for backwards compatibility but not used in the unified Azure embedding approach
+        azure_result : dict
+            Contains information about Azure embeddings existence
+        """
         # Early return if the file doesn't exist
         if not existing_file_id:
             return None
@@ -527,11 +540,9 @@ class FileHandler:
         logging.info(f"Local embeddings exist: {local_exists}")
 
         # Download embeddings if they exist remotely but not locally
-        if (
-            google_result["embeddings_exist"]
-            and azure_result["embeddings_exist"]
-            and not local_exists
-        ):
+        # Download embeddings from GCS only if Azure embeddings exist remotely
+        # but the local cache is missing.
+        if azure_result["embeddings_exist"] and not local_exists:
             self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
 
         # For images, we only need the embeddings to chat
@@ -598,11 +609,14 @@ class FileHandler:
             # Check for existing file
             (
                 existing_file_id,
-                google_result,
                 azure_result,
             ) = await self._check_for_existing_file(
                 file_hash, original_filename, file_id
             )
+            # For compatibility with downstream code expecting google_result
+            google_result = {
+                "embeddings_exist": False
+            }  # Always false with unified Azure approach
 
             # Create directories and save file
             temp_file_path = await self._save_file_locally(
@@ -729,12 +743,11 @@ class FileHandler:
         self, file_hash: str, original_filename: str, file_id: str
     ):
         """Check if a file with the same hash already exists and verify it's not a hash collision"""
-        google_result = {"embeddings_exist": False}
         azure_result = {"embeddings_exist": False}
 
         existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
         if not existing_file_id:
-            return None, google_result, azure_result
+            return None, azure_result
 
         # Verify this isn't a case of hash collision by checking filename
         gcs_file_path = (
@@ -760,19 +773,17 @@ class FileHandler:
                     logging.info(
                         f"Treating as new file with ID: {file_id} to avoid conflicts"
                     )
-                    return None, google_result, azure_result
+                    return None, azure_result
 
         # If we're still using the existing_file_id, get embedding status
         embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
-        google_result = await embedding_handler.check_embeddings_exist(
-            existing_file_id, "gemini-flash"
-        )
+        # Use only Azure embeddings for unified approach
         azure_result = await embedding_handler.check_embeddings_exist(
             existing_file_id, "gpt_4o_mini"
         )
         logging.info(f"Existing file found with hash: {existing_file_id}")
 
-        return existing_file_id, google_result, azure_result
+        return existing_file_id, azure_result
 
     async def _save_file_locally(
         self, file_id: str, original_filename: str, file_content: bytes

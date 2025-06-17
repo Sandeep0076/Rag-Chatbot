@@ -100,13 +100,20 @@ class EmbeddingHandler:
             **(file_metadata or {}),  # Include original metadata
             "embeddings": {
                 "azure": azure_result,
-                "gemini": gemini_result,
+                # Keep gemini key for backward compatibility, but we use Azure embeddings for all models now
+                "gemini": {
+                    "success": False,
+                    "error": "Deprecated. Using unified Azure embeddings",
+                },
             },
             # Set status to ready_for_chat for local embeddings, will be updated to completed after GCS upload
             "embeddings_status": "ready_for_chat",
             "azure_ready": azure_result.get("success", False),
+            # With unified approach, embeddings_ready depends only on Azure embeddings
+            "embeddings_ready": azure_result.get("success", False),
             "file_id": file_id,  # Ensure file_id consistency
             "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
+            "embedding_type": "azure",  # Explicitly indicate we're using Azure embeddings
         }
 
         # Ensure critical fields are present
@@ -655,8 +662,8 @@ class EmbeddingHandler:
         """
         try:
             model_choice = model_choice.lower()
-            # For compatibility, we still return the original model_type based on model_choice
-            model_type = "azure" if "gpt" in model_choice else "google"
+            # We now always use Azure embeddings regardless of model_choice
+            model_type = "azure"  # Always use Azure embeddings for unified approach
 
             # First check file_info.json for embedding status
             local_info_path = os.path.join("./chroma_db", file_id, "file_info.json")
@@ -872,9 +879,8 @@ class EmbeddingHandler:
         try:
             logging.info(f"Uploading embeddings to GCS for file_id: {file_id}...")
 
-            # Get chroma DB directory path
+            # Get chroma DB directory path - only Azure embeddings are used in the unified approach
             azure_folder = os.path.join("./chroma_db", file_id, "azure")
-            google_folder = os.path.join("./chroma_db", file_id, "google")
 
             # Upload each file individually to avoid the dictionary unpacking issue
             upload_count = 0
@@ -899,24 +905,7 @@ class EmbeddingHandler:
                                 f"Error uploading Azure file {file}: {str(inner_e)}"
                             )
 
-            # Process Google folder
-            if os.path.exists(google_folder):
-                for root, _, files in os.walk(google_folder):
-                    for file in files:
-                        try:
-                            local_path = os.path.join(root, file)
-                            relative_path = os.path.relpath(local_path, "./chroma_db")
-                            gcs_path = f"file-embeddings/{relative_path}"
-
-                            # Upload each file individually
-                            self.gcs_handler.upload_to_gcs(
-                                bucket_name, local_path, gcs_path
-                            )
-                            upload_count += 1
-                        except Exception as inner_e:
-                            logging.error(
-                                f"Error uploading Google file {file}: {str(inner_e)}"
-                            )
+            # Google folder processing removed as part of unified Azure embedding approach
 
             if upload_count > 0:
                 logging.info(
@@ -934,13 +923,12 @@ class EmbeddingHandler:
         """Remove any partially created embeddings for failed operations."""
         try:
             logging.info(f"Cleaning up failed embeddings for file_id: {file_id}")
-            # Clean up local files
-            for model in ["azure", "google"]:
-                local_path = f"./chroma_db/{file_id}/{model}"
-                if os.path.exists(local_path):
-                    # Use asyncio.to_thread for IO-bound operations like file deletion
-                    await asyncio.to_thread(self._remove_directory, local_path)
-                    logging.info(f"Removed local embeddings at {local_path}")
+            # Clean up local files - only Azure embeddings in unified approach
+            local_path = f"./chroma_db/{file_id}/azure"
+            if os.path.exists(local_path):
+                # Use asyncio.to_thread for IO-bound operations like file deletion
+                await asyncio.to_thread(self._remove_directory, local_path)
+                logging.info(f"Removed local embeddings at {local_path}")
 
             # We don't delete from GCS as it might be partial and the original data should be preserved
             # for debugging purposes. In production, you might want to add GCS cleanup as well.

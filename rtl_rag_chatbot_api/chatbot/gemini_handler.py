@@ -101,7 +101,9 @@ class GeminiHandler(BaseRAGHandler):
             self.active_file_ids = [file_id]
             self.file_id = file_id  # For BaseRAGHandler compatibility
             self.collection_name = f"{self._collection_name_prefix}{self.file_id}"
-            self.embedding_type = "google"  # Default for GeminiHandler
+            self.embedding_type = (
+                "azure"  # Using Azure embeddings as default for all handlers
+            )
             logger.info(f"GeminiHandler initialized for single-file: {self.file_id}")
         # If neither file_id nor file_ids are provided, do nothing - will be set during initialize()
 

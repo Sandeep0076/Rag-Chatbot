@@ -822,10 +822,7 @@ async def handle_existing_file(
 
     logging.info(f"File {file_id} already exists, checking if it needs new embeddings")
 
-    # Check if embeddings exist for both model types
-    google_result = await embedding_handler.check_embeddings_exist(
-        file_id, "gemini-flash"
-    )
+    # Check if embeddings exist
     azure_result = await embedding_handler.check_embeddings_exist(
         file_id, "gpt_4o_mini"
     )
@@ -840,7 +837,7 @@ async def handle_existing_file(
         current_username_list = [current_username_list]
 
     # If embeddings already exist, just update the username list directly
-    if google_result["embeddings_exist"] and azure_result["embeddings_exist"]:
+    if azure_result["embeddings_exist"]:
         await update_username_for_existing_file(
             file_id, username, current_username_list
         )
@@ -1510,7 +1507,7 @@ def initialize_rag_model(
     """
     chroma_path = f"./chroma_db/{query.file_id}"
     is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
-    embedding_type = "google" if is_gemini else "azure"
+    embedding_type = "azure"
     model_path = os.path.join(chroma_path, embedding_type, "chroma.sqlite3")
 
     # If local embeddings don't exist, check GCS
@@ -1531,7 +1528,7 @@ def initialize_rag_model(
         model.initialize(
             model=query.model_choice,
             file_id=query.file_id,
-            embedding_type="google",
+            embedding_type="azure",  # Using Azure embeddings instead of Google
             collection_name=f"rag_collection_{query.file_id}",
             user_id=query.user_id,
         )
@@ -2600,23 +2597,7 @@ async def long_task():
     return {"message": "Task completed"}
 
 
-# @app.delete("/delete-google-embeddings")
-# async def delete_google_embeddings(current_user=Depends(get_current_user)):
-#     """
-#     Delete all Google embeddings from the GCS bucket.
-#     This endpoint removes only the 'google' folders within each file ID directory in file-embeddings.
-
-#     Returns:
-#         dict: A message indicating the number of file IDs processed
-#     """
-#     try:
-#         gcs_handler = GCSHandler(Config())
-#         result = gcs_handler.delete_google_embeddings()
-#         return result
-#     except Exception as e:
-#         raise HTTPException(
-#             status_code=500, detail=f"Failed to delete Google embeddings: {str(e)}"
-#         )
+# Removed deprecated delete_google_embeddings endpoint as part of unified Azure embeddings approach
 
 
 @app.get("/find-file-by-name")

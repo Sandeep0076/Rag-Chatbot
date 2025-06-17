@@ -475,60 +475,7 @@ class GCSHandler:
             logging.error(f"Error in delete_embeddings: {str(e)}", exc_info=True)
             raise
 
-    def delete_google_embeddings(self):
-        """
-        Deletes all Google embeddings from the file-embeddings directory.
-        Only removes the 'google' folders within each file ID directory.
-        """
-        try:
-            logging.info("Starting deletion of all Google embeddings")
-            prefix = "file-embeddings/"
-
-            # List all blobs with the prefix
-            blobs = self.bucket.list_blobs(prefix=prefix)
-
-            # Track processed file IDs to avoid duplicate operations
-            processed_file_ids = set()
-
-            for blob in blobs:
-                # Extract file ID from path
-                parts = blob.name.split("/")
-                if len(parts) >= 3:
-                    file_id = parts[1]
-
-                    # Skip if we've already processed this file ID
-                    if file_id in processed_file_ids:
-                        continue
-
-                    # Only process if it's a file-embeddings directory
-                    if parts[0] == "file-embeddings":
-                        # List all blobs in the google folder for this file ID
-                        google_prefix = f"file-embeddings/{file_id}/google/"
-                        google_blobs = self.bucket.list_blobs(prefix=google_prefix)
-
-                        # Delete each blob in the google folder
-                        for google_blob in google_blobs:
-                            try:
-                                google_blob.delete()
-                                logging.info(f"Deleted blob: {google_blob.name}")
-                            except Exception as e:
-                                logging.error(
-                                    f"Error deleting blob {google_blob.name}: {str(e)}"
-                                )
-
-                        processed_file_ids.add(file_id)
-
-            logging.info(
-                f"Successfully deleted Google embeddings for {len(processed_file_ids)} file IDs"
-            )
-            return {
-                "message": f"Successfully deleted Google embeddings for {len(processed_file_ids)} file IDs"
-            }
-
-        except Exception as e:
-            error_msg = f"Error in delete_google_embeddings: {str(e)}"
-            logging.error(error_msg, exc_info=True)
-            raise Exception(error_msg)
+    # Removed delete_google_embeddings method as part of unified Azure embeddings approach
 
     def find_file_by_original_name(self, filename: str) -> Optional[str]:
         """
