@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 from typing import List
 
@@ -107,13 +108,43 @@ class AzureChatbot(BaseRAGHandler):
             # logging.error(f"Problematic texts (first 100 chars): {[t[:100] for t in texts]}")
             raise
 
+    def _query_single_file(self, f_id: str, query_embedding):
+        """Retrieve top docs from a single file collection (helper for threading)."""
+        try:
+            current_collection_name = f"{self._collection_name_prefix}{f_id}"
+            logging.info(
+                f"[Thread] Querying ChromaDB for file: {f_id}, collection: {current_collection_name}"
+            )
+            chroma_collection = self.chroma_manager.get_collection(
+                file_id=f_id,
+                embedding_type="azure",
+                collection_name=current_collection_name,
+                user_id=self.user_id,
+                is_embedding=False,
+            )
+            results = chroma_collection.query(
+                query_embeddings=[query_embedding], n_results=3
+            )
+            docs_from_file = results["documents"][0] if results["documents"] else []
+            if self.is_multi_file:
+                original_filename = self.all_file_infos.get(f_id, {}).get(
+                    "original_filename", f_id
+                )
+                return [
+                    f"[Source: {original_filename}] {doc}" for doc in docs_from_file
+                ]
+            return docs_from_file
+        except Exception as e:
+            logging.error(f"Error querying ChromaDB for file {f_id}: {str(e)}")
+            return []
+
     def get_answer(self, query: str) -> str:
         try:
             logging.info(
                 f"AzureChatbot ({self.model_choice}) get_answer for file(s): {self.active_file_ids}"
             )
             all_relevant_docs = []
-            embedding_model_for_rag = "azure"  # AzureChatbot uses Azure embeddings
+            # embedding_model_for_rag = "azure"  # AzureChatbot uses Azure embeddings
 
             # Compute the embedding **once** for the whole request to avoid
             # redundant Azure OpenAI /embeddings calls when querying multiple
@@ -121,43 +152,23 @@ class AzureChatbot(BaseRAGHandler):
             # multi-file chat dramatically.
             query_embedding = self.get_embeddings([query])[0]
 
-            for f_id in self.active_file_ids:
-                # Construct collection name specific to this file_id
-                current_collection_name = f"{self._collection_name_prefix}{f_id}"
-                logging.info(
-                    f"Querying ChromaDB for file: {f_id}, collection: {current_collection_name}"
-                )
-                try:
-                    # Use the chroma_manager from BaseRAGHandler
-                    # We need to ensure query_chroma can be called with a specific collection
-                    # if it's not using self.collection_name. For now, let's assume
-                    # direct ChromaManager usage for flexibility here.
-
-                    chroma_collection = self.chroma_manager.get_collection(
-                        file_id=f_id,  # Used for path generation by chroma_manager
-                        embedding_type=embedding_model_for_rag,  # 'azure' or 'google'
-                        collection_name=current_collection_name,
-                        user_id=self.user_id,  # Pass for potential session tracking, not filtering
-                        is_embedding=False,  # We are querying
+            # Parallelise Chroma queries for multiple files
+            if self.is_multi_file and len(self.active_file_ids) > 1:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(4, len(self.active_file_ids))
+                ) as executor:
+                    futures = [
+                        executor.submit(self._query_single_file, f_id, query_embedding)
+                        for f_id in self.active_file_ids
+                    ]
+                    for fut in concurrent.futures.as_completed(futures):
+                        all_relevant_docs.extend(fut.result())
+            else:
+                # Single file or only one file -> sequential
+                for f_id in self.active_file_ids:
+                    all_relevant_docs.extend(
+                        self._query_single_file(f_id, query_embedding)
                     )
-                    results = chroma_collection.query(
-                        query_embeddings=[query_embedding], n_results=3
-                    )  # n_results can be configured
-                    docs_from_file = (
-                        results["documents"][0] if results["documents"] else []
-                    )
-
-                    if self.is_multi_file:
-                        all_relevant_docs.extend(
-                            [f"[Source: {f_id}] {doc}" for doc in docs_from_file]
-                        )
-                    else:
-                        all_relevant_docs.extend(docs_from_file)
-                    logging.info(f"Retrieved {len(docs_from_file)} docs from {f_id}")
-                except Exception as e:
-                    logging.error(f"Error querying ChromaDB for file {f_id}: {str(e)}")
-                    # Optionally, continue to next file or raise error
-                    # For now, we log and continue, so chat can proceed with partial context if one DB fails
 
             if not all_relevant_docs:
                 logging.warning(
