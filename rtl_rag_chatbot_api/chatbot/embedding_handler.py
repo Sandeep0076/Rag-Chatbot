@@ -776,10 +776,11 @@ class EmbeddingHandler:
                 model_choice="gpt_4o_mini",  # Or another default chat model from your config
                 file_id=file_id,
                 collection_name_prefix="rag_collection_",  # Ensure this matches how collection_name is formed
+                chroma_manager=self.chroma_manager,  # Pass the shared manager
             )
 
             # Use asyncio.to_thread for IO-bound operations
-            await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 azure_handler.create_and_store_embeddings,
                 chunks,
                 file_id,
@@ -790,7 +791,7 @@ class EmbeddingHandler:
             logging.info(
                 f"Azure embeddings generated successfully for file_id: {file_id}"
             )
-            return "completed"
+            return result
         except Exception as e:
             logging.error(
                 f"Error creating Azure embeddings for file_id {file_id}: {str(e)}",

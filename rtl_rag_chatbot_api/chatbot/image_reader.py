@@ -187,10 +187,12 @@ async def analyze_single_image_gemini(
 
 async def analyze_images(
     image_path: str,
-    model: str = "gpt4-omni",
+    model: str = "gpt4-omni",  # Default to only using GPT-4 (Azure)
     gemini_handler: Optional[GeminiHandler] = None,
 ) -> Dict[str, Any]:
-    """Analyze images using both GPT-4-OMNI and Gemini-2 Flash concurrently."""
+    """Analyze images using GPT-4-OMNI for unified Azure approach.
+    Note: Gemini analysis is kept in codebase but disabled as part of unified Azure approach.
+    """
     try:
         if not os.path.exists(image_path):
             error_msg = f"Image file not found: {image_path}"
@@ -200,43 +202,28 @@ async def analyze_images(
         results = {}
         tasks = []
 
-        # Add GPT-4 analysis task
-        if model in ["both", "gpt4-omni"]:
-            endpoint = construct_endpoint_url()
-            api_key = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__API_KEY")
-            if not api_key:
-                error_msg = "AZURE_API_KEY environment variable not set"
-                logging.error(error_msg)
-                return {"error": error_msg}
-            tasks.append(analyze_single_image_gpt4(image_path, api_key, endpoint))
+        # Only use GPT-4 analysis task for the unified Azure approach
+        endpoint = construct_endpoint_url()
+        api_key = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__API_KEY")
+        if not api_key:
+            error_msg = "AZURE_API_KEY environment variable not set"
+            logging.error(error_msg)
+            return {"error": error_msg}
+        tasks.append(analyze_single_image_gpt4(image_path, api_key, endpoint))
 
-        # Add Gemini analysis task
-        if model in ["both", "gemini"]:
-            if not gemini_handler:
-                error_msg = "GeminiHandler instance required for Gemini analysis"
-                logging.error(error_msg)
-                return {"error": error_msg}
-            tasks.append(analyze_single_image_gemini(image_path, gemini_handler))
+        # Note: Gemini analysis is disabled as part of unified Azure approach
+        # The code for analyze_single_image_gemini is kept for reference only
 
-        # Run analyses concurrently
+        # Run analysis
         completed_tasks = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Process results
-        if model in ["both", "gpt4-omni"]:
-            gpt4_result = completed_tasks[0]
-            results["gpt4_analysis"] = (
-                gpt4_result["analysis"]
-                if "analysis" in gpt4_result
-                else gpt4_result["error"]
-            )
-
-        if model in ["both", "gemini"]:
-            gemini_result = completed_tasks[-1]
-            results["gemini_analysis"] = (
-                gemini_result["analysis"]
-                if "analysis" in gemini_result
-                else gemini_result["error"]
-            )
+        # Process results - only Azure GPT-4 is used
+        gpt4_result = completed_tasks[0]
+        results["gpt4_analysis"] = (
+            gpt4_result["analysis"]
+            if "analysis" in gpt4_result
+            else gpt4_result["error"]
+        )
 
         return results
 

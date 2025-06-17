@@ -2,7 +2,7 @@
 
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict
 
 import chromadb
@@ -12,11 +12,12 @@ from chromadb.config import Settings
 class ChromaDBManager:
     """
     Singleton manager for ChromaDB instances to ensure consistent settings and reuse.
-    Thread-safe implementation for concurrent access.
+    This version uses thread-local storage to ensure thread safety for ChromaDB clients,
+    which is critical during parallel operations like embedding creation.
     """
 
     _instance = None
-    _lock = threading.Lock()
+    _lock = threading.Lock()  # Lock for singleton creation
 
     def __new__(cls):
         if cls._instance is None:
@@ -27,14 +28,17 @@ class ChromaDBManager:
         return cls._instance
 
     def _initialize(self):
-        self._instances: Dict[
-            str, dict
-        ] = {}  # {file_id: {'client': client, 'last_used': timestamp}}
-        self._settings = Settings(
-            allow_reset=True, is_persistent=True, anonymized_telemetry=False
-        )
-        self._instance_lock = threading.Lock()
-        self._cleanup_threshold = timedelta(hours=4)  # Configurable cleanup threshold
+        """Initializes the manager with thread-local storage."""
+        self._thread_local = threading.local()
+        # A global lock to serialize client creation, preventing race conditions
+        # within ChromaDB's internals during concurrent instantiation.
+        self._creation_lock = threading.Lock()
+
+    def _get_thread_instances(self) -> Dict[str, dict]:
+        """Gets the dictionary of instances for the current thread."""
+        if not hasattr(self._thread_local, "instances"):
+            self._thread_local.instances = {}
+        return self._thread_local.instances
 
     def get_instance(
         self,
@@ -43,36 +47,47 @@ class ChromaDBManager:
         user_id: str = None,
         is_embedding: bool = False,
     ):
-        """Get or create a ChromaDB instance with optional user-specific connection."""
+        """
+        Get or create a ChromaDB instance. Instances are now thread-local to ensure
+        safety during parallel processing.
+        """
         base_path = f"./chroma_db/{file_id}/{embedding_type}"
 
-        # For embedding creation, use base instance
         if is_embedding:
             instance_key = f"{file_id}/{embedding_type}"
         else:
-            # For chat sessions, use user-specific instance
             instance_key = (
                 f"{file_id}/{embedding_type}/user_{user_id}"
                 if user_id
                 else f"{file_id}/{embedding_type}"
             )
 
-        with self._instance_lock:
-            if instance_key in self._instances:
-                instance_data = self._instances[instance_key]
-                instance_data["last_used"] = datetime.now()
-                return instance_data["client"]
+        thread_instances = self._get_thread_instances()
+
+        if instance_key in thread_instances:
+            instance_data = thread_instances[instance_key]
+            instance_data["last_used"] = datetime.now()
+            return instance_data["client"]
+
+        with self._creation_lock:
+            # Double-check in case another thread created the instance while this
+            # thread was waiting for the lock.
+            if instance_key in thread_instances:
+                return thread_instances[instance_key]["client"]
 
             try:
-                client = chromadb.PersistentClient(
-                    path=base_path, settings=self._settings
+                settings = Settings(
+                    allow_reset=True, is_persistent=True, anonymized_telemetry=False
                 )
-                self._instances[instance_key] = {
+                client = chromadb.PersistentClient(path=base_path, settings=settings)
+
+                thread_instances[instance_key] = {
                     "client": client,
                     "last_used": datetime.now(),
-                    "is_embedding": is_embedding,
                 }
-                logging.info(f"Created new ChromaDB instance for {instance_key}")
+                logging.info(
+                    f"Created new thread-local ChromaDB instance for {instance_key}"
+                )
                 return client
             except Exception as e:
                 logging.error(
@@ -107,13 +122,10 @@ class ChromaDBManager:
         user_id: str = None,
         is_embedding: bool = False,
     ):
-        """Get or create a collection with optional user tracking."""
+        """Get or create a collection using the thread-local client."""
         client = self.get_instance(file_id, embedding_type, user_id, is_embedding)
-
-        # Always use the base collection for querying
         collection = client.get_or_create_collection(
             name=collection_name,
             metadata={"file_id": file_id, "embedding_type": embedding_type},
         )
-
         return collection

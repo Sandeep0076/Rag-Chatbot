@@ -74,12 +74,11 @@ class FileHandler:
     async def _handle_image_analysis(
         self, file_id: str, temp_file_path: str, analysis_files: list
     ) -> None:
-        """Handle image analysis using both GPT-4 and Gemini models."""
+        """Handle image analysis using GPT-4 (Azure) model as part of unified Azure approach."""
         try:
             logging.info(f"Starting image analysis for {temp_file_path}")
-            analysis_result = await analyze_images(
-                temp_file_path, model="both", gemini_handler=self.gemini_handler
-            )
+            # Run image analysis (only using GPT-4/Azure as part of unified Azure approach)
+            analysis_result = await analyze_images(temp_file_path, model="gpt4-omni")
 
             if analysis_result:
                 await self._save_analysis_results(
@@ -93,7 +92,11 @@ class FileHandler:
     async def _save_analysis_results(
         self, file_id: str, analysis_result: dict, analysis_files: list
     ) -> None:
-        """Save analysis results from both models to files."""
+        """Save analysis results from Azure GPT-4 model to files.
+
+        Note: As part of the unified Azure approach, we only use GPT-4 (Azure) for image analysis,
+        but maintain compatibility by creating a placeholder for Gemini analysis.
+        """
         try:
             # Save GPT-4 analysis
             gpt4_analysis_path = f"local_data/{file_id}_gpt4_analysis.txt"
@@ -102,19 +105,12 @@ class FileHandler:
             )
             analysis_files.append(gpt4_analysis_path)
 
-            # Save Gemini analysis
+            # Create placeholder for Gemini analysis to maintain compatibility
             gemini_analysis_path = f"local_data/{file_id}_gemini_analysis.txt"
-            gemini_content = analysis_result["gemini_analysis"]
-            if isinstance(gemini_content, str):
-                try:
-                    gemini_content = eval(gemini_content)["analysis"]
-                except Exception as e:
-                    logging.warning(
-                        f"Failed to eval Gemini content, using as is: {str(e)}"
-                    )
+            placeholder_content = "This file is a placeholder. Using unified Azure approach for image analysis."
 
             await self._write_analysis_file(
-                gemini_analysis_path, str(gemini_content), "Gemini"
+                gemini_analysis_path, placeholder_content, "Gemini (Placeholder)"
             )
             analysis_files.append(gemini_analysis_path)
 

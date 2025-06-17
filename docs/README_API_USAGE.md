@@ -26,6 +26,8 @@ In Postman, you need to add an Authorization header to your requests. The specif
 
 ## Basic Workflow
 
+**Unified Embedding Strategy:** The API now employs a unified embedding strategy. All embeddings are generated using Azure OpenAI models, regardless of the chat model chosen (e.g., GPT series or Gemini). This ensures consistency and efficiency.
+
 The typical workflow for using the API is:
 
 1. Upload a file (PDF, image, CSV, or Excel) using the `/file/upload` endpoint
@@ -145,7 +147,7 @@ Process chat queries against document content using specified language models.
   {
     "text": ["What is this document about?"],
     "file_id": "uuid-string",
-    "model_choice": "gpt_4o_mini",
+    "model_choice": "gpt_4o_mini", // Can also be gemini-flash or gemini-pro. All models use Azure-generated embeddings.
     "user_id": "user123",
     "generate_visualization": false
   }

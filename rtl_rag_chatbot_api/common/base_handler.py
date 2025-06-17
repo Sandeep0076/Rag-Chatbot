@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 class BaseRAGHandler:
     """Base class for RAG handlers implementing common functionality."""
 
-    def __init__(self, configs, gcs_handler):
+    def __init__(self, configs, gcs_handler, chroma_manager=None):
         self.configs = configs
         self.gcs_handler = gcs_handler
         # Use chunk size from config instead of hardcoded value
@@ -30,7 +30,8 @@ class BaseRAGHandler:
         self.user_id = None
         self.collection_name = None
         self.embedding_model = None
-        self.chroma_manager = ChromaDBManager()
+        # Use the provided chroma_manager or create a new one
+        self.chroma_manager = chroma_manager or ChromaDBManager()
 
         # Model-specific token limits for response generation (not chunking)
         self.MODEL_TOKEN_LIMITS = {

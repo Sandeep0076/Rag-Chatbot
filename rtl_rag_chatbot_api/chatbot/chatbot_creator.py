@@ -20,8 +20,10 @@ class AzureChatbot(BaseRAGHandler):
         all_file_infos: dict = None,  # Passed from app.py, contains file_info for each file_id
         collection_name_prefix: str = "rag_collection_",
         user_id: str = None,
+        chroma_manager=None,  # Accept an optional ChromaDBManager instance
     ):
-        super().__init__(configs, gcs_handler)
+        # Pass the existing chroma_manager to the parent, or let it create one
+        super().__init__(configs, gcs_handler, chroma_manager)
         self.configs = configs
         self.model_choice = model_choice
         self.user_id = user_id
