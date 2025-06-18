@@ -358,9 +358,7 @@ class GeminiHandler(BaseRAGHandler):
                 logger.warning(
                     f"No relevant documents found for query: '{query}' in files: {self.active_file_ids}"
                 )
-                return (
-                    "I couldn't find any relevant information to answer your question."
-                )
+                # No early return - continue with empty context like the AzureChatbot implementation
 
             # Prepare additional context about available files when in multi-file mode
             files_context = ""
