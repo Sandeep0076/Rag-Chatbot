@@ -330,9 +330,14 @@ class GeminiHandler(BaseRAGHandler):
                             results["documents"][0] if results["documents"] else []
                         )
 
-                        # Add source file ID to each document
+                        # Add source filename (instead of file ID) to each document
+                        file_info = self.all_file_infos.get(f_id, {})
+                        original_filename = file_info.get(
+                            "original_filename", "Document"
+                        )
                         docs_with_source = [
-                            f"[Source: {f_id}] {doc}" for doc in docs_from_file
+                            f"[Source: {original_filename}] {doc}"
+                            for doc in docs_from_file
                         ]
                         all_relevant_docs.extend(docs_with_source)
 
@@ -366,9 +371,9 @@ class GeminiHandler(BaseRAGHandler):
                         # Extract original_filename from file_info if available
                         file_info = self.all_file_infos.get(file_id, {})
                         original_filename = file_info.get(
-                            "original_filename", f"Unknown filename (ID: {file_id})"
+                            "original_filename", "Unknown document"
                         )
-                        file_details.append(f"- {original_filename} (ID: {file_id})")
+                        file_details.append(f"- {original_filename}")
 
                 if file_details:
                     files_context = (
