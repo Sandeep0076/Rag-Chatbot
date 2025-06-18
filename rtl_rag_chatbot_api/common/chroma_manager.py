@@ -2,7 +2,7 @@
 
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict
 
 import chromadb
@@ -95,19 +95,28 @@ class ChromaDBManager:
                 )
                 raise
 
+    def cleanup(self):
+        """Public cleanup method that can be called from outside the class."""
+        logging.info("Cleaning up ChromaDB instances")
+        try:
+            self.cleanup_old_instances()
+        except Exception as e:
+            logging.error(f"Error in ChromaDB cleanup: {str(e)}")
+
     def cleanup_old_instances(self):
         """Clean up instances that haven't been used for a while and embedding instances."""
         current_time = datetime.now()
 
-        with self._instance_lock:
-            for instance_key in list(self._instances.keys()):
-                instance_data = self._instances[instance_key]
-                # Clean up if it's an embedding instance or hasn't been used recently
-                if instance_data["is_embedding"] or (
-                    current_time - instance_data["last_used"] > self._cleanup_threshold
-                ):
+        with self._lock:  # Use _lock instead of _instance_lock
+            thread_instances = self._get_thread_instances()
+            for instance_key in list(thread_instances.keys()):
+                instance_data = thread_instances[instance_key]
+                # Clean up if it hasn't been used recently
+                if current_time - instance_data["last_used"] > timedelta(
+                    minutes=5
+                ):  # Use a default threshold
                     try:
-                        del self._instances[instance_key]
+                        del thread_instances[instance_key]
                         logging.info(f"Cleaned up ChromaDB instance for {instance_key}")
                     except Exception as e:
                         logging.error(

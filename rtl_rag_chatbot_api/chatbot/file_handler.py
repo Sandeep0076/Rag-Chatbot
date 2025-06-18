@@ -1116,44 +1116,37 @@ class FileHandler:
                 logging.info(
                     f"Saving metadata for URL {url} with file_id {url_file_id}"
                 )
-                # Update GCS metadata but also return it directly
+                # Update GCS metadata but also prepare it directly
                 # This ensures file-specific metadata is passed through the chain
                 # without relying on shared state in self.gcs_handler.temp_metadata
                 self.gcs_handler.temp_metadata = metadata
-                result = {
-                    "file_id": url_file_id,
-                    "status": "success",
-                    "message": f"URL {url} processed successfully",
-                    "is_image": False,
-                    "is_tabular": False,
-                    "url": url,
-                    "temp_file_path": temp_file_path,
-                    "word_count": word_count,
-                    "title": title,
-                }
-                # Return metadata explicitly to ensure file-specific handling
-                return {"metadata": metadata, **result}
-                # Also update file info for persistence
+                # Update file info for persistence
                 self.gcs_handler.update_file_info(url_file_id, metadata)
 
                 # Import here to avoid circular imports
-                from rtl_rag_chatbot_api.app import (
-                    SessionLocal,
-                    create_embeddings_background,
+                from rtl_rag_chatbot_api.app import SessionLocal
+                from rtl_rag_chatbot_api.chatbot.parallel_embedding_creator import (
+                    create_embeddings_parallel,
                 )
 
-                # Schedule embedding creation
+                # Wait for embedding creation to complete before returning response
+                # This matches the behavior of multi-file uploads
                 logging.info(
-                    f"Scheduling embedding creation for URL {url} with file_id {url_file_id}"
+                    f"Creating embeddings for URL {url} with file_id {url_file_id}"
                 )
-                background_tasks.add_task(
-                    create_embeddings_background,
-                    url_file_id,
-                    temp_file_path,
-                    embedding_handler,
-                    self.configs,
-                    SessionLocal,
-                    [username],
+                await create_embeddings_parallel(
+                    file_ids=[url_file_id],
+                    file_paths=[temp_file_path],
+                    embedding_handler=embedding_handler,
+                    configs=self.configs,
+                    session_local=SessionLocal,
+                    background_tasks=background_tasks,
+                    username_lists=[[username]],
+                    file_metadata_list=[metadata],
+                    max_concurrent_tasks=1,
+                )
+                logging.info(
+                    f"Completed embedding creation for URL {url} with file_id {url_file_id}"
                 )
 
                 return {
@@ -1298,8 +1291,9 @@ class FileHandler:
         # Create tasks for processing each URL concurrently
         tasks = []
         for url in url_list:
-            # Generate a unique ID for each URL to avoid collisions
-            url_specific_id = f"{temp_file_id}_{uuid.uuid4().hex[:8]}"
+            # Generate a completely unique ID for each URL, just like with file uploads
+            # This makes URL handling consistent with PDF/file handling
+            url_specific_id = str(uuid.uuid4())
             tasks.append(
                 self.process_single_url(
                     url, username, background_tasks, embedding_handler, url_specific_id

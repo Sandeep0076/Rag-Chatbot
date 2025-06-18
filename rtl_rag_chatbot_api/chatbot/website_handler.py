@@ -631,7 +631,7 @@ class WebsiteHandler:
         word_count = len(words)
 
         # Simple heuristic: content is substantive if it has more than 150 words
-        is_substantive = word_count > 150
+        is_substantive = word_count > 110
 
         return is_substantive, word_count
 

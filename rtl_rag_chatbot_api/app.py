@@ -681,10 +681,26 @@ async def process_document_type_file(
             local_gcs_handler = GCSHandler(configs)
             file_metadata = local_gcs_handler.get_file_info(file_id)
 
-        # Create embeddings for document file
-        process_document_file(
-            background_tasks, file_id, temp_file_path, [username], file_metadata
+        # Import here to avoid circular import
+        from rtl_rag_chatbot_api.chatbot.parallel_embedding_creator import (
+            create_embeddings_parallel,
         )
+
+        # For single file uploads, directly use create_embeddings_parallel to wait for embedding creation
+        # This matches the behavior of multi-file uploads
+        logging.info(f"Creating embeddings for single file: {filename} (ID: {file_id})")
+        await create_embeddings_parallel(
+            file_ids=[file_id],
+            file_paths=[temp_file_path],
+            embedding_handler=embedding_handler,
+            configs=configs,
+            session_local=SessionLocal,
+            background_tasks=background_tasks,
+            username_lists=[[username]],
+            file_metadata_list=[file_metadata],
+            max_concurrent_tasks=1,
+        )
+        logging.info(f"Completed embedding creation for single file: {file_id}")
 
     # Handle existing files - check if they need new embeddings
     if result["status"] == "existing":
