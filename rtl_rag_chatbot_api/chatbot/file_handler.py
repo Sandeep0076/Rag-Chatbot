@@ -511,8 +511,8 @@ class FileHandler:
 
         logging.info(f"Found embeddings for: {original_filename}")
 
-        # Update file_info.json with the new username
-        self.gcs_handler.update_file_info(existing_file_id, {"username": username})
+        # Update file_info.json with the new username (pass as list for consistency)
+        self.gcs_handler.update_file_info(existing_file_id, {"username": [username]})
         logging.info(f"Updated file_info.json with username: {username}")
 
         # Handle encryption for existing files
@@ -1082,9 +1082,9 @@ class FileHandler:
                     logging.info(
                         f"Found existing content with ID {existing_file_id} for URL {url}, reusing it"
                     )
-                    # Update the file info with the new username
+                    # Update the file info with the new username (pass as list for consistency)
                     self.gcs_handler.update_file_info(
-                        existing_file_id, {"username": username}
+                        existing_file_id, {"username": [username]}
                     )
                     # Clean up the temporary file
                     if os.path.exists(temp_file_path):

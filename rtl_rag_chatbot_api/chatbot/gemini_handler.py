@@ -364,7 +364,7 @@ class GeminiHandler(BaseRAGHandler):
             files_context = ""
             if self.all_file_infos:
                 if self.is_multi_file:
-                    # For multi-file, show list with filenames
+                    # For multi-file, show list with filenames and URLs if available
                     file_details = []
                     for file_id in self.active_file_ids:
                         if file_id in self.all_file_infos:
@@ -372,14 +372,22 @@ class GeminiHandler(BaseRAGHandler):
                             original_filename = file_info.get(
                                 "original_filename", "Unknown document"
                             )
-                            file_details.append(f"- {original_filename}")
+
+                            # For URL files, include the actual URL in the context
+                            if file_info.get("is_url") and file_info.get("url"):
+                                url = file_info.get("url")
+                                file_details.append(
+                                    f"- {original_filename} (URL: {url})"
+                                )
+                            else:
+                                file_details.append(f"- {original_filename}")
 
                     if file_details:
                         files_context = (
                             "Available documents:\n" + "\n".join(file_details) + "\n\n"
                         )
                         logger.info(
-                            f"Added multi-file context with {len(file_details)} files"
+                            f"Added multi-file context with {len(file_details)} files (including URLs where applicable)"
                         )
                 else:
                     # For single file, provide complete file_info.json as context
