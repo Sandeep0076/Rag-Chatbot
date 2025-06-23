@@ -678,6 +678,9 @@ def process_multiple_files(uploaded_files, is_image):
                     f"Received {len(file_ids)} file IDs from parallel processing"
                 )
 
+                # Set multi_file_mode based on actual number of files
+                st.session_state.multi_file_mode = len(file_ids) > 1
+
                 # Store the session_id from the new upload batch
                 session_id = upload_result.get("session_id")
                 if session_id:
@@ -687,16 +690,16 @@ def process_multiple_files(uploaded_files, is_image):
                     st.session_state.file_ids = []
                     st.session_state.current_session_id = session_id
 
+                # Set file_id for single file compatibility (first file)
+                st.session_state.file_id = file_ids[0] if file_ids else None
+                st.session_state.file_uploaded = True
+
                 # Map filenames to their respective file IDs for processed file tracking
                 for i, file_id in enumerate(file_ids):
                     filename = (
                         filenames[i] if i < len(filenames) else uploaded_files[i].name
                     )
                     status = statuses[i] if i < len(statuses) else "success"
-
-                    # Store in session state for the most recent file
-                    st.session_state.file_id = file_id
-                    st.session_state.file_uploaded = True
 
                     # Track processed files to avoid reprocessing
                     if "processed_file_map" not in st.session_state:
@@ -829,6 +832,8 @@ def process_single_file(uploaded_file_obj, is_image):
         # Store in session state
         st.session_state.file_id = file_id
         st.session_state.file_uploaded = True
+        # Single file upload so set multi_file_mode to False
+        st.session_state.multi_file_mode = False
 
         # Add to uploaded files list for multi-file chat
         # The st.session_state.uploaded_files dict might be legacy, ensure it exists or handle gracefully
@@ -956,7 +961,8 @@ def handle_file_upload():
                                 logging.info(
                                     f"Received {len(file_ids)} file IDs from batch upload"
                                 )
-                                st.session_state.multi_file_mode = True
+                                # Fix: Set multi_file_mode based on actual number of files
+                                st.session_state.multi_file_mode = len(file_ids) > 1
 
                                 if "processed_file_map" not in st.session_state:
                                     st.session_state.processed_file_map = {}
@@ -964,6 +970,9 @@ def handle_file_upload():
                                     st.session_state.file_ids = []
                                 if "file_names" not in st.session_state:
                                     st.session_state.file_names = {}
+
+                                # Reset file_ids for new session to ensure clean state
+                                st.session_state.file_ids = []
 
                                 for i, file_id in enumerate(file_ids):
                                     filename = (
@@ -974,12 +983,26 @@ def handle_file_upload():
                                     st.session_state.processed_file_map[
                                         filename
                                     ] = file_id
-                                    if file_id not in st.session_state.file_ids:
-                                        st.session_state.file_ids.append(file_id)
+                                    st.session_state.file_ids.append(file_id)
                                     st.session_state.file_names[file_id] = filename
 
-                                st.session_state.file_id = file_ids[-1]
+                                # Set file_id for single file compatibility
+                                st.session_state.file_id = (
+                                    file_ids[0] if file_ids else None
+                                )
                                 st.session_state.file_uploaded = True
+
+                                # Store session_id if provided
+                                session_id = result.get("session_id")
+                                if session_id:
+                                    st.session_state.current_session_id = session_id
+                                    logging.info(f"Set session_id: {session_id}")
+
+                                logging.info(
+                                    f"Final session state: multi_file_mode={st.session_state.multi_file_mode}, "
+                                    f"file_id={st.session_state.file_id}, file_ids={st.session_state.file_ids}"
+                                )
+
                                 st.success(
                                     f"{len(file_ids)} files processed successfully!"
                                 )
@@ -1635,11 +1658,8 @@ def render_sidebar():
         cleanup_files()
         st.rerun()
 
-    # Set multi-file mode always on in the background
-    st.session_state.multi_file_mode = True
-
-    # We'll hide the multi-file UI and handle it implicitly
-    # Each time a file is uploaded, it will be added to the file_ids list
+    # Don't force multi_file_mode - let it be set based on actual upload results
+    # multi_file_mode is set correctly during file upload based on number of files
 
     # Show file type selection only when Chat is selected
     if st.session_state.nav_option == "Chat":

@@ -33,7 +33,7 @@ class BaseRAGHandler:
         # Use the provided chroma_manager or create a new one
         self.chroma_manager = chroma_manager or ChromaDBManager()
 
-        # Model-specific token limits for response generation (not chunking)
+        # Model-specific token limBraceletits for response generation (not chunking)
         self.MODEL_TOKEN_LIMITS = {
             "gpt_4": 32000,
             "gpt_4o_mini": 128000,

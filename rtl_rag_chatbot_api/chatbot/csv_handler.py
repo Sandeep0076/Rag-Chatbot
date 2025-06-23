@@ -1,7 +1,7 @@
 import logging
 import os
 from contextlib import contextmanager
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
@@ -53,6 +53,7 @@ class TabularDataHandler:
         file_id: str = None,
         model_choice: str = "gpt_4o_mini",
         file_ids: List[str] = None,
+        database_summaries_param: Optional[Dict[str, Any]] = None,
     ):
         """
         Initializes the TabularDataHandler with the given configuration and file information.
@@ -62,6 +63,8 @@ class TabularDataHandler:
             file_id (str, optional): Unique identifier for the file being processed. Defaults to None.
             model_choice (str, optional): The chosen language model. Defaults to "gpt_4o_mini".
             file_ids (List[str], optional): List of file IDs for multi-file mode. Defaults to None.
+            database_summaries_param (Optional[Dict[str, Any]], optional): Pre-loaded
+                database summaries keyed by file_id. Defaults to None.
         """
         self.config = config
         self.model_choice = model_choice
@@ -70,7 +73,14 @@ class TabularDataHandler:
         self.sessions = {}
         self.dbs = {}
         self.agents = {}
+        # Initialize database_summaries with pre-loaded data if provided
         self.database_summaries = {}
+        if database_summaries_param:
+            logging.info(
+                f"Using pre-loaded database summaries for "
+                f"{len(database_summaries_param)} files"
+            )
+            self.database_summaries = database_summaries_param
 
         # Determine if we're in multi-file mode
         self.is_multi_file = bool(file_ids and len(file_ids) > 0)
@@ -81,7 +91,8 @@ class TabularDataHandler:
             # For backward compatibility, set file_id to the first one
             self.file_id = self.file_ids[0] if self.file_ids else None
             logging.info(
-                f"TabularDataHandler initialized in multi-file mode with {len(self.file_ids)} files"
+                f"TabularDataHandler initialized in multi-file mode with "
+                f"{len(self.file_ids)} files"
             )
 
             # Initialize databases for all files
@@ -166,10 +177,18 @@ class TabularDataHandler:
         self.sessions[file_id] = sessionmaker(bind=self.engines[file_id])
         self.dbs[file_id] = SQLDatabase(engine=self.engines[file_id])
 
-        # Get database info
+        # Get database info - check if we already have a pre-loaded summary first
         try:
-            db_info = self._get_table_info_for_file(file_id)
-            self.database_summaries[file_id] = db_info
+            if file_id in self.database_summaries:
+                logging.info(
+                    f"Using pre-loaded database summary for file_id: {file_id}"
+                )
+                # No need to re-extract summary as it's already loaded
+            else:
+                logging.info(f"Generating database summary for file_id: {file_id}")
+                db_info = self._get_table_info_for_file(file_id)
+                self.database_summaries[file_id] = db_info
+
             # Initialize SQL agent after database is prepared
             self._initialize_agent_for_file(file_id)
             logging.info(f"Successfully initialized database for file_id: {file_id}")

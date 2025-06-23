@@ -618,6 +618,7 @@ class FileHandler:
             embeddings_exist = existing_file_id and azure_result.get(
                 "embeddings_exist", False
             )
+            # or tabular data
             if not embeddings_exist:
                 # Create directories and save file
                 temp_file_path = await self._save_file_locally(
@@ -1258,6 +1259,64 @@ class FileHandler:
             "original_filename": "url_content.txt",
             "multi_file_mode": len(file_ids) > 1,
         }
+
+    async def prepare_db_from_file(self, file_path: str, file_id: str, username: str):
+        """
+        Prepare SQLite database from a tabular file (CSV, Excel) and upload to GCS.
+
+        This method is called from app.py's process_tabular_file function as a background task.
+        It wraps the _handle_new_tabular_data method which does the actual work.
+
+        Args:
+            file_path: Path to the tabular file
+            file_id: Unique identifier for the file
+            username: Username for file ownership
+
+        Returns:
+            Dict containing processing status and file information
+        """
+        try:
+            logging.info(
+                f"Preparing database from file: {file_path} with ID: {file_id}"
+            )
+
+            # Calculate file hash
+            with open(file_path, "rb") as f:
+                file_content = f.read()
+                file_hash = self.calculate_file_hash(file_content)
+
+            # Get original filename from the path
+            original_filename = os.path.basename(file_path)
+            if file_id in original_filename:
+                # Remove file_id prefix if present
+                original_filename = original_filename.replace(f"{file_id}_", "")
+
+            # Process the tabular file using the existing method
+            result = await self._handle_new_tabular_data(
+                file_id=file_id,
+                temp_file_path=file_path,
+                file_hash=file_hash,
+                original_filename=original_filename,
+                username=username,
+            )
+
+            logging.info(
+                f"Successfully prepared database for {original_filename} with ID {file_id}"
+            )
+            return result
+        except Exception as e:
+            logging.error(
+                f"Error preparing database from file {file_path}: {str(e)}",
+                exc_info=True,
+            )
+            return {
+                "file_id": file_id,
+                "is_image": False,
+                "is_tabular": True,
+                "message": f"Error preparing database: {str(e)}",
+                "status": "error",
+                "temp_file_path": file_path,
+            }
 
     async def process_urls(
         self, urls_text, username, temp_file_id, background_tasks, embedding_handler

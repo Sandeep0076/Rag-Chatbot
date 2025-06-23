@@ -344,7 +344,7 @@ def prepare_file_list(file, files):
     if files and len(files) > 0:
         logging.info(f"Received {len(files)} files in the 'files' parameter")
         for i, f in enumerate(files):
-            logging.info(f"  File {i+1}: {f.filename}")
+            logging.info(f"  File {i + 1}: {f.filename}")
             all_files.append(f)
 
     # Add file from the 'file' parameter (single-file) if it exists and not already included
@@ -374,7 +374,7 @@ async def process_files_in_parallel(file_handler, all_files, is_image, username)
     # Process all files in parallel using asyncio.gather()
     tasks = []
     for i, f in enumerate(all_files):
-        logging.info(f"Creating task for file {i+1}/{len(all_files)}: {f.filename}")
+        logging.info(f"Creating task for file {i + 1}/{len(all_files)}: {f.filename}")
         tasks.append(
             process_file_with_semaphore(
                 file_handler, f, file_ids[i], is_image, username
@@ -631,17 +631,30 @@ async def process_files_by_type(
                 }
             )
 
-    # Process tabular files individually (they're handled differently)
+    # Process tabular files - FileHandler.process_file already handled new vs existing logic
+    # We just need to ensure proper is_tabular flag setting
     for file_info in tabular_files:
         i = file_info["index"]
-        is_tabular_flags[i] = process_tabular_file(
-            background_tasks,
-            file_info["file_id"],
-            file_info["temp_file_path"],
-            username,
-            file_info["filename"],
-            is_image,
-        )
+        is_tabular_flags[i] = True
+
+        # Check if this is a new tabular file that needs database summary
+        result = file_info["result"]
+        if result.get("status") == "success" and result.get("is_tabular"):
+            # New tabular file - FileHandler already processed it with database summary
+            logging.info(
+                f"Tabular file {file_info['filename']} with ID {file_info['file_id']} "
+                f"already processed with database summary"
+            )
+        elif result.get("status") == "existing":
+            # Existing tabular file - also already handled by FileHandler
+            logging.info(
+                f"Existing tabular file {file_info['filename']} with ID {file_info['file_id']} already processed"
+            )
+        else:
+            # Fallback case - should not happen with current FileHandler logic
+            logging.warning(
+                f"Unexpected status for tabular file {file_info['filename']}: {result.get('status')}"
+            )
 
     # Process document files in parallel if there are multiple
     if len(document_files) > 1:
@@ -1548,23 +1561,27 @@ def initialize_rag_model(
 
     # Initialize model with ChromaDB
     if is_gemini:
-        # For GeminiHandler, create instance first then call initialize()
-        model = GeminiHandler(configs, gcs_handler)
-        model.initialize(
-            model=query.model_choice,
+        # For GeminiHandler, create instance with all necessary parameters including file info
+        all_file_infos = {query.file_id: file_info}  # Create the expected structure
+        model = GeminiHandler(
+            configs=configs,
+            gcs_handler=gcs_handler,
+            model_choice=query.model_choice,
             file_id=query.file_id,
-            embedding_type="azure",  # Using Azure embeddings instead of Google
-            collection_name=f"rag_collection_{query.file_id}",
+            all_file_infos=all_file_infos,  # Pass file info for context
             user_id=query.user_id,
         )
+        # Note: GeminiHandler with constructor params doesn't need separate initialize() call
     else:
         # For AzureChatbot, all initialization happens in the constructor
-        # Pass all required parameters directly
+        # Pass all required parameters directly, including file info for context
+        all_file_infos = {query.file_id: file_info}  # Create the expected structure
         model = Chatbot(
             configs=configs,
             gcs_handler=gcs_handler,
             model_choice=query.model_choice,
             file_id=query.file_id,
+            all_file_infos=all_file_infos,  # Pass file info for context
             collection_name_prefix="rag_collection_",
             user_id=query.user_id,
         )
@@ -1672,147 +1689,31 @@ async def _initialize_chat_model(
     is_multi_file: bool,
     all_file_infos: Dict[str, Any],
     file_id_logging: str,  # For logging
+    is_tabular: Optional[bool] = None,  # New parameter with default None
 ) -> Tuple[Any, Optional[bool]]:  # Returns (model, determined_is_tabular)
-    """Helper function to initialize and cache chat models."""
-    model: Any = None
-    determined_is_tabular: Optional[bool] = None
+    """
+    Helper function to initialize and cache chat models.
 
+    This function has been refactored to reduce complexity by breaking down
+    the logic into smaller, focused helper functions with clear responsibilities.
+    """
     if is_multi_file:
-        # First check if any of the files are tabular
-        has_tabular_files = False
-        tabular_file_ids = []
-        non_tabular_file_ids = []
-
-        # Check each file to see if it has a SQLite database
-        for file_id in query.file_ids:
-            db_path = f"./chroma_db/{file_id}/tabular_data.db"
-            if os.path.exists(db_path):
-                has_tabular_files = True
-                tabular_file_ids.append(file_id)
-            else:
-                non_tabular_file_ids.append(file_id)
-
-        # If we have mixed files (some tabular, some not), we need special handling
-        if has_tabular_files and non_tabular_file_ids:
-            logging.info(
-                "Mixed file types detected in multi-file chat (tabular + non-tabular)"
-            )
-            logging.info(f"Tabular files: {tabular_file_ids}")
-            logging.info(f"Non-tabular files: {non_tabular_file_ids}")
-            # For mixed files, use RAG model as it can handle non-tabular content
-            determined_is_tabular = False
-            logging.info("Using RAG model for mixed file types")
-            model = Chatbot(
-                configs=configs,
-                gcs_handler=gcs_handler,
-                model_choice=query.model_choice,
-                file_ids=query.file_ids,  # type: ignore
-                all_file_infos=all_file_infos,
-            )
-        elif has_tabular_files and not non_tabular_file_ids:
-            # All files are tabular - special handling required
-            logging.info(f"All files are tabular in multi-file: {query.file_ids}")
-            determined_is_tabular = True
-
-            # When all files are tabular, we should use the TabularDataHandler with all files
-            logging.info("Initializing TabularDataHandler with all tabular files")
-            if len(tabular_file_ids) > 0:
-                try:
-                    # Pass all file_ids to the TabularDataHandler to handle multiple databases
-                    model = TabularDataHandler(
-                        configs,
-                        file_id=tabular_file_ids[
-                            0
-                        ],  # For backward compatibility, set primary file_id
-                        model_choice=query.model_choice,
-                        file_ids=tabular_file_ids,  # Pass all tabular file_ids
-                    )
-                    logging.info(
-                        f"Successfully initialized TabularDataHandler for {len(tabular_file_ids)} files"
-                    )
-                except Exception as e:
-                    logging.error(f"Failed to initialize TabularDataHandler: {str(e)}")
-                    # Fall back to standard Chatbot even though it won't work well with tabular data
-                    logging.info("Falling back to RAG model for tabular data")
-                    model = Chatbot(
-                        configs=configs,
-                        gcs_handler=gcs_handler,
-                        model_choice=query.model_choice,
-                        file_ids=query.file_ids,  # type: ignore
-                        all_file_infos=all_file_infos,
-                    )
-            else:
-                # Should never happen as we already checked tabular_file_ids is not empty
-                logging.warning("No tabular files found despite earlier check")
-                determined_is_tabular = False
-                model = Chatbot(
-                    configs=configs,
-                    gcs_handler=gcs_handler,
-                    model_choice=query.model_choice,
-                    file_ids=query.file_ids,  # type: ignore
-                    all_file_infos=all_file_infos,
-                )
-        else:
-            # All files are non-tabular - use appropriate model based on model_choice
-            logging.info(f"All files are non-tabular: {non_tabular_file_ids}")
-            determined_is_tabular = False
-
-            # Check if this is a Gemini model
-            is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
-
-            if is_gemini:
-                # Use GeminiHandler for Gemini models
-                logging.info(
-                    f"Using GeminiHandler for multi-file with model: {query.model_choice}"
-                )
-                model = GeminiHandler(
-                    configs=configs,
-                    gcs_handler=gcs_handler,
-                    model_choice=query.model_choice,
-                    file_ids=query.file_ids,  # type: ignore
-                    all_file_infos=all_file_infos,
-                    user_id=query.user_id,
-                )
-            else:
-                # Use AzureChatbot for Azure models
-                logging.info(
-                    f"Using AzureChatbot for multi-file with model: {query.model_choice}"
-                )
-                model = Chatbot(
-                    configs=configs,
-                    gcs_handler=gcs_handler,
-                    model_choice=query.model_choice,
-                    file_ids=query.file_ids,  # type: ignore
-                    all_file_infos=all_file_infos,
-                )
-
+        # Handle multi-file mode
+        model, determined_is_tabular = await _initialize_multi_file_model(
+            query, configs, gcs_handler, all_file_infos
+        )
         logging.info(f"Model initialized for multi-file: {query.file_ids}")
         logging.info(f"  User: {query.user_id}, Model: {query.model_choice}")
         logging.info(f"  Is Tabular: {determined_is_tabular}")
-    elif query.file_id:
-        # For single file, check for DB existence which also determines 'is_tabular'
-        _db_path, is_tabular_single, model_single = check_db_existence(
-            query.file_id, query, configs, initialized_models
-        )
-        determined_is_tabular = is_tabular_single
-        model = model_single  # This could be a TabularDataHandler or None
 
-        if (
-            not determined_is_tabular
-        ):  # If not tabular, it's a RAG model for single file
-            single_file_info_for_init = all_file_infos.get(query.file_id)
-            if not single_file_info_for_init:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Internal error: file_info missing for single file RAG model initialization.",
-                )
-            logging.info(f"Initializing RAG model for single file: {query.file_id}")
-            logging.info(f"  User: {query.user_id}, Model: {query.model_choice}")
-            model = initialize_rag_model(
-                query, configs, gcs_handler, single_file_info_for_init
-            )
+    elif query.file_id:
+        # Handle single file mode
+        model, determined_is_tabular = await _initialize_single_file_model(
+            query, configs, gcs_handler, all_file_infos, is_tabular
+        )
+
     else:
-        # This case should ideally not be reached if prior checks in `chat` are correct
+        # Guard clause for invalid state
         raise HTTPException(
             status_code=500,
             detail=(
@@ -1826,9 +1727,7 @@ async def _initialize_chat_model(
         "model": model,
         "is_tabular": determined_is_tabular,
     }
-    logging.info(f"Model initialized and cached with key: {model_key}")
-    logging.info(f"  File(s): {file_id_logging}, User: {query.user_id}")
-    logging.info(f"  Model: {query.model_choice}, Is Tabular: {determined_is_tabular}")
+
     return model, determined_is_tabular
 
 
@@ -1843,7 +1742,8 @@ async def _log_session_info(query: Query) -> None:
 
 
 async def _process_single_file(query: Query, gcs_handler: GCSHandler) -> Dict[str, Any]:
-    """Process information for a single file query.
+    """
+    Process information for a single file query.
 
     Args:
         query: Query containing file_id
@@ -1856,24 +1756,43 @@ async def _process_single_file(query: Query, gcs_handler: GCSHandler) -> Dict[st
     logging.info(f"Single-file chat request for {file_id_logging}")
     file_info_single = gcs_handler.get_file_info(query.file_id)
 
-    # Log session information if provided
     if query.session_id:
         logging.info(
             f"Processing single file {query.file_id} for session {query.session_id}"
         )
 
-    if not file_info_single:
-        embeddings_status = gcs_handler.check_embeddings_status(query.file_id)
-        if embeddings_status == "in_progress":
-            raise HTTPException(
-                status_code=400,
-                detail="URL content is still being processed. Please wait a moment and try again.",
+    is_tabular = False
+    if file_info_single:
+        is_tabular = file_info_single.get("is_tabular", False)
+        logging.info(f"File {query.file_id} is_tabular from metadata: {is_tabular}")
+
+    if not is_tabular:
+        db_path = f"./chroma_db/{query.file_id}/tabular_data.db"
+        is_tabular = os.path.exists(db_path)
+        if is_tabular:
+            logging.info(
+                f"File {query.file_id} identified as tabular from local DB file"
             )
-        raise HTTPException(
-            status_code=404,
-            detail="File appears to be corrupted, empty, or not found."
-            " Please try uploading/selecting a different file.",
-        )
+
+    if not file_info_single:
+        if is_tabular:
+            file_info_single = {
+                "file_id": query.file_id,
+                "is_tabular": True,
+                "embeddings_status": "completed",
+            }
+        else:
+            embeddings_status = gcs_handler.check_embeddings_status(query.file_id)
+            if embeddings_status == "in_progress":
+                raise HTTPException(
+                    status_code=400,
+                    detail="URL content is still being processed. Please wait a moment and try again.",
+                )
+            raise HTTPException(
+                status_code=404,
+                detail="File appears to be corrupted, empty, or not found."
+                " Please try uploading/selecting a different file.",
+            )
 
     all_file_infos = {query.file_id: file_info_single}
     model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
@@ -1882,6 +1801,7 @@ async def _process_single_file(query: Query, gcs_handler: GCSHandler) -> Dict[st
         "all_file_infos": all_file_infos,
         "model_key": model_key,
         "file_id_logging": file_id_logging,
+        "is_tabular": is_tabular,
     }
 
 
@@ -2107,7 +2027,7 @@ async def _process_file_info(
     await _log_session_info(query)
 
     # Determine if this is a multi-file request
-    is_multi_file = bool(query.file_ids and len(query.file_ids) > 0)
+    is_multi_file = bool(query.file_ids and len(query.file_ids) > 1)
 
     # Initialize variables
     all_file_infos = {}
@@ -2141,8 +2061,13 @@ async def _process_file_info(
         all_file_infos = single_file_info["all_file_infos"]
         model_key = single_file_info["model_key"]
         file_id_logging = single_file_info["file_id_logging"]
+        is_tabular = single_file_info.get(
+            "is_tabular", False
+        )  # Get is_tabular from the processed file info
 
-        # is_tabular is determined later for single files
+        logging.info(
+            f"Single-file chat processing complete for {file_id_logging}, is_tabular={is_tabular}"
+        )
     else:
         # Neither file_id nor file_ids provided
         raise HTTPException(
@@ -2237,17 +2162,10 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         model_info = initialized_models.get(model_key)
         model = model_info["model"] if model_info else None
 
-        if model_info:
-            is_tabular = model_info["is_tabular"]
-        elif is_multi_file:
-            is_tabular = (
-                False  # Already set, but good for clarity if model_info was None
-            )
-        # If single file and model_info is None, is_tabular is still None, will be set by check_db_existence
-
         try:
             if not model:
                 # Call the helper function to initialize the model
+                # Pass the is_tabular flag from _process_file_info
                 model, is_tabular = await _initialize_chat_model(
                     query=query,
                     configs=configs,
@@ -2257,6 +2175,9 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                     is_multi_file=is_multi_file,
                     all_file_infos=all_file_infos,
                     file_id_logging=file_id_logging,
+                    is_tabular=file_data[
+                        "is_tabular"
+                    ],  # Pass is_tabular flag from file_data
                 )
 
             if generate_visualization and not is_tabular:
@@ -2763,3 +2684,392 @@ def start():
         log_level="info",
         timeout_keep_alive=60,  # maximum time to keep connection alive
     )
+
+
+async def _classify_files_for_model_init(file_ids: List[str]) -> Dict[str, List[str]]:
+    """
+    Classify files as tabular or non-tabular for model initialization.
+
+    Args:
+        file_ids: List of file IDs to classify
+
+    Returns:
+        Dictionary with 'tabular' and 'non_tabular' lists
+    """
+    tabular_file_ids = []
+    non_tabular_file_ids = []
+
+    for file_id in file_ids:
+        db_path = f"./chroma_db/{file_id}/tabular_data.db"
+        if os.path.exists(db_path):
+            tabular_file_ids.append(file_id)
+        else:
+            non_tabular_file_ids.append(file_id)
+
+    return {"tabular": tabular_file_ids, "non_tabular": non_tabular_file_ids}
+
+
+def _extract_database_summaries(
+    file_ids: List[str], all_file_infos: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Extract database summaries from file info for given file IDs.
+
+    Args:
+        file_ids: List of file IDs to extract summaries for
+        all_file_infos: All file information
+
+    Returns:
+        Dictionary mapping file_id to database_summary
+    """
+    database_summaries = {}
+    for f_id in file_ids:
+        if f_id in all_file_infos and "database_summary" in all_file_infos[f_id]:
+            database_summaries[f_id] = all_file_infos[f_id]["database_summary"]
+            logging.info(f"Found database summary for file_id: {f_id}")
+        else:
+            logging.warning(f"No database_summary found for file_id: {f_id}")
+
+    return database_summaries
+
+
+def _create_tabular_data_handler(
+    configs: dict,
+    file_ids: List[str],
+    model_choice: str,
+    database_summaries: Dict[str, Any],
+) -> Any:
+    """
+    Create TabularDataHandler with error handling and fallback.
+
+    Args:
+        configs: Configuration dictionary
+        file_ids: List of tabular file IDs
+        model_choice: Model choice string
+        database_summaries: Database summaries mapping
+
+    Returns:
+        TabularDataHandler instance
+
+    Raises:
+        Exception: If TabularDataHandler creation fails
+    """
+    return TabularDataHandler(
+        configs,
+        file_id=file_ids[0],  # For backward compatibility
+        model_choice=model_choice,
+        file_ids=file_ids,
+        database_summaries_param=database_summaries if database_summaries else None,
+    )
+
+
+def _create_rag_model_for_multi_file(
+    query: Query,
+    configs: dict,
+    gcs_handler: Any,
+    all_file_infos: Dict[str, Any],
+    is_gemini: bool,
+) -> Any:
+    """
+    Create appropriate RAG model for multi-file non-tabular content.
+
+    Args:
+        query: Query object
+        configs: Configuration dictionary
+        gcs_handler: GCS handler instance
+        all_file_infos: All file information
+        is_gemini: Whether this is a Gemini model
+
+    Returns:
+        Model instance (GeminiHandler or Chatbot)
+    """
+    if is_gemini:
+        logging.info(
+            f"Using GeminiHandler for multi-file with model: {query.model_choice}"
+        )
+        return GeminiHandler(
+            configs=configs,
+            gcs_handler=gcs_handler,
+            model_choice=query.model_choice,
+            file_ids=query.file_ids,  # type: ignore
+            all_file_infos=all_file_infos,
+            user_id=query.user_id,
+        )
+    else:
+        logging.info(
+            f"Using AzureChatbot for multi-file with model: {query.model_choice}"
+        )
+        return Chatbot(
+            configs=configs,
+            gcs_handler=gcs_handler,
+            model_choice=query.model_choice,
+            file_ids=query.file_ids,  # type: ignore
+            all_file_infos=all_file_infos,
+        )
+
+
+async def _handle_mixed_file_types(
+    query: Query,
+    configs: dict,
+    gcs_handler: Any,
+    all_file_infos: Dict[str, Any],
+    tabular_file_ids: List[str],
+    non_tabular_file_ids: List[str],
+) -> Tuple[Any, bool]:
+    """
+    Handle mixed file types (tabular + non-tabular) in multi-file mode.
+
+    Args:
+        query: Query object
+        configs: Configuration dictionary
+        gcs_handler: GCS handler instance
+        all_file_infos: All file information
+        tabular_file_ids: List of tabular file IDs
+        non_tabular_file_ids: List of non-tabular file IDs
+
+    Returns:
+        Tuple of (model, is_tabular_flag)
+    """
+    logging.info("Mixed file types detected in multi-file chat (tabular + non-tabular)")
+    logging.info(f"Tabular files: {tabular_file_ids}")
+    logging.info(f"Non-tabular files: {non_tabular_file_ids}")
+
+    # For mixed files, use RAG model as it can handle non-tabular content
+    logging.info("Using RAG model for mixed file types")
+    model = Chatbot(
+        configs=configs,
+        gcs_handler=gcs_handler,
+        model_choice=query.model_choice,
+        file_ids=query.file_ids,  # type: ignore
+        all_file_infos=all_file_infos,
+    )
+    return model, False
+
+
+async def _handle_all_tabular_files(
+    query: Query,
+    configs: dict,
+    all_file_infos: Dict[str, Any],
+    tabular_file_ids: List[str],
+) -> Tuple[Any, bool]:
+    """
+    Handle all tabular files in multi-file mode.
+
+    Args:
+        query: Query object
+        configs: Configuration dictionary
+        all_file_infos: All file information
+        tabular_file_ids: List of tabular file IDs
+
+    Returns:
+        Tuple of (model, is_tabular_flag)
+    """
+    logging.info(f"All files are tabular in multi-file: {query.file_ids}")
+    logging.info("Initializing TabularDataHandler with all tabular files")
+
+    # Guard clause for empty tabular files (should not happen)
+    if not tabular_file_ids:
+        logging.warning("No tabular files found despite earlier check")
+        # This should never happen but we'll create a fallback Chatbot anyway
+        # We don't have gcs_handler in this function but it's not used for tabular fallback
+        return None, False
+
+    try:
+        database_summaries = _extract_database_summaries(
+            tabular_file_ids, all_file_infos
+        )
+        model = _create_tabular_data_handler(
+            configs, tabular_file_ids, query.model_choice, database_summaries
+        )
+        logging.info(
+            f"Successfully initialized TabularDataHandler for {len(tabular_file_ids)} files"
+        )
+        return model, True
+
+    except Exception as e:
+        logging.error(f"Failed to initialize TabularDataHandler: {str(e)}")
+        logging.info("Falling back to RAG model for tabular data")
+        # Return None to indicate failure - the calling function will handle fallback
+        return None, False
+
+
+async def _handle_all_non_tabular_files(
+    query: Query,
+    configs: dict,
+    gcs_handler: Any,
+    all_file_infos: Dict[str, Any],
+    non_tabular_file_ids: List[str],
+) -> Tuple[Any, bool]:
+    """
+    Handle all non-tabular files in multi-file mode.
+
+    Args:
+        query: Query object
+        configs: Configuration dictionary
+        gcs_handler: GCS handler instance
+        all_file_infos: All file information
+        non_tabular_file_ids: List of non-tabular file IDs
+
+    Returns:
+        Tuple of (model, is_tabular_flag)
+    """
+    logging.info(f"All files are non-tabular: {non_tabular_file_ids}")
+
+    # Check if this is a Gemini model
+    is_gemini = query.model_choice.lower() in ["gemini-flash", "gemini-pro"]
+
+    model = _create_rag_model_for_multi_file(
+        query, configs, gcs_handler, all_file_infos, is_gemini
+    )
+    return model, False
+
+
+async def _initialize_multi_file_model(
+    query: Query, configs: dict, gcs_handler: Any, all_file_infos: Dict[str, Any]
+) -> Tuple[Any, bool]:
+    """
+    Initialize model for multi-file mode with proper classification and handling.
+
+    Args:
+        query: Query object
+        configs: Configuration dictionary
+        gcs_handler: GCS handler instance
+        all_file_infos: All file information
+
+    Returns:
+        Tuple of (model, is_tabular_flag)
+    """
+    # Classify files
+    file_classification = await _classify_files_for_model_init(query.file_ids)
+    tabular_file_ids = file_classification["tabular"]
+    non_tabular_file_ids = file_classification["non_tabular"]
+
+    has_tabular_files = bool(tabular_file_ids)
+    has_non_tabular_files = bool(non_tabular_file_ids)
+
+    # Handle different file type combinations
+    if has_tabular_files and has_non_tabular_files:
+        # Mixed file types
+        return await _handle_mixed_file_types(
+            query,
+            configs,
+            gcs_handler,
+            all_file_infos,
+            tabular_file_ids,
+            non_tabular_file_ids,
+        )
+    elif has_tabular_files and not has_non_tabular_files:
+        # All tabular files
+        model, is_tabular = await _handle_all_tabular_files(
+            query, configs, all_file_infos, tabular_file_ids
+        )
+        # If tabular handler failed, fall back to standard Chatbot
+        if model is None:
+            logging.info(
+                "Falling back to standard Chatbot for failed tabular initialization"
+            )
+            model = Chatbot(
+                configs=configs,
+                gcs_handler=gcs_handler,
+                model_choice=query.model_choice,
+                file_ids=query.file_ids,  # type: ignore
+                all_file_infos=all_file_infos,
+            )
+            is_tabular = False
+        return model, is_tabular
+    else:
+        # All non-tabular files
+        return await _handle_all_non_tabular_files(
+            query, configs, gcs_handler, all_file_infos, non_tabular_file_ids
+        )
+
+
+async def _initialize_single_file_tabular_model(
+    query: Query, configs: dict, all_file_infos: Dict[str, Any]
+) -> Any:
+    """
+    Initialize TabularDataHandler for single file with proper error handling.
+
+    Args:
+        query: Query object
+        configs: Configuration dictionary
+        all_file_infos: All file information
+
+    Returns:
+        TabularDataHandler instance or None if failed
+    """
+    logging.info(f"Initializing TabularDataHandler for single file: {query.file_id}")
+
+    try:
+        # Extract database summary from single_file_info if available
+        database_summaries = {}
+        single_file_info = all_file_infos.get(query.file_id)
+        if single_file_info and "database_summary" in single_file_info:
+            database_summaries[query.file_id] = single_file_info["database_summary"]
+            logging.info(f"Found database summary for file_id: {query.file_id}")
+        else:
+            logging.warning(f"No database_summary found for file_id: {query.file_id}")
+
+        model = TabularDataHandler(
+            configs,
+            file_id=query.file_id,
+            model_choice=query.model_choice,
+            database_summaries_param=database_summaries if database_summaries else None,
+        )
+        logging.info(f"Successfully initialized TabularDataHandler for {query.file_id}")
+        return model
+
+    except Exception as e:
+        logging.error(f"Failed to initialize TabularDataHandler: {str(e)}")
+        return None
+
+
+async def _initialize_single_file_model(
+    query: Query,
+    configs: dict,
+    gcs_handler: Any,
+    all_file_infos: Dict[str, Any],
+    is_tabular: Optional[bool],
+) -> Tuple[Any, bool]:
+    """
+    Initialize model for single file mode.
+
+    Args:
+        query: Query object
+        configs: Configuration dictionary
+        gcs_handler: GCS handler instance
+        all_file_infos: All file information
+        is_tabular: Flag indicating if file is tabular (can be None)
+
+    Returns:
+        Tuple of (model, determined_is_tabular)
+    """
+    # Guard clause for missing is_tabular flag
+    if is_tabular is None:
+        logging.warning(
+            f"is_tabular not provided for {query.file_id}, defaulting to non-tabular"
+        )
+        is_tabular = False
+
+    # Try to initialize TabularDataHandler for tabular files
+    if is_tabular:
+        model = await _initialize_single_file_tabular_model(
+            query, configs, all_file_infos
+        )
+        if model:
+            return model, True
+        # If TabularDataHandler failed, fall back to RAG model
+        is_tabular = False
+
+    # Initialize RAG model for non-tabular files or fallback
+    single_file_info_for_init = all_file_infos.get(query.file_id)
+    if not single_file_info_for_init:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error: file_info missing for single file RAG model initialization.",
+        )
+
+    logging.info(f"Initializing RAG model for single file: {query.file_id}")
+    logging.info(f"  User: {query.user_id}, Model: {query.model_choice}")
+    model = initialize_rag_model(query, configs, gcs_handler, single_file_info_for_init)
+    return model, is_tabular

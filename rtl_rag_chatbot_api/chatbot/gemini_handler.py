@@ -360,24 +360,40 @@ class GeminiHandler(BaseRAGHandler):
                 )
                 # No early return - continue with empty context like the AzureChatbot implementation
 
-            # Prepare additional context about available files when in multi-file mode
+            # Prepare additional context about available files for both single and multi-file mode
             files_context = ""
-            if self.is_multi_file and self.all_file_infos:
-                file_details = []
-                for file_id in self.active_file_ids:
-                    if file_id in self.all_file_infos:
-                        # Extract original_filename from file_info if available
-                        file_info = self.all_file_infos.get(file_id, {})
-                        original_filename = file_info.get(
-                            "original_filename", "Unknown document"
-                        )
-                        file_details.append(f"- {original_filename}")
+            if self.all_file_infos:
+                if self.is_multi_file:
+                    # For multi-file, show list with filenames
+                    file_details = []
+                    for file_id in self.active_file_ids:
+                        if file_id in self.all_file_infos:
+                            file_info = self.all_file_infos.get(file_id, {})
+                            original_filename = file_info.get(
+                                "original_filename", "Unknown document"
+                            )
+                            file_details.append(f"- {original_filename}")
 
-                if file_details:
-                    files_context = (
-                        "Available documents:\n" + "\n".join(file_details) + "\n\n"
-                    )
-                    logger.info(f"Added file context with {len(file_details)} files")
+                    if file_details:
+                        files_context = (
+                            "Available documents:\n" + "\n".join(file_details) + "\n\n"
+                        )
+                        logger.info(
+                            f"Added multi-file context with {len(file_details)} files"
+                        )
+                else:
+                    # For single file, provide complete file_info.json as context
+                    file_id = self.active_file_ids[0]
+                    if file_id in self.all_file_infos:
+                        file_info = self.all_file_infos.get(file_id, {})
+                        import json
+
+                        # Format the file info nicely
+                        file_info_str = json.dumps(file_info, indent=2, default=str)
+                        files_context = f"File Information:\n{file_info_str}\n\n"
+                        logger.info(
+                            f"Added complete file_info.json context for single file: {file_id}"
+                        )
 
             # Construct the prompt with context
             context_str = "\n".join(all_relevant_docs[:5])  # Limit to top 5 total docs

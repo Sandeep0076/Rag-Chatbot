@@ -23,20 +23,6 @@ import os
 import sys
 import subprocess
 
-# Load environment variables from env_variables.txt if it exists
-env_file = 'env_variables.txt'
-if os.path.exists(env_file):
-    print(f'Loading environment variables from {env_file}')
-    with open(env_file) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            key, value = line.split('=', 1)
-            os.environ[key] = value
-else:
-    print(f'Warning: {env_file} not found. Make sure environment variables are set.')
-
 # Start the API with multiple workers
 workers = int(sys.argv[1]) if len(sys.argv) > 1 else 4
 print(f'Starting RAG PDF API with {workers} workers')
