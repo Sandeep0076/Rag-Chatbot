@@ -2738,6 +2738,7 @@ def _create_tabular_data_handler(
     file_ids: List[str],
     model_choice: str,
     database_summaries: Dict[str, Any],
+    all_file_infos: Dict[str, Any],
 ) -> Any:
     """
     Create TabularDataHandler with error handling and fallback.
@@ -2760,6 +2761,7 @@ def _create_tabular_data_handler(
         model_choice=model_choice,
         file_ids=file_ids,
         database_summaries_param=database_summaries if database_summaries else None,
+        all_file_infos=all_file_infos,
     )
 
 
@@ -2879,7 +2881,11 @@ async def _handle_all_tabular_files(
             tabular_file_ids, all_file_infos
         )
         model = _create_tabular_data_handler(
-            configs, tabular_file_ids, query.model_choice, database_summaries
+            configs,
+            tabular_file_ids,
+            query.model_choice,
+            database_summaries,
+            all_file_infos,
         )
         logging.info(
             f"Successfully initialized TabularDataHandler for {len(tabular_file_ids)} files"
@@ -3015,6 +3021,7 @@ async def _initialize_single_file_tabular_model(
             file_id=query.file_id,
             model_choice=query.model_choice,
             database_summaries_param=database_summaries if database_summaries else None,
+            all_file_infos=all_file_infos,
         )
         logging.info(f"Successfully initialized TabularDataHandler for {query.file_id}")
         return model

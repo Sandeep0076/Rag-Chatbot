@@ -54,6 +54,7 @@ class TabularDataHandler:
         model_choice: str = "gpt_4o_mini",
         file_ids: List[str] = None,
         database_summaries_param: Optional[Dict[str, Any]] = None,
+        all_file_infos: Optional[Dict[str, Any]] = None,
     ):
         """
         Initializes the TabularDataHandler with the given configuration and file information.
@@ -65,6 +66,8 @@ class TabularDataHandler:
             file_ids (List[str], optional): List of file IDs for multi-file mode. Defaults to None.
             database_summaries_param (Optional[Dict[str, Any]], optional): Pre-loaded
                 database summaries keyed by file_id. Defaults to None.
+            all_file_infos (Optional[Dict[str, Any]], optional): Complete file information
+                including metadata for context. Defaults to None.
         """
         self.config = config
         self.model_choice = model_choice
@@ -81,6 +84,9 @@ class TabularDataHandler:
                 f"{len(database_summaries_param)} files"
             )
             self.database_summaries = database_summaries_param
+
+        # Store all_file_infos for context in responses
+        self.all_file_infos = all_file_infos if all_file_infos else {}
 
         # Determine if we're in multi-file mode
         self.is_multi_file = bool(file_ids and len(file_ids) > 0)
@@ -622,12 +628,18 @@ class TabularDataHandler:
             logging.info(f"Querying database for file_id: {target_file_id}")
             result = agent.run(enhanced_question)
 
-            # Add source information to the response
-            db_info = self.database_summaries.get(target_file_id, {})
-            table_names = db_info.get("table_names", [])
-            tables_str = ", ".join(table_names) if table_names else "unknown"
+            # Add source information to the response (without file context)
+            # Get just the filename for source attribution
+            file_info = (
+                self.all_file_infos.get(target_file_id, {})
+                if self.all_file_infos
+                else {}
+            )
+            original_filename = file_info.get(
+                "original_filename", f"File {target_file_id}"
+            )
 
-            enhanced_result = f"Answer from database {target_file_id} (tables: {tables_str}):\n\n{result}"
+            enhanced_result = f"[Source: {original_filename}] {result}"
             return enhanced_result
 
         except Exception as e:
@@ -746,6 +758,80 @@ class TabularDataHandler:
         # Default case - just return the original question
         return question
 
+    def _get_file_context_string(self, file_id: str = None) -> str:
+        """
+        Get file context information for inclusion in responses.
+
+        Args:
+            file_id: The file ID to get context for. Uses self.file_id if not provided.
+
+        Returns:
+            str: Formatted file context string
+        """
+        if not self.all_file_infos:
+            return ""
+
+        target_file_id = file_id or self.file_id
+        if not target_file_id or target_file_id not in self.all_file_infos:
+            return ""
+
+        file_info = self.all_file_infos.get(target_file_id, {})
+        original_filename = file_info.get("original_filename", "Unknown file")
+
+        if self.is_multi_file:
+            # For multi-file, just include filename reference
+            return f"[Source: {original_filename}]"
+        else:
+            # For single file, include complete file information
+            import json
+
+            try:
+                file_info_str = json.dumps(file_info, indent=2, default=str)
+                return f"File Information:\n{file_info_str}\n\n"
+            except Exception:
+                # Fallback to just filename if JSON serialization fails
+                return f"File: {original_filename}\n\n"
+
+    def _get_file_context_for_prompt(self, file_id: str = None) -> str:
+        """
+        Get file context information for inclusion in AI prompts (not responses).
+
+        Args:
+            file_id: The file ID to get context for. Uses self.file_id if not provided.
+
+        Returns:
+            str: Formatted file context string for prompt
+        """
+        if not self.all_file_infos:
+            return ""
+
+        target_file_id = file_id or self.file_id
+        if not target_file_id or target_file_id not in self.all_file_infos:
+            return ""
+
+        file_info = self.all_file_infos.get(target_file_id, {})
+        original_filename = file_info.get("original_filename", "Unknown file")
+
+        # For prompt context, provide concise but useful information
+        context_parts = [f"You are working with the file: '{original_filename}'"]
+
+        # Add table information if available
+        if "database_summary" in file_info:
+            db_summary = file_info["database_summary"]
+            table_count = db_summary.get("table_count", 0)
+            table_names = db_summary.get("table_names", [])
+
+            if table_count == 1:
+                context_parts.append(f"It contains 1 table named '{table_names[0]}'")
+            elif table_count > 1:
+                tables_str = "', '".join(table_names)
+                context_parts.append(
+                    f"It contains {table_count} tables: '{tables_str}'"
+                )
+
+        context_str = ". ".join(context_parts) + ". "
+        return context_str
+
     def ask_question(self, question: str) -> Optional[str]:
         """
         Processes a question using natural language processing and database querying.
@@ -786,8 +872,14 @@ class TabularDataHandler:
                     "tables": self.table_info,
                 }
 
+            # Add file context to the question before processing
+            file_context = self._get_file_context_for_prompt()
+            enhanced_question = (
+                f"{file_context}{question}" if file_context else question
+            )
+
             # Use the format_question function from prompt_handler with database summary
-            formatted_question = format_question(db_summary, question)
+            formatted_question = format_question(db_summary, enhanced_question)
             logging.info(f"Formatted question: {formatted_question}")
 
             # Check if the formatted question contains specific keywords
