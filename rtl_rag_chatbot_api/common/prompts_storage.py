@@ -1,5 +1,25 @@
-VISUALISATION_PROMPT = """For the given context, generate a visualization of the data. If the context is list,
-dictionary, json or tabularform and have more than 50 rows or columns, then take first 50 rows or columns only.
+VISUALISATION_PROMPT = """For the given context, generate a visualization of the data using smart data optimization
+techniques.
+
+**DATA OPTIMIZATION RULES:**
+1. **Chart Type Based Limits:**
+   - Pie Charts: Maximum 15 categories (merge smaller ones into "Others")
+   - Bar Charts: Maximum 50 categories for readability
+   - Line Charts: Up to 200 points for smooth curves
+   - Scatter Plots: Up to 1000 points (sample if more)
+   - Heatmaps: Maximum 50x50 grid
+
+2. **Large Dataset Strategies:**
+   - If data has >1000 rows: Use systematic sampling (every nth row)
+   - If data has >50 categories: Group smaller categories or use top N + "Others"
+   - If time series data: Consider aggregating by time periods (daily→weekly→monthly)
+   - For numerical data: Use percentiles, quartiles, or equal-width bins
+
+3. **Data Quality:**
+   - Remove null/empty values before processing
+   - For categorical data: Group rare categories (< 1% of total) into "Others"
+   - For continuous data: Consider outlier handling if they skew visualization
+
 Return the information in a structured JSON format that can be used to plot the data in a graph.
 If no chart type is given in context, then generate appropriate chart type based on context.
 
@@ -40,7 +60,12 @@ Heatmap | 3D Scatter Plot | Surface Plot | Bubble Chart",
   },
   "options": {
     "color_palette": "Viridis",           // Optional
-    "stacked": false                      // For bar charts only
+    "stacked": false,                     // For bar charts only
+    "data_optimization": {                // Information about data processing
+      "original_rows": 1000,              // Original data size
+      "processed_rows": 50,               // Processed data size
+      "method": "top_n_categories"        // Optimization method used
+    }
   }
 }
 
@@ -50,26 +75,31 @@ Heatmap | 3D Scatter Plot | Surface Plot | Bubble Chart",
    - MUST use "datasets" format
    - Each dataset MUST have "x" and "y" arrays of equal length
    - "x" can be dates or numbers
+   - For large time series: Sample or aggregate appropriately
 
 2. Bar Chart:
    - MUST use "datasets" format for multiple series
    - For single series, can use either:
      a) datasets: [{"label": "Data", "x": ["cat1", "cat2"], "y": [val1, val2]}]
      b) simplified: {"values": [val1, val2], "categories": ["cat1", "cat2"]}
+   - For >50 categories: Show top categories + "Others"
 
 3. Pie Chart:
    - MUST use "values" and "categories" format
    - MUST NOT use "datasets"
    - Arrays must be of equal length
+   - Maximum 15 slices (merge small ones into "Others")
 
 4. Scatter/Bubble:
    - MUST use "datasets" format
    - Each dataset MUST have "x" and "y"
    - Bubble charts MUST include "size"
+   - For >1000 points: Use systematic sampling
 
 5. Heatmap:
    - MUST use "matrix" format
    - MUST include "x_categories" and "y_categories"
+   - Limit to reasonable grid size (50x50 max)
 
 6. Box Plot:
    - MUST use "datasets" format
@@ -79,16 +109,17 @@ Heatmap | 3D Scatter Plot | Surface Plot | Bubble Chart",
 7. Histogram:
    - MUST use "values" array
    - Categories are auto-generated
+   - Use appropriate binning for large datasets
 
-Example Bar Chart Response:
+Example Bar Chart Response with Optimization:
 {
   "chart_type": "Bar Chart",
-  "title": "Sales by Region",
+  "title": "Sales by Region (Top 10)",
   "data": {
     "datasets": [{
       "label": "Sales",
-      "x": ["North", "South", "East", "West"],
-      "y": [100, 150, 120, 180]
+      "x": ["North", "South", "East", "West", "Central", "Others"],
+      "y": [100, 150, 120, 180, 90, 45]
     }]
   },
   "labels": {
@@ -97,7 +128,12 @@ Example Bar Chart Response:
   },
   "options": {
     "color_palette": "Viridis",
-    "stacked": false
+    "stacked": false,
+    "data_optimization": {
+      "original_rows": 25,
+      "processed_rows": 6,
+      "method": "top_categories_with_others"
+    }
   }
 }
 
@@ -107,9 +143,9 @@ Remember:
 - No placeholder values or comments in output
 - Use proper JSON format with double quotes
 - Use true/false (lowercase) for booleans
-- If the context is list, dictionary, json or tabularform and have more than 50 rows or columns,
-then take first 50 rows or columns only.
-- If the context is ageneral query and chart cannot be generated, just reply , cannot generate chart for this query.
+- Apply intelligent data optimization based on chart type and data size
+- Always include data_optimization info when data was processed
+- If the context is a general query and chart cannot be generated, just reply: cannot generate chart for this query.
 """
 
 CHART_DETECTION_PROMPT = """

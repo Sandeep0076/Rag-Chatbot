@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from typing import List
 
@@ -13,10 +14,24 @@ class PromptBuilder:
 
     @staticmethod
     def build_forced_answer_prompt(question: str, answer: str) -> str:
-        """Build prompt for forced answer generation."""
+        """Build prompt for forced answer generation with token safety."""
+        # Safety check: if context is extremely large, truncate it
+        max_context_length = 200000  # ~50k tokens worth of characters
+
+        if len(answer) > max_context_length:
+            # Keep the end of the answer as it's more likely to contain the final result
+            truncated_answer = (
+                "... [Previous content truncated] ...\n" + answer[-max_context_length:]
+            )
+            logging.warning(
+                f"Context truncated from {len(answer)} to {len(truncated_answer)} characters"
+            )
+        else:
+            truncated_answer = answer
+
         return (
             f"Question: {question}\n\n"
-            f"Context: {answer}\n\n"
+            f"Context: {truncated_answer}\n\n"
             "Instructions:\n"
             "1. You are a database expert providing direct answers from the context only\n"
             "2. Format your response in clean markdown or bullet points\n"
