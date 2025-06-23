@@ -370,15 +370,16 @@ class TabularDataHandler:
         if hasattr(self, "db") and self.db:
             original_run_method = self.db.run
 
-            # Define the wrapper function
-            def wrapped_run(command: str, fetch: str = "all") -> str:
+            # Define the wrapper function with **kwargs to handle additional parameters
+            def wrapped_run(command: str, fetch: str = "all", **kwargs) -> str:
                 # 'self' of TabularDataHandler is captured from the outer scope
                 logging.debug(f"Executing SQL via wrapped_run: {command}")
                 try:
-                    # Example: If query cleaning is desired here using a class method:
-                    # cleaned_command = self._clean_sql_query(command)
-                    # result = original_run_method(cleaned_command, fetch)
-                    result = original_run_method(command, fetch)
+                    # Clean the SQL query to remove markdown formatting and other artifacts
+                    cleaned_command = self._clean_sql_query(command)
+                    # Pass only the parameters that the original method accepts
+                    # Ignore any additional kwargs like 'parameters' that might be passed by newer LangChain
+                    result = original_run_method(cleaned_command, fetch)
                     logging.debug(f"SQL result (first 100 chars): {str(result)[:100]}")
                     return result
                 except Exception as e:
@@ -812,24 +813,26 @@ class TabularDataHandler:
         file_info = self.all_file_infos.get(target_file_id, {})
         original_filename = file_info.get("original_filename", "Unknown file")
 
-        # For prompt context, provide concise but useful information
+        # Start with filename context
         context_parts = [f"You are working with the file: '{original_filename}'"]
 
-        # Add table information if available
+        # Add complete database summary if available
         if "database_summary" in file_info:
             db_summary = file_info["database_summary"]
-            table_count = db_summary.get("table_count", 0)
-            table_names = db_summary.get("table_names", [])
 
-            if table_count == 1:
-                context_parts.append(f"It contains 1 table named '{table_names[0]}'")
-            elif table_count > 1:
-                tables_str = "', '".join(table_names)
-                context_parts.append(
-                    f"It contains {table_count} tables: '{tables_str}'"
-                )
+            # Send the complete database summary as context (no cleaning)
+            import json
 
-        context_str = ". ".join(context_parts) + ". "
+            try:
+                # Format the complete database summary as readable context
+                db_summary_str = json.dumps(db_summary, indent=2, default=str)
+                context_parts.append(f"Database Summary:\n{db_summary_str}")
+
+            except Exception:
+                # Fallback to string representation if JSON fails
+                context_parts.append(f"Database Summary:\n{str(db_summary)}")
+
+        context_str = "\n\n".join(context_parts) + "\n\n"
         return context_str
 
     def ask_question(self, question: str) -> Optional[str]:

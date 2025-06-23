@@ -1509,7 +1509,13 @@ def check_db_existence(
     if is_tabular:
         logging.info("Initializing TabularDataHandler")
         try:
-            model = TabularDataHandler(configs, query.file_id, query.model_choice)
+            # For backwards compatibility in check_db_existence, pass empty all_file_infos
+            model = TabularDataHandler(
+                configs,
+                file_id=query.file_id,
+                model_choice=query.model_choice,
+                all_file_infos={},  # Empty dict for backwards compatibility
+            )
             model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
             initialized_models[model_key] = {"model": model, "is_tabular": is_tabular}
         except ValueError as ve:
