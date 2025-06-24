@@ -1,5 +1,4 @@
 # RAG PDF API - Postman Usage Guide
-
 This guide provides detailed instructions on how to use each endpoint of the RAG PDF API with Postman. The API supports processing and querying various document types including PDFs, images, and tabular data (CSV/Excel) using Retrieval-Augmented Generation (RAG) and SQL querying capabilities.
 
 ## Table of Contents
@@ -9,13 +8,22 @@ This guide provides detailed instructions on how to use each endpoint of the RAG
 - [Endpoints](#endpoints)
   - [File Upload](#file-upload)
   - [Check Embeddings](#check-embeddings)
+  - [Check Embedding Status](#check-embedding-status)
   - [Chat with File](#chat-with-file)
   - [Get Available Models](#get-available-models)
   - [Chat with Gemini](#chat-with-gemini)
+  - [Get Neighbors](#get-neighbors)
+  - [Analyze Image](#analyze-image)
+  - [Generate Image](#generate-image)
+  - [Generate Combined Images](#generate-combined-images)
   - [Delete Resources](#delete-resources)
   - [Delete All Resources](#delete-all-resources)
   - [Find File by Name](#find-file-by-name)
   - [Manual Cleanup](#manual-cleanup)
+- [Session ID Management](#session-id-management)
+  - [Session ID Flow](#session-id-flow)
+  - [Key Benefits](#key-benefits-of-session-id-system)
+  - [Session ID Lifecycle](#session-id-lifecycle)
 - [Additional Information](#additional-information)
 
 ## Authentication
@@ -31,7 +39,7 @@ In Postman, you need to add an Authorization header to your requests. The specif
 The typical workflow for using the API is:
 
 1. Upload a file (PDF, image, CSV, or Excel) using the `/file/upload` endpoint
-4. Chat with the content using the `/file/chat` endpoint
+2. Chat with the content using the `/file/chat` endpoint
 
 ## Endpoints
 
@@ -45,17 +53,24 @@ Upload a file (PDF, image, CSV, or Excel) to the API.
   - `Authorization`: Your auth token
 - **Request Body**:
   - Form data:
-    - `file`: The file to upload (File)
+    - `file`: The file to upload (File) - optional for single file
+    - `files`: Multiple files to upload (List[File]) - optional for multiple files
     - `is_image`: Whether the file is an image (Boolean)
     - `username`: Username for tracking file ownership (String)
+    - `urls`: URLs to process content from (String) - optional
 - **Response Format**:
   ```json
   {
     "file_id": "uuid-string",
+    "file_ids": ["uuid-string1", "uuid-string2"],
+    "multi_file_mode": false,
     "message": "File uploaded successfully",
     "status": "success",
     "original_filename": "example.pdf",
-    "is_image": false
+    "original_filenames": ["example1.pdf", "example2.pdf"],
+    "is_image": false,
+    "is_tabular": false,
+    "session_id": "uuid-string"
   }
   ```
 - **Usage Example**:
@@ -64,9 +79,11 @@ Upload a file (PDF, image, CSV, or Excel) to the API.
   3. Enter the URL: `http://your-api-domain/file/upload`
   4. Go to the "Body" tab and select "form-data"
   5. Add the following key-value pairs:
-     - Key: `file`, Value: Select a file from your computer
+     - Key: `file`, Value: Select a file from your computer (for single file)
+     - Key: `files`, Value: Select multiple files from your computer (for multiple files)
      - Key: `is_image`, Value: `false` (or `true` if uploading an image)
      - Key: `username`, Value: Enter a username
+     - Key: `urls`, Value: Enter URLs separated by commas or newlines (optional)
   6. Click "Send" to upload the file
 
 
@@ -147,8 +164,10 @@ Process chat queries against document content using specified language models.
   {
     "text": ["What is this document about?"],
     "file_id": "uuid-string",
-    "model_choice": "gpt_4o_mini", // Can also be gemini-flash or gemini-pro. All models use Azure-generated embeddings.
+    "file_ids": ["uuid-string1", "uuid-string2"],
+    "model_choice": "gpt_4o_mini",
     "user_id": "user123",
+    "session_id": "uuid-string",
     "generate_visualization": false
   }
   ```
@@ -156,7 +175,8 @@ Process chat queries against document content using specified language models.
   ```json
   {
     "response": "This document is about...",
-    "is_table": false
+    "is_table": false,
+    "sources": ["uuid-string"]
   }
   ```
   For tabular data, the response may include formatted table data:
@@ -178,7 +198,7 @@ Process chat queries against document content using specified language models.
 
 ### Get Available Models
 
-Retrieve a list of available models including Azure LLM models and Gemini models.
+Retrieve a list of available models including Azure LLM models, Gemini models, and image generation models.
 
 - **Endpoint URL**: `/available-models`
 - **HTTP Method**: GET
@@ -187,7 +207,11 @@ Retrieve a list of available models including Azure LLM models and Gemini models
 - **Response Format**:
   ```json
   {
-    "models": ["gpt_4o_mini", "gpt_4o", "gpt_3_5_turbo", "gemini-flash", "gemini-pro"]
+    "models": ["gpt_4o_mini", "gpt_4o", "gemini-flash", "gemini-pro", "dall-e-3", "imagen-3.0", "Dalle + Imagen"],
+    "model_types": {
+      "text": ["gpt_4o_mini", "gpt_4o", "gemini-flash", "gemini-pro"],
+      "image": ["dall-e-3", "imagen-3.0", "Dalle + Imagen"]
+    }
   }
   ```
 - **Usage Example**:
@@ -220,6 +244,149 @@ Chat with Gemini models (Flash or Pro) without RAG or file context.
   4. Go to the "Body" tab and select "raw" and "JSON"
   5. Enter the JSON request body with your message
   6. Click "Send" to chat with Gemini
+
+### Get Neighbors
+
+Retrieve nearest neighbors for a given text query from a specific file.
+
+- **Endpoint URL**: `/file/neighbors`
+- **HTTP Method**: POST
+- **Request Headers**:
+  - `Authorization`: Your auth token
+  - `Content-Type`: `application/json`
+- **Request Body**:
+  ```json
+  {
+    "text": "What is machine learning?",
+    "file_id": "uuid-string",
+    "n_neighbors": 5
+  }
+  ```
+- **Response Format**:
+  ```json
+  {
+    "neighbors": [
+      "Machine learning is a subset of artificial intelligence...",
+      "Deep learning algorithms use neural networks...",
+      "..."
+    ]
+  }
+  ```
+- **Usage Example**:
+  1. Create a new request in Postman
+  2. Set the request method to POST
+  3. Enter the URL: `http://your-api-domain/file/neighbors`
+  4. Go to the "Body" tab and select "raw" and "JSON"
+  5. Enter the JSON request body with your query
+  6. Click "Send" to get nearest neighbors
+
+### Analyze Image
+
+Analyze an uploaded image file and get comprehensive analysis results.
+
+- **Endpoint URL**: `/analyze-image`
+- **HTTP Method**: POST
+- **Request Headers**:
+  - `Authorization`: Your auth token
+- **Request Body**:
+  - Form data:
+    - `file`: The image file to analyze (File)
+- **Response Format**:
+  ```json
+  {
+    "message": "Image analysis completed successfully",
+    "result_file": "image_analysis_uuid.json",
+    "analysis": {
+      "gpt4_analysis": "Detailed analysis of the image content..."
+    }
+  }
+  ```
+- **Usage Example**:
+  1. Create a new request in Postman
+  2. Set the request method to POST
+  3. Enter the URL: `http://your-api-domain/analyze-image`
+  4. Go to the "Body" tab and select "form-data"
+  5. Add key: `file`, Value: Select an image file from your computer
+  6. Click "Send" to analyze the image
+
+### Generate Image
+
+Generate an image based on a text prompt using DALL-E 3 or Imagen models.
+
+- **Endpoint URL**: `/image/generate`
+- **HTTP Method**: POST
+- **Request Headers**:
+  - `Authorization`: Your auth token
+  - `Content-Type`: `application/json`
+- **Request Body**:
+  ```json
+  {
+    "prompt": "A futuristic city with flying cars",
+    "size": "1024x1024",
+    "n": 1,
+    "model_choice": "dall-e-3"
+  }
+  ```
+- **Response Format**:
+  ```json
+  {
+    "success": true,
+    "image_url": "https://example.com/generated-image.png",
+    "prompt": "A futuristic city with flying cars",
+    "model": "dall-e-3",
+    "size": "1024x1024"
+  }
+  ```
+- **Usage Example**:
+  1. Create a new request in Postman
+  2. Set the request method to POST
+  3. Enter the URL: `http://your-api-domain/image/generate`
+  4. Go to the "Body" tab and select "raw" and "JSON"
+  5. Enter the JSON request body with your prompt
+  6. Click "Send" to generate an image
+
+### Generate Combined Images
+
+Generate images using both DALL-E and Imagen models concurrently with the same prompt.
+
+- **Endpoint URL**: `/image/generate-combined`
+- **HTTP Method**: POST
+- **Request Headers**:
+  - `Authorization`: Your auth token
+  - `Content-Type`: `application/json`
+- **Request Body**:
+  ```json
+  {
+    "prompt": "A beautiful sunset over mountains",
+    "size": "1024x1024",
+    "n": 1
+  }
+  ```
+- **Response Format**:
+  ```json
+  {
+    "success": true,
+    "dalle_result": {
+      "success": true,
+      "image_url": "https://example.com/dalle-image.png",
+      "model": "dall-e-3"
+    },
+    "imagen_result": {
+      "success": true,
+      "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+      "model": "imagen-3.0"
+    },
+    "prompt": "A beautiful sunset over mountains",
+    "models": ["dall-e-3", "imagen-3.0"]
+  }
+  ```
+- **Usage Example**:
+  1. Create a new request in Postman
+  2. Set the request method to POST
+  3. Enter the URL: `http://your-api-domain/image/generate-combined`
+  4. Go to the "Body" tab and select "raw" and "JSON"
+  5. Enter the JSON request body with your prompt
+  6. Click "Send" to generate images with both models
 
 ### Delete Resources
 
@@ -369,6 +536,126 @@ Manually trigger cleanup of resources.
   5. Enter the JSON request body
   6. Click "Send" to trigger manual cleanup
 
+## Session ID Management
+
+The RAG PDF API uses a session-based approach to manage file uploads and chat contexts. Each upload operation generates a unique `session_id` that groups related files together and provides isolation between different upload sessions.
+
+### Session ID Flow
+
+```
+1. FILE UPLOAD PROCESS
+   ┌─────────────────────────────────────────────────────────────┐
+   │ User uploads file(s) → /file/upload                         │
+   │ ├── Backend generates session_id = uuid.uuid4()             │
+   │ ├── Files processed and stored with session_id              │
+   │ └── Response includes session_id in JSON response           │
+   └─────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+2. FRONTEND SESSION STORAGE
+   ┌─────────────────────────────────────────────────────────────┐
+   │ Frontend receives session_id from upload response           │
+   │ ├── Stores session_id in application state                  │
+   │ ├── Associates all uploaded files with this session_id      │
+   │ ├── Resets file_ids list for clean session state           │
+   │ └── Tracks files by session for proper grouping            │
+   └─────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+3. CHAT REQUEST PROCESS
+   ┌─────────────────────────────────────────────────────────────┐
+   │ User sends chat message → /file/chat                        │
+   │ ├── Frontend includes session_id in chat payload            │
+   │ ├── Backend logs session_id for request tracking           │
+   │ ├── Files are processed within session context             │
+   │ └── Response maintains session isolation                    │
+   └─────────────────────────────────────────────────────────────┘
+```
+
+### Key Benefits of Session ID System
+
+1. **Session Isolation**
+   - Different upload sessions don't interfere with each other
+   - Clean separation between different conversation contexts
+   - Prevents file mix-ups in concurrent usage scenarios
+
+2. **File Grouping and Context**
+   - Files uploaded together are logically grouped as a unit
+   - Maintains proper context for multi-file conversations
+   - Enables coherent multi-document chat experiences
+
+3. **Request Tracking and Debugging**
+   - Easy to track which files belong to which conversation
+   - Better logging and debugging capabilities for troubleshooting
+   - Clear audit trail for file operations and chat requests
+
+4. **Multi-file Support**
+   - Enables proper multi-file chat functionality
+   - Supports batch processing of related documents
+   - Maintains file relationships across API calls
+
+5. **State Management**
+   - Clean session boundaries for frontend applications
+   - Proper cleanup when starting new conversations
+   - Consistent behavior across different client implementations
+
+### Session ID Lifecycle
+
+The session ID follows a well-defined lifecycle from creation to cleanup:
+
+#### 1. **Creation Phase**
+- **Trigger**: File upload operation (`/file/upload` endpoint)
+- **Generation**: `session_id = str(uuid.uuid4())` - Creates unique UUID
+- **Scope**: Applies to all files in the current upload batch
+- **Response**: Included in upload response JSON
+
+#### 2. **Storage and Association Phase**
+- **Frontend Storage**: Session ID stored in application state
+- **File Association**: All uploaded files tagged with session_id
+- **Context Creation**: Session becomes the active context for chat operations
+- **State Reset**: Previous session data cleared to maintain isolation
+
+#### 3. **Active Usage Phase**
+- **Chat Integration**: Session ID included in all chat requests
+- **Context Maintenance**: Backend processes requests within session scope
+- **File Resolution**: System resolves file references within session context
+- **Logging**: Session ID used for request tracking and debugging
+
+#### 4. **Session Transition**
+- **New Upload Trigger**: New file upload creates new session
+- **State Reset**: Previous session_id replaced with new one
+- **File List Reset**: file_ids list cleared and repopulated
+- **Clean Transition**: No overlap between old and new sessions
+
+#### 5. **Cleanup and Termination**
+- **Manual Reset**: User initiates "New Chat" or similar action
+- **Automatic Reset**: New upload automatically terminates previous session
+- **Resource Cleanup**: Associated temporary data and state cleared
+- **Session End**: Session ID becomes inactive and is no longer used
+
+#### Session ID Data Flow
+
+```json
+// Upload Response Example
+{
+  "file_ids": ["uuid-1", "uuid-2", "uuid-3"],
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "multi_file_mode": true,
+  "status": "success"
+}
+
+// Chat Request Example
+{
+  "text": ["What are the main topics in these documents?"],
+  "file_ids": ["uuid-1", "uuid-2", "uuid-3"],
+  "model_choice": "gpt_4o_mini",
+  "user_id": "user123",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+This session-based architecture ensures reliable, isolated, and trackable interactions between clients and the RAG PDF API, providing a robust foundation for both single-file and multi-file document processing workflows.
+
 ## Additional Information
 
 ### Setting Up Environment Variables in Postman
@@ -390,3 +677,26 @@ The API returns appropriate HTTP status codes for different error scenarios:
 - 500: Internal Server Error (server-side error)
 
 Error responses typically include a `detail` field with more information about the error.
+
+### Multi-File Support
+
+The API supports uploading and chatting with multiple files:
+- Use the `files` parameter in `/file/upload` to upload multiple files at once
+- Use the `file_ids` parameter in `/file/chat` to chat with multiple files
+- The `session_id` field helps track related files in a session
+
+### Image Generation Models
+
+The API supports multiple image generation models:
+- **DALL-E 3**: OpenAI's image generation model
+- **Imagen**: Google's Vertex AI image generation model
+- **Combined**: Generate images with both models simultaneously for comparison
+
+### Supported File Types
+
+- **Documents**: PDF, TXT, DOC, DOCX
+- **Images**: JPG, JPEG, PNG, GIF, BMP
+- **Tabular Data**: CSV, XLSX, XLS, DB, SQLite
+- **URLs**: Extract content from web pages
+
+### Session ID Flow Diagram
