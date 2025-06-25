@@ -33,7 +33,7 @@ os.environ["chatbot"] = json.dumps(
         "max_input_size": os.getenv("MAX_INPUT_SIZE", "4096"),
         "num_outputs": os.getenv("NUM_OUTPUTS", "2000"),
         "max_chunk_overlap": os.getenv("MAX_CHUNK_OVERLAP", "0.2"),
-        "chunk_size_limit": os.getenv("CHUNK_SIZE_LIMIT", "1000"),
+        "chunk_size_limit": os.getenv("CHUNK_SIZE_LIMIT", "2000"),
         "n_neighbours": os.getenv("N_NEIGHBOURS", "5"),
     }
 )

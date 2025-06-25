@@ -148,6 +148,10 @@ class BaseRAGHandler:
             # Use configured chunk size for optimal RAG performance
             max_chunk_size = self.max_tokens
 
+            # Azure text-embedding-ada-002 has a maximum context length of 8192 tokens
+            # For safety, we'll use a slightly lower limit
+            AZURE_EMBEDDING_LIMIT = 8000
+
             for i in range(0, total_chunks):
                 chunk = chunks[i]
                 chunk_tokens = len(self.simple_tokenize(chunk))
@@ -182,18 +186,86 @@ class BaseRAGHandler:
                     batch_to_process.append(chunk)
                     batch_ids.append(f"{embedding_id}_{i}")
 
-                if len(batch_to_process) >= self.BATCH_SIZE or i == total_chunks - 1:
-                    if batch_to_process:
-                        try:
-                            # Log batch details before processing
-                            batch_token_counts = [
-                                len(self.simple_tokenize(b)) for b in batch_to_process
-                            ]
-                            logging.info(
-                                f"Processing batch {i // self.BATCH_SIZE + 1} with {len(batch_to_process)} chunks, "
-                                f"token counts: {batch_token_counts}"
-                            )
+                # Calculate total tokens in current batch
+                batch_total_tokens = sum(
+                    len(self.simple_tokenize(b)) for b in batch_to_process
+                )
 
+                # Process batch if:
+                # 1. We've reached BATCH_SIZE chunks, OR
+                # 2. Adding the next chunk would exceed Azure's token limit, OR
+                # 3. We're at the last chunk
+                should_process_batch = (
+                    len(batch_to_process) >= self.BATCH_SIZE
+                    or batch_total_tokens > AZURE_EMBEDDING_LIMIT
+                    or i == total_chunks - 1
+                )
+
+                if should_process_batch and batch_to_process:
+                    try:
+                        # Log batch details before processing
+                        batch_token_counts = [
+                            len(self.simple_tokenize(b)) for b in batch_to_process
+                        ]
+                        logging.info(
+                            f"Processing batch {i // self.BATCH_SIZE + 1} with {len(batch_to_process)} chunks, "
+                            f"token counts: {batch_token_counts}, total: {batch_total_tokens}"
+                        )
+
+                        # For large chunks that approach Azure's limit, process them individually
+                        if (
+                            batch_total_tokens > AZURE_EMBEDDING_LIMIT
+                            and len(batch_to_process) > 1
+                        ):
+                            logging.info(
+                                f"Batch total ({batch_total_tokens}) exceeds Azure limit. "
+                                f"Processing chunks individually."
+                            )
+                            for idx, single_chunk in enumerate(batch_to_process):
+                                single_chunk_tokens = len(
+                                    self.simple_tokenize(single_chunk)
+                                )
+                                if single_chunk_tokens > AZURE_EMBEDDING_LIMIT:
+                                    logging.error(
+                                        f"Single chunk has {single_chunk_tokens} tokens, "
+                                        f"exceeding Azure limit of {AZURE_EMBEDDING_LIMIT}"
+                                    )
+                                    # Split this chunk further
+                                    smaller_chunks = self.split_large_chunk(
+                                        single_chunk, AZURE_EMBEDDING_LIMIT - 100
+                                    )
+                                    for small_idx, small_chunk in enumerate(
+                                        smaller_chunks
+                                    ):
+                                        embeddings = self.get_embeddings([small_chunk])
+                                        collection.add(
+                                            documents=[small_chunk],
+                                            embeddings=embeddings,
+                                            metadatas=[
+                                                {
+                                                    "source": file_id,
+                                                    "embedding_id": embedding_id,
+                                                }
+                                            ],
+                                            ids=[f"{batch_ids[idx]}_split_{small_idx}"],
+                                        )
+                                        processed_count += 1
+                                else:
+                                    embeddings = self.get_embeddings([single_chunk])
+                                    collection.add(
+                                        documents=[single_chunk],
+                                        embeddings=embeddings,
+                                        metadatas=[
+                                            {
+                                                "source": file_id,
+                                                "embedding_id": embedding_id,
+                                            }
+                                        ],
+                                        ids=[batch_ids[idx]],
+                                    )
+                                    processed_count += 1
+                        else:
+                            # Normal batch processing for smaller batches
                             embeddings = self.get_embeddings(batch_to_process)
                             collection.add(
                                 documents=batch_to_process,
@@ -205,24 +277,23 @@ class BaseRAGHandler:
                                 ids=batch_ids,
                             )
                             processed_count += len(batch_to_process)
-                            logging.info(
-                                f"Processed {processed_count}/{total_chunks} chunks"
-                            )
-                        except Exception as e:
-                            logging.error(
-                                f"Error processing batch at chunk {i}: {str(e)}"
-                            )
-                            # Log the problematic batch details for debugging
-                            problematic_counts = [
-                                len(self.simple_tokenize(b)) for b in batch_to_process
-                            ]
-                            logging.error(
-                                f"Problematic batch had {len(batch_to_process)} items "
-                                f"with token counts: {problematic_counts}"
-                            )
-                        finally:
-                            batch_to_process = []
-                            batch_ids = []
+
+                        logging.info(
+                            f"Processed {processed_count}/{total_chunks} chunks"
+                        )
+                    except Exception as e:
+                        logging.error(f"Error processing batch at chunk {i}: {str(e)}")
+                        # Log the problematic batch details for debugging
+                        problematic_counts = [
+                            len(self.simple_tokenize(b)) for b in batch_to_process
+                        ]
+                        logging.error(
+                            f"Problematic batch had {len(batch_to_process)} items "
+                            f"with token counts: {problematic_counts}"
+                        )
+                    finally:
+                        batch_to_process = []
+                        batch_ids = []
 
             # Store the embedding_id for reference
             self.embedding_id = embedding_id
