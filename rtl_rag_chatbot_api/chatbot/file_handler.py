@@ -1090,9 +1090,9 @@ class FileHandler:
                     logging.info(
                         f"Found existing content with ID {existing_file_id} for URL {url}, reusing it"
                     )
-                    # Update the file info with the new username (pass as list for consistency)
+                    # Update the file info with the new username
                     self.gcs_handler.update_file_info(
-                        existing_file_id, {"username": [username]}
+                        existing_file_id, {"username": username}
                     )
                     # Clean up the temporary file
                     if os.path.exists(temp_file_path):
