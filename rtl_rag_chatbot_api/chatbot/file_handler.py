@@ -511,9 +511,13 @@ class FileHandler:
 
         logging.info(f"Found embeddings for: {original_filename}")
 
-        # Update file_info.json with the new username (pass as list for consistency)
-        self.gcs_handler.update_file_info(existing_file_id, {"username": [username]})
-        logging.info(f"Updated file_info.json with username: {username}")
+        # Update username list using the more comprehensive method
+        # Use update_file_info which appends usernames (tracks frequency)
+        # instead of update_username_list which deduplicates
+        self.gcs_handler.update_file_info(existing_file_id, {"username": username})
+        logging.info(
+            f"Appended username '{username}' for existing file (tracks upload frequency)"
+        )
 
         # Handle encryption for existing files
         await self._handle_existing_file_encryption(
@@ -631,8 +635,12 @@ class FileHandler:
                 logging.info(f"Found embeddings for: {original_filename}")
 
                 # Update username list using the more comprehensive method
-                self.gcs_handler.update_username_list(existing_file_id, [username])
-                logging.info(f"Updated username list for existing file: {username}")
+                self.gcs_handler.update_file_info(
+                    existing_file_id, {"username": username}
+                )
+                logging.info(
+                    f"Appended username '{username}' for existing file (tracks upload frequency)"
+                )
 
                 # Return early with existing file information
                 return {
