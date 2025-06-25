@@ -767,22 +767,23 @@ async def process_document_files_parallel(
                 )
                 embeddings_exist = embeddings_result["embeddings_exist"]
                 if embeddings_exist:
-                    # Just update username - this is fast so we can do it synchronously
-                    current_username_list = existing_file_info.get("username", [])
-                    if not isinstance(current_username_list, list):
-                        current_username_list = [current_username_list]
+                    # Update username using the correct function that appends every time
+                    # This tracks how many times each user has uploaded the file
+                    logging.info(
+                        f"Found existing embeddings for file {file_id}, "
+                        f"adding username '{username}' to track upload"
+                    )
 
-                    if username not in current_username_list:
-                        current_username_list.append(username)
-                        # Update username in background without waiting
-                        asyncio.create_task(
-                            update_username_in_background(
-                                file_id, current_username_list
-                            )
-                        )
-                        logging.info(
-                            f"Scheduled username list update for file {file_id}: {current_username_list}"
-                        )
+                    # Update username in background without waiting
+                    # Use update_file_info which appends usernames (tracks frequency)
+                    # instead of update_username_list which deduplicates
+                    asyncio.create_task(
+                        update_username_in_background_append(file_id, username)
+                    )
+                    logging.info(
+                        f"Scheduled username append for existing file {file_id}: {username}"
+                    )
+
                     return None  # No need for embedding creation
 
         # If we reach here, file needs embeddings
@@ -794,16 +795,22 @@ async def process_document_files_parallel(
             "file_metadata": file_metadata,
         }
 
-    # Helper function to update username lists in background
-    async def update_username_in_background(file_id, username_list):
+    # Helper function to append username for existing files (tracks upload frequency)
+    async def update_username_in_background_append(file_id, username):
         try:
             gcs_handler = GCSHandler(configs)
-            gcs_handler.update_username_list(file_id, username_list)
+
+            # Use update_file_info which appends usernames every time
+            # This tracks how many times each user has uploaded the file
+            gcs_handler.update_file_info(file_id, {"username": username})
             logging.info(
-                f"Updated username list in background for file {file_id}: {username_list}"
+                f"Appended username '{username}' for existing file {file_id} "
+                f"(tracks upload frequency)"
             )
         except Exception as e:
-            logging.error(f"Error updating username list for file {file_id}: {str(e)}")
+            logging.error(f"Error appending username for file {file_id}: {str(e)}")
+            # Re-raise to ensure the task failure is visible
+            raise
 
     # Run parallel processing for all files - including existence checks
     logging.info(

@@ -152,13 +152,32 @@ class BaseRAGHandler:
                 chunk = chunks[i]
                 chunk_tokens = len(self.simple_tokenize(chunk))
 
+                # Safety check: If chunk is still too large even after splitting,
+                # log a warning and attempt to split it further
                 if chunk_tokens > max_chunk_size:
+                    logging.warning(
+                        f"Chunk {i} has {chunk_tokens} tokens, exceeding limit of {max_chunk_size}. "
+                        f"Attempting to split further."
+                    )
                     sub_chunks = self.split_large_chunk(chunk, max_chunk_size)
                     for sub_idx, sub_chunk in enumerate(sub_chunks):
                         sub_chunk_tokens = len(self.simple_tokenize(sub_chunk))
                         if sub_chunk_tokens <= max_chunk_size:
                             batch_to_process.append(sub_chunk)
                             batch_ids.append(f"{embedding_id}_{i}_sub{sub_idx}")
+                        else:
+                            # If even after splitting, chunk is too large, truncate it as last resort
+                            logging.error(
+                                f"Sub-chunk {sub_idx} still has {sub_chunk_tokens} tokens. "
+                                f"Truncating to {max_chunk_size} tokens."
+                            )
+                            truncated_chunk = self.truncate_text(
+                                sub_chunk, max_chunk_size
+                            )
+                            batch_to_process.append(truncated_chunk)
+                            batch_ids.append(
+                                f"{embedding_id}_{i}_sub{sub_idx}_truncated"
+                            )
                 else:
                     batch_to_process.append(chunk)
                     batch_ids.append(f"{embedding_id}_{i}")
@@ -166,6 +185,15 @@ class BaseRAGHandler:
                 if len(batch_to_process) >= self.BATCH_SIZE or i == total_chunks - 1:
                     if batch_to_process:
                         try:
+                            # Log batch details before processing
+                            batch_token_counts = [
+                                len(self.simple_tokenize(b)) for b in batch_to_process
+                            ]
+                            logging.info(
+                                f"Processing batch {i // self.BATCH_SIZE + 1} with {len(batch_to_process)} chunks, "
+                                f"token counts: {batch_token_counts}"
+                            )
+
                             embeddings = self.get_embeddings(batch_to_process)
                             collection.add(
                                 documents=batch_to_process,
@@ -183,6 +211,14 @@ class BaseRAGHandler:
                         except Exception as e:
                             logging.error(
                                 f"Error processing batch at chunk {i}: {str(e)}"
+                            )
+                            # Log the problematic batch details for debugging
+                            problematic_counts = [
+                                len(self.simple_tokenize(b)) for b in batch_to_process
+                            ]
+                            logging.error(
+                                f"Problematic batch had {len(batch_to_process)} items "
+                                f"with token counts: {problematic_counts}"
                             )
                         finally:
                             batch_to_process = []
@@ -271,7 +307,7 @@ class BaseRAGHandler:
                     images = convert_from_path(file_path)
                     text = ""
                     for i, image in enumerate(images):
-                        logging.info(f"Processing page {i+1}")
+                        logging.info(f"Processing page {i + 1}")
                         text += pytesseract.image_to_string(image)
                     word_count = len(text.split())
 
@@ -303,8 +339,12 @@ class BaseRAGHandler:
         current_chunk = []
         current_chunk_tokens = 0
 
-        # Get appropriate token limit - always use Azure max tokens since we've unified on Azure embeddings
-        max_tokens = self.AZURE_MAX_TOKENS
+        # Use configured chunk size limit instead of Azure max tokens
+        # This is the critical fix - use the configured chunk size (e.g., 2000 tokens)
+        # instead of the Azure model limit (128,000 tokens)
+        max_tokens = self.max_tokens  # Use configured chunk_size_limit
+
+        logging.info(f"Splitting text with max_tokens limit: {max_tokens}")
 
         for paragraph in paragraphs:
             paragraph_tokens = len(self.simple_tokenize(paragraph))
@@ -341,6 +381,10 @@ class BaseRAGHandler:
 
         if current_chunk:
             chunks.append(" ".join(current_chunk))
+
+        # Log the chunking results for debugging
+        chunk_sizes = [len(self.simple_tokenize(chunk)) for chunk in chunks]
+        logging.info(f"Text split into {len(chunks)} chunks with sizes: {chunk_sizes}")
 
         return chunks
 
