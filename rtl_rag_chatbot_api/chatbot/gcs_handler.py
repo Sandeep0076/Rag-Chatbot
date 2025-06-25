@@ -310,22 +310,37 @@ class GCSHandler:
             if "username" in new_info:
                 current_username = new_info["username"]
 
-                # If there's an existing username field in current_info
-                if "username" in current_info:
-                    existing_username = current_info["username"]
-
-                    if not isinstance(existing_username, list):
-                        # If existing username is not already an array, convert to list
-                        existing_username = [existing_username]
-
-                    # append user to list, no matter if it's already there
-                    # the number of times the user is listed in the array is equivalent to the
-                    # number of times they've uploaded the file
-                    existing_username.append(current_username)
-                    new_info["username"] = existing_username
+                # If current_username is already a list (e.g., from URL metadata),
+                # we need to handle it differently than individual usernames
+                if isinstance(current_username, list):
+                    # If it's already a list, use it as-is for new files or merge for existing files
+                    if "username" in current_info:
+                        existing_username = current_info["username"]
+                        if not isinstance(existing_username, list):
+                            existing_username = [existing_username]
+                        # Merge the lists, preserving duplicates (tracks frequency)
+                        existing_username.extend(current_username)
+                        new_info["username"] = existing_username
+                    else:
+                        # No existing username, use the provided list as-is
+                        new_info["username"] = current_username
                 else:
-                    # No existing username, set as a single-item array
-                    new_info["username"] = [current_username]
+                    # Handle single username (traditional approach for PDFs)
+                    if "username" in current_info:
+                        existing_username = current_info["username"]
+
+                        if not isinstance(existing_username, list):
+                            # If existing username is not already an array, convert to list
+                            existing_username = [existing_username]
+
+                        # append user to list, no matter if it's already there
+                        # the number of times the user is listed in the array is equivalent to the
+                        # number of times they've uploaded the file
+                        existing_username.append(current_username)
+                        new_info["username"] = existing_username
+                    else:
+                        # No existing username, set as a single-item array
+                        new_info["username"] = [current_username]
 
             current_info.update(new_info)
             blob.upload_from_string(

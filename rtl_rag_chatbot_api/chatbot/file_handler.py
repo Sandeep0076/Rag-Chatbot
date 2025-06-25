@@ -286,13 +286,13 @@ class FileHandler:
 
             # download_files_from_folder_by_id already decrypts the database
             # # Decrypt the database if it exists
-            # if os.path.exists(encrypted_db_path):
-            #     decrypt_file(encrypted_db_path, db_path)
-            #     os.remove(encrypted_db_path)  # Clean up encrypted file
-            # else:
-            #     logging.error(
-            #         f"Encrypted database not found for file_id: {existing_file_id}"
-            #     )
+            # # if os.path.exists(encrypted_db_path):
+            # #     decrypt_file(encrypted_db_path, db_path)
+            # #     os.remove(encrypted_db_path)  # Clean up encrypted file
+            # # else:
+            # #     logging.error(
+            # #         f"Encrypted database not found for file_id: {existing_file_id}"
+            # #     )
 
             # Check if file_info.json has database_summary, if not, add it
             file_info = self.gcs_handler.get_file_info(existing_file_id)
@@ -1129,8 +1129,9 @@ class FileHandler:
                 # This ensures file-specific metadata is passed through the chain
                 # without relying on shared state in self.gcs_handler.temp_metadata
                 self.gcs_handler.temp_metadata = metadata
-                # Update file info for persistence
-                self.gcs_handler.update_file_info(url_file_id, metadata)
+                # The initial file_info.json will be created in the background task,
+                # consistent with PDF/document handling, to avoid redundant updates.
+                # self.gcs_handler.update_file_info(url_file_id, metadata)
 
                 # Import here to avoid circular imports
                 from rtl_rag_chatbot_api.app import SessionLocal
@@ -1150,7 +1151,9 @@ class FileHandler:
                     configs=self.configs,
                     session_local=SessionLocal,
                     background_tasks=background_tasks,
-                    username_lists=[[username]],
+                    username_lists=[
+                        None
+                    ],  # Username is in the metadata, no separate update needed
                     file_metadata_list=[metadata],
                     max_concurrent_tasks=1,
                 )

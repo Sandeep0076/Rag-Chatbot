@@ -1113,22 +1113,16 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
 async def update_metadata_in_background(
     configs, file_id, updated_metadata, error_context=""
 ):
-    """
-    Asynchronous function for non-critical GCS operations that can be run in background.
-    Updates file metadata in GCS without blocking the main workflow.
-
-    Args:
-        configs: Application configuration
-        file_id: The ID of the file to update metadata for
-        updated_metadata: New metadata to update
-        error_context: Optional context for error messages
-    """
+    """Asynchronous function to update file_info.json in the background."""
     try:
+        # Initialize GCS handler within the task
         background_gcs = GCSHandler(configs)
         background_gcs.update_file_info(file_id, updated_metadata)
-        logging.info(f"Updated metadata in background for file {file_id}")
-    except Exception as update_error:
-        logging.error(f"Error updating metadata {error_context}: {str(update_error)}")
+    except Exception as e:
+        logging.error(
+            f"Error updating metadata in background for {file_id} "
+            f"(context: {error_context}): {str(e)}"
+        )
 
 
 async def update_usernames_in_background(configs, file_id, new_usernames):
@@ -1156,8 +1150,22 @@ async def update_usernames_in_background(configs, file_id, new_usernames):
         # Merge username lists without duplicates
         merged_usernames = list(set(current_username_list))
 
+        # Flatten new_usernames in case it's a nested list (fixes URL processing issue)
+        flat_new_usernames = []
+        if isinstance(new_usernames, list):
+            for item in new_usernames:
+                if isinstance(item, list):
+                    # If item is a list, extend with its contents
+                    flat_new_usernames.extend(item)
+                else:
+                    # If item is a string, append it directly
+                    flat_new_usernames.append(item)
+        else:
+            # If new_usernames is not a list, treat it as a single username
+            flat_new_usernames = [new_usernames]
+
         # Add any new usernames that aren't in the merged list
-        for username in new_usernames:
+        for username in flat_new_usernames:
             if username not in merged_usernames:
                 merged_usernames.append(username)
 
@@ -1323,12 +1331,10 @@ async def create_embeddings_background(
                 file_id, temp_file_path, configs, username_list
             )
 
-        # Update metadata status to in_progress asynchronously
+        # Update metadata status to in_progress and ensure the file is created
         file_metadata["embeddings_status"] = "in_progress"
-        asyncio.create_task(
-            update_metadata_in_background(
-                configs, file_id, file_metadata, "before embedding creation"
-            )
+        await update_metadata_in_background(
+            configs, file_id, file_metadata, "before embedding creation"
         )
 
         # Log details about the metadata
@@ -1362,11 +1368,12 @@ async def create_embeddings_background(
                     f"Triggered background upload for file_id: {file_id} using asyncio.create_task"
                 )
 
-            # Process username updates in background if embedding creation succeeded
-            if username_list:
-                asyncio.create_task(
-                    update_usernames_in_background(configs, file_id, username_list)
-                )
+            # The username is already included in the initial metadata write.
+            # A separate update is redundant for new files.
+            # if username_list:
+            #     asyncio.create_task(
+            #         update_usernames_in_background(configs, file_id, username_list)
+            #     )
         else:
             # Handle errors in embedding creation
             logging.error(
