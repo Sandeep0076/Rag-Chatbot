@@ -9,6 +9,8 @@ INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp)
 -- user marked and timestamp older than 4 weeks
 INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user5_id', 'user5@example.com', 'User 5', True, TIMESTAMP_MORE_THAN_4_WEEKS);
 INSERT INTO User (id, email, name, wf_deletion_candidate, wf_deletion_timestamp) VALUES ('user6_id', 'user6@example.com', 'User 6', True, TIMESTAMP_MORE_THAN_4_WEEKS);
+-- operational user to be replaced for shared prompts, should be excluded from workflow in all phases
+INSERT INTO User (id, email, name) VALUES ('dXNlci5kZWxldGVkQHJ0bC5kZQo=', 'user.deleted@rtl.de', 'Nutzer, Gelöschter [RTL Tech]');
 
 -- Insert Models
 INSERT INTO Model (id, name, maxLength, tokenLimit) VALUES ('model1_id', 'GPT-4', 2048, 4096);
@@ -56,3 +58,28 @@ INSERT INTO Message (id, role, content, createdAt, conversationId) VALUES
 ('msg13_id', 'system', 'User feedback here.', '2024-09-25 13:10:00', 'conv11_id'),
 ('msg14_id', 'user', 'User feedback here.', '2024-09-25 13:10:00', 'conv12_id'),
 ('msg15_id', 'system', 'User feedback here.', '2024-09-25 13:10:00', 'conv13_id');
+
+-- Insert some prompts
+INSERT INTO Prompt (id, name, description, prompt, folderId, published, userId, createdAt, updatedAt, tag, copyCount, publishedAt) VALUES
+-- two published published prompts by deleted users
+-- should not be deleted and the user be replaced with id of "user.deleted@rtl.de", because they were published
+('prompt1_id', 'Prompt 1', 'This is a system prompt', 'Prompt content 1', 'prompt_folder1_id', True, 'user5_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, '2024-09-25 08:00:00'),
+('prompt2_id', 'Prompt 2', 'This is a user prompt', 'Prompt content 2', 'prompt_folder2_id', True, 'user6_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, '2024-09-25 08:00:00'),
+-- two non-published prompts by deleted users -> should be deleted
+('prompt3_id', 'Prompt 5', 'This is a system prompt', 'Prompt content 3', 'prompt_folder1_id', False, 'user5_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, NULL),
+('prompt4_id', 'Prompt 6', 'This is a user prompt', 'Prompt content 4', 'prompt_folder2_id', False, 'user6_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, NULL),
+-- two published prompts by non-deleted users -> shoud remain unchanged
+('prompt5_id', 'Prompt 3', 'This is a system prompt', 'Prompt content 5', 'prompt_folder3_id', True, 'user1_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, '2024-09-25 08:00:00'),
+('prompt6_id', 'Prompt 4', 'This is a user prompt', 'Prompt content 6', 'prompt_folder4_id', True, 'user2_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, '2024-09-25 08:00:00'),
+-- two non-published prompts by non-deleted users -> shoud remain unchanged
+('prompt7_id', 'Prompt 7', 'This is a system prompt', 'Prompt content 7', 'prompt_folder3_id', False, 'user1_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, NULL),
+('prompt8_id', 'Prompt 8', 'This is a user prompt', 'Prompt content 8', 'prompt_folder4_id', False, 'user2_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, NULL);
+
+-- Insert some prompt folders
+INSERT INTO PromptFolder (id, name, userId, rootFolder, createdAt, updatedAt) VALUES
+-- folders of deletion candidates
+('prompt_folder1_id', 'Allgemein', 'user5_id', True, '2024-09-25 08:00:00', '2024-09-25 08:00:00'),
+('prompt_folder2_id', 'Allgemein', 'user6_id', True, '2024-09-25 08:00:00', '2024-09-25 08:00:00'),
+-- folders of non-deleted users
+('prompt_folder3_id', 'Allgemein', 'user1_id', True, '2024-09-25 08:00:00', '2024-09-25 08:00:00'),
+('prompt_folder4_id', 'Allgemein', 'user2_id', True, '2024-09-25 08:00:00', '2024-09-25 08:00:00');
