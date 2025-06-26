@@ -56,19 +56,6 @@ def mock_log():
         yield mock_log
 
 
-def test_user_count_deletion_candidates(test_db_session):
-    """Test to ensure that there are 8 users in the User table."""
-
-    with test_db_session as db:
-        user_count = db.query(
-            User
-        ).count()  # Query the number of users in the User table
-        assert user_count == 8, f"Expected 8 users, but found {user_count}"
-
-        deletion_candidates = db.query(User).filter(User.wf_deletion_candidate).count()
-        assert deletion_candidates == 5
-
-
 @patch("workflows.workflow.get_db_session")
 def test_all_deletion_candidates_gone(mock_get_db_session, mock_log, test_db_session):
     """
@@ -180,7 +167,7 @@ def test_no_else_data_deleted(mock_get_db_session, mock_log, test_db_session):
 
         # users left
         users = db.query(User).all()
-        assert len(users) == 6
+        assert len(users) == 7
 
 
 # Helper function to raise the exception

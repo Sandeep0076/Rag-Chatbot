@@ -108,26 +108,48 @@ def display_model_information(current_model):
 
 
 def get_image_generation_inputs():
-    """Get user inputs for image generation."""
-    # Add a text area for the prompt
+    """Get user inputs for image generation: prompt and size."""
+    # Get the current model
+    current_model = st.session_state.model_choice
+
+    # Create a text area for the prompt
     prompt = st.text_area(
-        "Enter a detailed description of the image you want to generate:",
-        placeholder="A futuristic cityscape with flying cars and neon lights, digital art",
-        height=150,
+        "Enter a prompt describing the image you want to generate:",
+        placeholder="Example: A photo of a cat in space...",
+        height=100,
     )
 
-    # Add a select box for image size
-    size_options = {
-        "Square (1024x1024)": "1024x1024",
-        "Portrait (1024x1792)": "1024x1792",
-        "Landscape (1792x1024)": "1792x1024",
-    }
-    size_selection = st.selectbox(
-        "Select image size:", options=list(size_options.keys()), index=0
-    )
-    selected_size = size_options[size_selection]
+    # Create a horizontal layout with columns for size and number options
+    col1, col2 = st.columns(2)
 
-    return prompt, selected_size
+    # Add a dropdown for size selection
+    with col1:
+        # Define the available image sizes
+        image_sizes = [
+            "1024x1024",
+            "1024x1792",
+            "1792x1024",
+        ]
+        selected_size = st.selectbox("Select image size:", image_sizes)
+
+    # Add a dropdown for number of images only for Imagen model
+    num_images = 1  # Default for DALL-E and combined
+    with col2:
+        # The combined model has a specific name "Dalle + Imagen"
+        is_combined = current_model == "Dalle + Imagen"
+
+        # Check if this is a pure Imagen model by looking for 'imagen' in the model name
+        # This will match 'imagen', 'imagen-3.0-generate-002', 'imagen-1.5-pro-002', etc.
+        is_pure_imagen = "imagen" in current_model.lower() and not is_combined
+
+        if is_pure_imagen:
+            # Only show number selection for pure Imagen model
+            num_images = st.selectbox("Number of images:", [1, 2, 3, 4], index=0)
+        else:
+            # For DALL-E or combined, show a static message since only 1 image is allowed
+            st.info("DALL-E 3 supports generating 1 image per request")
+
+    return prompt, selected_size, num_images
 
 
 def setup_dual_image_display_css():
@@ -191,40 +213,52 @@ def display_dalle_image(dalle_result, col):
 
 
 def display_imagen_image(imagen_result, prompt, col):
-    """Display the Imagen generated image in the given column."""
+    """Display the Imagen generated image(s) in the given column."""
     with col:
         st.subheader("Imagen")
         if imagen_result.get("success"):
-            imagen_url = imagen_result.get("image_url")
+            # Check if we have multiple images or a single image
+            image_urls = imagen_result.get("image_urls", [])
+            if not image_urls and imagen_result.get("image_url"):
+                # Legacy format with single image_url
+                image_urls = [imagen_result.get("image_url")]
+
             is_base64 = imagen_result.get("is_base64", False)
 
-            # Add a unique class to the container for the Imagen image
-            st.markdown('<div class="imagen-container">', unsafe_allow_html=True)
-            st.image(imagen_url, caption="Generated with Imagen")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            # Add download button for Imagen image
-            # with matching style to DALL-E button
-            if is_base64 and imagen_url.startswith("data:image/png;base64,"):
-                base64_data = imagen_url.split(",")[1]
-                # Create a hidden download link that will be triggered by the button
-                download_link_id = f"imagen_download_{hash(prompt)}"
-                st.markdown(
-                    f"""
-                    <a id="{download_link_id}" style="display:none;"></a>
-                    <button style="background-color: #4CAF50; color: white;
-                    padding: 10px 15px; border: none;
-                    border-radius: 4px; cursor: pointer;"
-                    onclick="
-                        const link = document.getElementById('{download_link_id}');
-                        link.href = 'data:image/png;base64,{base64_data}';
-                        link.download = 'imagen_image.png';
-                        link.click();
-                    ">
-                    Download Imagen Image</button>
-                    """,
-                    unsafe_allow_html=True,
+            # Display all images with a counter
+            for i, imagen_url in enumerate(image_urls):
+                # Add a unique class to the container for each Imagen image
+                st.markdown('<div class="imagen-container">', unsafe_allow_html=True)
+                st.image(
+                    imagen_url,
+                    caption=f"Generated with Imagen (Image {i+1}/{len(image_urls)})",
                 )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+                # Add download button for Imagen image
+                if is_base64 and imagen_url.startswith("data:image/png;base64,"):
+                    base64_data = imagen_url.split(",")[1]
+                    # Create a unique download link ID for each image
+                    download_link_id = f"imagen_download_{hash(prompt)}_{i}"
+                    st.markdown(
+                        f"""
+                        <a id="{download_link_id}" style="display:none;"></a>
+                        <button style="background-color: #4CAF50; color: white;
+                        padding: 10px 15px; border: none;
+                        border-radius: 4px; cursor: pointer;"
+                        onclick="
+                            const link = document.getElementById('{download_link_id}');
+                            link.href = 'data:image/png;base64,{base64_data}';
+                            link.download = 'imagen_image_{i+1}.png';
+                            link.click();
+                        ">
+                        Download Imagen Image {i+1}</button>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        "<br>", unsafe_allow_html=True
+                    )  # Add space between download buttons
         else:
             st.error(
                 f"Failed to generate Imagen image: "
@@ -257,43 +291,60 @@ def display_single_model_results(result, current_model):
 
     # Check if it's a base64 image (from Imagen) or a URL (from DALL-E)
     is_base64 = result.get("is_base64", False)
-    image_url = result["image_url"]
+    # Model type detection moved to where it's actually used
 
-    # Display the image
-    st.image(image_url, caption=f"Generated with {current_model}")
+    # Get image URLs - handle both single image and multiple images
+    image_urls = result.get("image_urls", [])
+    if not image_urls and result.get("image_url"):
+        # Legacy format with single image_url
+        image_urls = [result.get("image_url")]
 
-    # Add appropriate download options
-    if is_base64:
-        # For base64 images, we need to provide a way to download
-        # Extract the base64 data without the prefix
-        if image_url.startswith("data:image/png;base64,"):
-            base64_data = image_url.split(",")[1]
-            st.download_button(
-                label="Download Image",
-                data=base64_data,
-                file_name="generated_image.png",
-                mime="image/png",
-            )
-    else:
-        # For URL-based images (DALL-E), use the original approach
-        download_url = image_url
-        st.markdown(
-            (
-                (
-                    f"""<a href='{download_url}'
-            download='generated_image.png' target='_blank'>
-            <button style='background-color: #4CAF50;
-            color: white; padding: 10px 15px;
-            border: none; border-radius: 4px;
-            cursor: pointer;'>
-            Download Image</button></a>"""
+    # DALL-E only generates one image, Imagen can generate multiple
+    if len(image_urls) > 1:
+        st.markdown(f"### Generated {len(image_urls)} images with {current_model}")
+
+    # Display each image with its own download button
+    for i, image_url in enumerate(image_urls):
+        # Add a container to visually separate multiple images
+        if len(image_urls) > 1:
+            st.markdown(f"#### Image {i+1}/{len(image_urls)}")
+
+        # Display the image
+        st.image(image_url, caption=f"Generated with {current_model}")
+
+        # Add appropriate download options
+        if is_base64:
+            # For base64 images (Imagen), provide download button
+            if image_url.startswith("data:image/png;base64,"):
+                base64_data = image_url.split(",")[1]
+                st.download_button(
+                    label=f"Download Image {i+1 if len(image_urls) > 1 else ''}",
+                    data=base64_data,
+                    file_name=f"generated_image_{i+1 if len(image_urls) > 1 else '1'}.png",
+                    mime="image/png",
                 )
-            ),
-            unsafe_allow_html=True,
-        )
+        else:
+            # For URL-based images (DALL-E), use HTML download link
+            download_url = image_url
+            file_name = f"generated_image_{i+1 if len(image_urls) > 1 else '1'}.png"
+            button_text = (
+                f"Download Image {i+1}" if len(image_urls) > 1 else "Download Image"
+            )
+
+            st.markdown(
+                f"""<a href='{download_url}' download='{file_name}' target='_blank'>
+                <button style='background-color: #4CAF50; color: white; padding: 10px 15px;
+                border: none; border-radius: 4px; cursor: pointer;'>
+                {button_text}</button></a>""",
+                unsafe_allow_html=True,
+            )
+
+        # Add spacing between images if there are multiple
+        if len(image_urls) > 1:
+            st.markdown("---")
 
 
-def generate_image(current_model, prompt, selected_size):
+def generate_image(current_model, prompt, selected_size, num_images):
     """Call the appropriate API endpoint to generate an image."""
     API_URL = "http://localhost:8080"
 
@@ -301,26 +352,34 @@ def generate_image(current_model, prompt, selected_size):
         f"Generating your image with {current_model}...this may take a moment"
     ):
         try:
+            # DALL-E 3 can only generate 1 image per request
+            # Note: n=1 enforcement for DALL-E is handled in the API call below
+
             # Determine which API endpoint to call based on model choice
             if current_model == "Dalle + Imagen":
                 # Call the combined endpoint for both models
+                # For combined, DALL-E gets 1 image, Imagen gets requested number
                 response = requests.post(
                     f"{API_URL}/image/generate-combined",
                     json={
                         "prompt": prompt,
                         "size": selected_size,
-                        "n": 1,
+                        "n": num_images,  # Imagen will use this, backend will override DALL-E to 1
                         "model_choice": "",  # Not needed for combined endpoint
                     },
                 )
             else:
+                # For individual models
+                # If using DALL-E, force n=1, otherwise use selected number
+                actual_n = 1 if "dall-e" in current_model.lower() else num_images
+
                 # Call the single model endpoint
                 response = requests.post(
                     f"{API_URL}/image/generate",
                     json={
                         "prompt": prompt,
                         "size": selected_size,
-                        "n": 1,
+                        "n": actual_n,
                         "model_choice": current_model,
                     },
                 )
@@ -354,7 +413,7 @@ def handle_image_generation():
         return
 
     # Get user inputs
-    prompt, selected_size = get_image_generation_inputs()
+    prompt, selected_size, num_images = get_image_generation_inputs()
 
     # Display model information
     display_model_information(current_model)
@@ -365,7 +424,7 @@ def handle_image_generation():
             st.error("Please enter a prompt to generate an image.")
         else:
             # Generate the image
-            result = generate_image(current_model, prompt, selected_size)
+            result = generate_image(current_model, prompt, selected_size, num_images)
 
             # Display results
             if result:

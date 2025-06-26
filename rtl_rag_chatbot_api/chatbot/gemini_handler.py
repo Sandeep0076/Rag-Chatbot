@@ -376,7 +376,7 @@ class GeminiHandler(BaseRAGHandler):
                             )
 
                             # For URL files, include the actual URL in the context
-                            if file_info.get("is_url") and file_info.get("url"):
+                            if "url" in file_info:
                                 url = file_info.get("url")
                                 file_details.append(
                                     f"- {original_filename} (URL: {url})"
@@ -392,17 +392,27 @@ class GeminiHandler(BaseRAGHandler):
                             f"Added multi-file context with {len(file_details)} files (including URLs where applicable)"
                         )
                 else:
-                    # For single file, provide complete file_info.json as context
+                    # For single file, also build a clean context string
                     file_id = self.active_file_ids[0]
                     if file_id in self.all_file_infos:
                         file_info = self.all_file_infos.get(file_id, {})
-                        import json
+                        original_filename = file_info.get(
+                            "original_filename", f"Unknown filename (ID: {file_id})"
+                        )
 
-                        # Format the file info nicely
-                        file_info_str = json.dumps(file_info, indent=2, default=str)
-                        files_context = f"File Information:\n{file_info_str}\n\n"
+                        # Start with the filename
+                        file_context_detail = f"- {original_filename}"
+
+                        # If it's a URL, add it
+                        if "url" in file_info:
+                            url = file_info.get("url")
+                            file_context_detail += f" (URL: {url})"
+
+                        files_context = (
+                            "File Information:\n" + file_context_detail + "\n\n"
+                        )
                         logger.info(
-                            f"Added complete file_info.json context for single file: {file_id}"
+                            f"Added clean file context for single file: {file_id}"
                         )
 
             # Construct the prompt with context

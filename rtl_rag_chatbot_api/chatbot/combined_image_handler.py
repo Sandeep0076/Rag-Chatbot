@@ -56,16 +56,23 @@ class CombinedImageGenerator:
             with ThreadPoolExecutor(max_workers=2) as executor:
                 # Create async tasks for both model executions
                 loop = asyncio.get_event_loop()
+
+                # DALL-E 3 can only generate 1 image per API call, always use n=1
                 dalle_future = loop.run_in_executor(
                     executor,
                     lambda: self.dalle_generator.generate_image(
-                        prompt=prompt, size=size, n=n, **kwargs
+                        prompt=prompt, size=size, n=1, **kwargs  # Force n=1 for DALL-E
                     ),
                 )
+
+                # Imagen can generate multiple images as requested
                 imagen_future = loop.run_in_executor(
                     executor,
                     lambda: self.imagen_generator.generate_image(
-                        prompt=prompt, size=size, n=n, **kwargs
+                        prompt=prompt,
+                        size=size,
+                        n=n,
+                        **kwargs,  # Use requested n for Imagen
                     ),
                 )
 
