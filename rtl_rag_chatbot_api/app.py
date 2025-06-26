@@ -1501,7 +1501,11 @@ async def get_embedding_status(file_id: str, current_user=Depends(get_current_us
 
 
 def check_db_existence(
-    file_id: str, query: Query, configs: dict, initialized_models: dict
+    file_id: str,
+    query: Query,
+    configs: dict,
+    initialized_models: dict,
+    temperature: float,
 ) -> Tuple[str, bool, Any]:
     """
     Check if database exists and initialize tabular handler if needed.
@@ -1531,6 +1535,7 @@ def check_db_existence(
                 file_id=query.file_id,
                 model_choice=query.model_choice,
                 all_file_infos={},  # Empty dict for backwards compatibility
+                temperature=temperature,
             )
             model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
             initialized_models[model_key] = {"model": model, "is_tabular": is_tabular}
@@ -1552,6 +1557,7 @@ def initialize_rag_model(
     configs: dict,
     gcs_handler: Any,
     file_info: dict,
+    temperature: float,
 ):
     """
     Initialize RAG model based on query parameters.
@@ -1561,6 +1567,7 @@ def initialize_rag_model(
         configs: Application configurations
         gcs_handler: GCS handler instance
         file_info: File information from GCS
+        temperature: Temperature value for model randomness
 
     Returns:
         Initialized model instance
@@ -1592,6 +1599,7 @@ def initialize_rag_model(
             file_id=query.file_id,
             all_file_infos=all_file_infos,  # Pass file info for context
             user_id=query.user_id,
+            temperature=temperature,
         )
         # Note: GeminiHandler with constructor params doesn't need separate initialize() call
     else:
@@ -1647,6 +1655,7 @@ def handle_visualization(
     query: Query,
     is_tabular: bool,
     configs: dict,
+    temperature: float,
 ) -> JSONResponse:
     """
     Handle visualization generation for chat responses.
@@ -1668,7 +1677,7 @@ def handle_visualization(
             current_question = query.text[-1] + response + VISUALISATION_PROMPT
             if query.model_choice.startswith("gemini"):
                 response = get_gemini_non_rag_response(
-                    configs, current_question, query.model_choice
+                    configs, current_question, query.model_choice, temperature
                 )
             else:
                 response = get_azure_non_rag_response(configs, current_question)
@@ -1711,6 +1720,7 @@ async def _initialize_chat_model(
     is_multi_file: bool,
     all_file_infos: Dict[str, Any],
     file_id_logging: str,  # For logging
+    temperature: float,
     is_tabular: Optional[bool] = None,  # New parameter with default None
 ) -> Tuple[Any, Optional[bool]]:  # Returns (model, determined_is_tabular)
     """
@@ -1722,7 +1732,7 @@ async def _initialize_chat_model(
     if is_multi_file:
         # Handle multi-file mode
         model, determined_is_tabular = await _initialize_multi_file_model(
-            query, configs, gcs_handler, all_file_infos
+            query, configs, gcs_handler, all_file_infos, temperature
         )
         logging.info(f"Model initialized for multi-file: {query.file_ids}")
         logging.info(f"  User: {query.user_id}, Model: {query.model_choice}")
@@ -1731,7 +1741,7 @@ async def _initialize_chat_model(
     elif query.file_id:
         # Handle single file mode
         model, determined_is_tabular = await _initialize_single_file_model(
-            query, configs, gcs_handler, all_file_infos, is_tabular
+            query, configs, gcs_handler, all_file_infos, is_tabular, temperature
         )
 
     else:
@@ -1997,6 +2007,7 @@ async def _format_chat_response(
     is_tabular: bool,
     is_multi_file: bool,
     configs: dict,
+    temperature: float,
 ) -> Dict[str, Any]:
     """
     Helper function to format the chat response based on response type and query parameters.
@@ -2016,7 +2027,7 @@ async def _format_chat_response(
         return format_table_response(response)
 
     if generate_visualization:
-        return handle_visualization(response, query, is_tabular, configs)
+        return handle_visualization(response, query, is_tabular, configs, temperature)
 
     final_response_data = {
         "response": str(response),
@@ -2153,7 +2164,25 @@ async def _process_file_info(
     }
 
 
-async def _detect_visualization_need(question: str, configs: dict) -> bool:
+def _get_default_temperature(model_choice: str) -> float:
+    """
+    Get the default temperature based on the model choice.
+
+    Args:
+        model_choice: The chosen model name
+
+    Returns:
+        Default temperature value (OpenAI: 0.5, Gemini: 0.8)
+    """
+    if model_choice.lower() in ["gemini-flash", "gemini-pro"]:
+        return 0.8  # Higher temperature for Gemini models for more creativity
+    else:
+        return 0.5  # Lower temperature for OpenAI models for better coherence
+
+
+async def _detect_visualization_need(
+    question: str, configs: dict, temperature: float = 0.8
+) -> bool:
     """
     Helper function to detect if visualization is needed based on user question.
 
@@ -2170,7 +2199,7 @@ async def _detect_visualization_need(question: str, configs: dict) -> bool:
     if should_visualize_filter:
         question_for_detection = CHART_DETECTION_PROMPT + question
         vis_detection_response = get_gemini_non_rag_response(
-            configs, question_for_detection, "gemini-flash"
+            configs, question_for_detection, "gemini-flash", temperature
         )
         if (
             vis_detection_response.lower() == "true"
@@ -2209,8 +2238,15 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
         current_actual_question = query.text[-1]
 
+        # Set temperature - use provided value or model-specific default
+        if query.temperature is not None:
+            temperature = query.temperature
+        else:
+            temperature = _get_default_temperature(query.model_choice)
+        logging.info(f"Using temperature {temperature} for model {query.model_choice}")
+
         generate_visualization = await _detect_visualization_need(
-            current_actual_question, configs
+            current_actual_question, configs, temperature
         )
 
         # Process file information and build the model key
@@ -2242,6 +2278,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                     is_multi_file=is_multi_file,
                     all_file_infos=all_file_infos,
                     file_id_logging=file_id_logging,
+                    temperature=temperature,
                     is_tabular=file_data[
                         "is_tabular"
                     ],  # Pass is_tabular flag from file_data
@@ -2273,6 +2310,7 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                 is_tabular=is_tabular,
                 is_multi_file=is_multi_file,
                 configs=configs,
+                temperature=temperature,
             )
 
         finally:
@@ -2806,6 +2844,7 @@ def _create_tabular_data_handler(
     model_choice: str,
     database_summaries: Dict[str, Any],
     all_file_infos: Dict[str, Any],
+    temperature: float,
 ) -> Any:
     """
     Create TabularDataHandler with error handling and fallback.
@@ -2829,6 +2868,7 @@ def _create_tabular_data_handler(
         file_ids=file_ids,
         database_summaries_param=database_summaries if database_summaries else None,
         all_file_infos=all_file_infos,
+        temperature=temperature,
     )
 
 
@@ -2920,6 +2960,7 @@ async def _handle_all_tabular_files(
     configs: dict,
     all_file_infos: Dict[str, Any],
     tabular_file_ids: List[str],
+    temperature: float,
 ) -> Tuple[Any, bool]:
     """
     Handle all tabular files in multi-file mode.
@@ -2953,6 +2994,7 @@ async def _handle_all_tabular_files(
             query.model_choice,
             database_summaries,
             all_file_infos,
+            temperature,
         )
         logging.info(
             f"Successfully initialized TabularDataHandler for {len(tabular_file_ids)} files"
@@ -2998,7 +3040,11 @@ async def _handle_all_non_tabular_files(
 
 
 async def _initialize_multi_file_model(
-    query: Query, configs: dict, gcs_handler: Any, all_file_infos: Dict[str, Any]
+    query: Query,
+    configs: dict,
+    gcs_handler: Any,
+    all_file_infos: Dict[str, Any],
+    temperature: float,
 ) -> Tuple[Any, bool]:
     """
     Initialize model for multi-file mode with proper classification and handling.
@@ -3034,7 +3080,7 @@ async def _initialize_multi_file_model(
     elif has_tabular_files and not has_non_tabular_files:
         # All tabular files
         model, is_tabular = await _handle_all_tabular_files(
-            query, configs, all_file_infos, tabular_file_ids
+            query, configs, all_file_infos, tabular_file_ids, temperature
         )
         # If tabular handler failed, fall back to standard Chatbot
         if model is None:
@@ -3058,7 +3104,7 @@ async def _initialize_multi_file_model(
 
 
 async def _initialize_single_file_tabular_model(
-    query: Query, configs: dict, all_file_infos: Dict[str, Any]
+    query: Query, configs: dict, all_file_infos: Dict[str, Any], temperature: float
 ) -> Any:
     """
     Initialize TabularDataHandler for single file with proper error handling.
@@ -3089,6 +3135,7 @@ async def _initialize_single_file_tabular_model(
             model_choice=query.model_choice,
             database_summaries_param=database_summaries if database_summaries else None,
             all_file_infos=all_file_infos,
+            temperature=temperature,
         )
         logging.info(f"Successfully initialized TabularDataHandler for {query.file_id}")
         return model
@@ -3104,6 +3151,7 @@ async def _initialize_single_file_model(
     gcs_handler: Any,
     all_file_infos: Dict[str, Any],
     is_tabular: Optional[bool],
+    temperature: float,
 ) -> Tuple[Any, bool]:
     """
     Initialize model for single file mode.
@@ -3128,7 +3176,7 @@ async def _initialize_single_file_model(
     # Try to initialize TabularDataHandler for tabular files
     if is_tabular:
         model = await _initialize_single_file_tabular_model(
-            query, configs, all_file_infos
+            query, configs, all_file_infos, temperature
         )
         if model:
             return model, True
@@ -3145,5 +3193,7 @@ async def _initialize_single_file_model(
 
     logging.info(f"Initializing RAG model for single file: {query.file_id}")
     logging.info(f"  User: {query.user_id}, Model: {query.model_choice}")
-    model = initialize_rag_model(query, configs, gcs_handler, single_file_info_for_init)
+    model = initialize_rag_model(
+        query, configs, gcs_handler, single_file_info_for_init, temperature
+    )
     return model, is_tabular

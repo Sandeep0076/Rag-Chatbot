@@ -1103,6 +1103,10 @@ def display_chat_interface():
                     "session_id": st.session_state.current_session_id,  # Include current session ID for isolation
                 }
 
+                # Add temperature parameter if set
+                if st.session_state.temperature is not None:
+                    chat_payload["temperature"] = st.session_state.temperature
+
                 if st.session_state.multi_file_mode and st.session_state.file_ids:
                     chat_payload["file_ids"] = st.session_state.file_ids
                     logging.info(
@@ -1270,6 +1274,9 @@ def initialize_ui_state():
         st.session_state.generate_visualization = False
     if "username" not in st.session_state:
         st.session_state.username = ""
+    # Initialize temperature parameter
+    if "temperature" not in st.session_state:
+        st.session_state.temperature = None  # None means use model defaults
 
 
 def initialize_session_state():
@@ -1761,6 +1768,44 @@ def render_sidebar():
         key="temp_model_choice",
         on_change=on_model_change,
     )
+
+    # Temperature control section
+    st.markdown(
+        '<div class="sidebar-header">Temperature Settings</div>', unsafe_allow_html=True
+    )
+
+    # Add help text for temperature
+    st.markdown(
+        "<small>Temperature controls randomness: 0.0 = focused, 1.0 = creative</small>",
+        unsafe_allow_html=True,
+    )
+
+    # Temperature control with checkbox for auto mode
+    use_auto_temperature = st.checkbox(
+        "Use model defaults",
+        value=st.session_state.temperature is None,
+        help="Let the system choose optimal temperature based on model type (OpenAI: 0.5, Gemini: 0.8)",
+    )
+
+    if use_auto_temperature:
+        st.session_state.temperature = None
+        st.markdown(
+            '<small style="color: #666;">Using automatic temperature based on model</small>',
+            unsafe_allow_html=True,
+        )
+    else:
+        # Temperature slider (0.0 to 2.0, step 0.1, default 0.7)
+        temperature_value = st.slider(
+            "Temperature",
+            min_value=0.0,
+            max_value=2.0,
+            value=0.7
+            if st.session_state.temperature is None
+            else st.session_state.temperature,
+            step=0.1,
+            help="Higher values make output more random, lower values more focused",
+        )
+        st.session_state.temperature = temperature_value
 
 
 def main():

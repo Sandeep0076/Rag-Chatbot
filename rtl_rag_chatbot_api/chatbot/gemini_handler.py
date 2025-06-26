@@ -35,6 +35,7 @@ class GeminiHandler(BaseRAGHandler):
         all_file_infos: dict = None,
         collection_name_prefix: str = "rag_collection_",
         user_id: str = None,
+        temperature: float = 0.8,
     ):
         super().__init__(configs, gcs_handler)
         # Initialize Gemini
@@ -68,6 +69,7 @@ class GeminiHandler(BaseRAGHandler):
         self.model_choice = model_choice
         self.user_id = user_id
         self.all_file_infos = all_file_infos if all_file_infos else {}
+        self.temperature = temperature
 
         # Flag to control which embedding system to use
         # With our unified approach, we always use Azure embeddings
@@ -79,7 +81,7 @@ class GeminiHandler(BaseRAGHandler):
         # Initialize the model if model_choice is provided
         if model_choice:
             # Map model choice to actual model name
-            self._initialize_gemini_model(model_choice)
+            self._initialize_gemini_model(model_choice, temperature)
 
         # Handle multi-file or single file mode
         if file_ids and len(file_ids) > 0:
@@ -107,8 +109,8 @@ class GeminiHandler(BaseRAGHandler):
             logger.info(f"GeminiHandler initialized for single-file: {self.file_id}")
         # If neither file_id nor file_ids are provided, do nothing - will be set during initialize()
 
-    def _initialize_gemini_model(self, model_choice: str):
-        """Initialize the Gemini model with the specified model choice."""
+    def _initialize_gemini_model(self, model_choice: str, temperature: float = 0.8):
+        """Initialize the Gemini model with the specified model choice and temperature."""
         # Map model choice to actual model name
         model_mapping = {
             "gemini-flash": self.configs.gemini.model_flash,
@@ -120,7 +122,7 @@ class GeminiHandler(BaseRAGHandler):
             raise ValueError(f"Invalid model choice: {model_choice}")
 
         generation_config = GenerationConfig(
-            temperature=0.9,
+            temperature=temperature,
             top_p=1,
             top_k=40,
             max_output_tokens=2048,
@@ -440,7 +442,9 @@ class GeminiHandler(BaseRAGHandler):
             return f"An error occurred while processing your question: {str(e)}"
 
 
-def get_gemini_non_rag_response(config, prompt: str, model_choice: str) -> str:
+def get_gemini_non_rag_response(
+    config, prompt: str, model_choice: str, temperature: float = 0.8
+) -> str:
     """
     Get a response from Gemini model without using RAG context.
 
@@ -474,7 +478,7 @@ def get_gemini_non_rag_response(config, prompt: str, model_choice: str) -> str:
 
         # Configure generation parameters for more focused responses
         generation_config = GenerationConfig(
-            temperature=0.1,  # Lower temperature for more focused responses
+            temperature=temperature,  # Configurable temperature
             max_output_tokens=1024,  # Reduced token limit to discourage verbosity
             top_p=0.8,  # More focused sampling
             top_k=20,  # More focused token selection

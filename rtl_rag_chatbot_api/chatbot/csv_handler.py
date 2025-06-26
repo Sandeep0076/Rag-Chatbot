@@ -55,6 +55,7 @@ class TabularDataHandler:
         file_ids: List[str] = None,
         database_summaries_param: Optional[Dict[str, Any]] = None,
         all_file_infos: Optional[Dict[str, Any]] = None,
+        temperature: float = None,
     ):
         """
         Initializes the TabularDataHandler with the given configuration and file information.
@@ -76,6 +77,15 @@ class TabularDataHandler:
         self.sessions = {}
         self.dbs = {}
         self.agents = {}
+
+        # Set temperature - use provided value or model-specific default
+        if temperature is not None:
+            self.temperature = temperature
+        elif model_choice.lower() in ["gemini-flash", "gemini-pro"]:
+            self.temperature = 0.8  # Higher temperature for Gemini models
+        else:
+            self.temperature = 0.5  # Lower temperature for OpenAI models
+
         # Initialize database_summaries with pre-loaded data if provided
         self.database_summaries = {}
         if database_summaries_param:
@@ -238,7 +248,7 @@ class TabularDataHandler:
                 model_name=model_name,
                 project=model_config.project,
                 location=model_config.location,
-                temperature=0.2,
+                temperature=self.temperature,
                 max_output_tokens=2048,
                 top_p=1,
                 top_k=40,
@@ -259,7 +269,7 @@ class TabularDataHandler:
             api_version=model_config.api_version,
             api_key=model_config.api_key,
             model_name=model_config.model_name,
-            temperature=0.2,
+            temperature=self.temperature,
         )
 
     @contextmanager
