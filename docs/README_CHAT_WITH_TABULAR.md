@@ -1,4 +1,4 @@
-# Chat with Tabular Data (CSV/Excel)
+@# Chat with Tabular Data (CSV/Excel)
 
 This document outlines the workflow and implementation details for chatting with tabular data (CSV/Excel files) in our RAG application.
 

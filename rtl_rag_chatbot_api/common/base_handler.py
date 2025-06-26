@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 class BaseRAGHandler:
     """Base class for RAG handlers implementing common functionality."""
 
-    def __init__(self, configs, gcs_handler):
+    def __init__(self, configs, gcs_handler, chroma_manager=None):
         self.configs = configs
         self.gcs_handler = gcs_handler
         # Use chunk size from config instead of hardcoded value
@@ -30,11 +30,11 @@ class BaseRAGHandler:
         self.user_id = None
         self.collection_name = None
         self.embedding_model = None
-        self.chroma_manager = ChromaDBManager()
+        # Use the provided chroma_manager or create a new one
+        self.chroma_manager = chroma_manager or ChromaDBManager()
 
-        # Model-specific token limits for response generation (not chunking)
+        # Model-specific token limBraceletits for response generation (not chunking)
         self.MODEL_TOKEN_LIMITS = {
-            "gpt_3_5_turbo": 8000,
             "gpt_4": 32000,
             "gpt_4o_mini": 128000,
             "gpt_4_omni": 128000,
@@ -43,8 +43,9 @@ class BaseRAGHandler:
         }
 
         self.AZURE_MAX_TOKENS = self.MODEL_TOKEN_LIMITS.get(
-            "gpt_3_5_turbo", 8000
-        )  # Use GPT-3.5 limit for Azure
+            "gpt_4o_mini",
+            128000,  # Default to gpt_4o_mini's limit for Azure if not specified elsewhere
+        )
         self.GEMINI_MAX_TOKENS = self.MODEL_TOKEN_LIMITS.get(
             "gemini-flash", 15000
         )  # Use Gemini Flash limit
@@ -121,7 +122,7 @@ class BaseRAGHandler:
         Args:
             chunks (List[str]): List of text chunks to be embedded
             file_id (str): Unique identifier for the file being processed
-            subfolder (str): Storage subfolder ('azure' or 'google') determining model type
+            subfolder (str): Storage subfolder (standardized on 'azure' for unified embedding approach)
 
         Returns:
             str: Status string ('completed' on success)
@@ -130,7 +131,7 @@ class BaseRAGHandler:
             # Get collection with explicit subfolder path
             collection = self.chroma_manager.get_collection(
                 file_id=file_id,
-                embedding_type=subfolder,  # 'azure' or 'google'
+                embedding_type=subfolder,  # Always 'azure' in the unified embedding approach
                 collection_name=self.collection_name,
                 user_id=None,  # No user filtering for embeddings creation
                 is_embedding=is_embedding,
@@ -147,24 +148,124 @@ class BaseRAGHandler:
             # Use configured chunk size for optimal RAG performance
             max_chunk_size = self.max_tokens
 
+            # Azure text-embedding-ada-002 has a maximum context length of 8192 tokens
+            # For safety, we'll use a slightly lower limit
+            AZURE_EMBEDDING_LIMIT = 8000
+
             for i in range(0, total_chunks):
                 chunk = chunks[i]
                 chunk_tokens = len(self.simple_tokenize(chunk))
 
+                # Safety check: If chunk is still too large even after splitting,
+                # log a warning and attempt to split it further
                 if chunk_tokens > max_chunk_size:
+                    logging.warning(
+                        f"Chunk {i} has {chunk_tokens} tokens, exceeding limit of {max_chunk_size}. "
+                        f"Attempting to split further."
+                    )
                     sub_chunks = self.split_large_chunk(chunk, max_chunk_size)
                     for sub_idx, sub_chunk in enumerate(sub_chunks):
                         sub_chunk_tokens = len(self.simple_tokenize(sub_chunk))
                         if sub_chunk_tokens <= max_chunk_size:
                             batch_to_process.append(sub_chunk)
                             batch_ids.append(f"{embedding_id}_{i}_sub{sub_idx}")
+                        else:
+                            # If even after splitting, chunk is too large, truncate it as last resort
+                            logging.error(
+                                f"Sub-chunk {sub_idx} still has {sub_chunk_tokens} tokens. "
+                                f"Truncating to {max_chunk_size} tokens."
+                            )
+                            truncated_chunk = self.truncate_text(
+                                sub_chunk, max_chunk_size
+                            )
+                            batch_to_process.append(truncated_chunk)
+                            batch_ids.append(
+                                f"{embedding_id}_{i}_sub{sub_idx}_truncated"
+                            )
                 else:
                     batch_to_process.append(chunk)
                     batch_ids.append(f"{embedding_id}_{i}")
 
-                if len(batch_to_process) >= self.BATCH_SIZE or i == total_chunks - 1:
-                    if batch_to_process:
-                        try:
+                # Calculate total tokens in current batch
+                batch_total_tokens = sum(
+                    len(self.simple_tokenize(b)) for b in batch_to_process
+                )
+
+                # Process batch if:
+                # 1. We've reached BATCH_SIZE chunks, OR
+                # 2. Adding the next chunk would exceed Azure's token limit, OR
+                # 3. We're at the last chunk
+                should_process_batch = (
+                    len(batch_to_process) >= self.BATCH_SIZE
+                    or batch_total_tokens > AZURE_EMBEDDING_LIMIT
+                    or i == total_chunks - 1
+                )
+
+                if should_process_batch and batch_to_process:
+                    try:
+                        # Log batch details before processing
+                        batch_token_counts = [
+                            len(self.simple_tokenize(b)) for b in batch_to_process
+                        ]
+                        logging.info(
+                            f"Processing batch {i // self.BATCH_SIZE + 1} with {len(batch_to_process)} chunks, "
+                            f"token counts: {batch_token_counts}, total: {batch_total_tokens}"
+                        )
+
+                        # For large chunks that approach Azure's limit, process them individually
+                        if (
+                            batch_total_tokens > AZURE_EMBEDDING_LIMIT
+                            and len(batch_to_process) > 1
+                        ):
+                            logging.info(
+                                f"Batch total ({batch_total_tokens}) exceeds Azure limit. "
+                                f"Processing chunks individually."
+                            )
+                            for idx, single_chunk in enumerate(batch_to_process):
+                                single_chunk_tokens = len(
+                                    self.simple_tokenize(single_chunk)
+                                )
+                                if single_chunk_tokens > AZURE_EMBEDDING_LIMIT:
+                                    logging.error(
+                                        f"Single chunk has {single_chunk_tokens} tokens, "
+                                        f"exceeding Azure limit of {AZURE_EMBEDDING_LIMIT}"
+                                    )
+                                    # Split this chunk further
+                                    smaller_chunks = self.split_large_chunk(
+                                        single_chunk, AZURE_EMBEDDING_LIMIT - 100
+                                    )
+                                    for small_idx, small_chunk in enumerate(
+                                        smaller_chunks
+                                    ):
+                                        embeddings = self.get_embeddings([small_chunk])
+                                        collection.add(
+                                            documents=[small_chunk],
+                                            embeddings=embeddings,
+                                            metadatas=[
+                                                {
+                                                    "source": file_id,
+                                                    "embedding_id": embedding_id,
+                                                }
+                                            ],
+                                            ids=[f"{batch_ids[idx]}_split_{small_idx}"],
+                                        )
+                                        processed_count += 1
+                                else:
+                                    embeddings = self.get_embeddings([single_chunk])
+                                    collection.add(
+                                        documents=[single_chunk],
+                                        embeddings=embeddings,
+                                        metadatas=[
+                                            {
+                                                "source": file_id,
+                                                "embedding_id": embedding_id,
+                                            }
+                                        ],
+                                        ids=[batch_ids[idx]],
+                                    )
+                                    processed_count += 1
+                        else:
+                            # Normal batch processing for smaller batches
                             embeddings = self.get_embeddings(batch_to_process)
                             collection.add(
                                 documents=batch_to_process,
@@ -176,19 +277,27 @@ class BaseRAGHandler:
                                 ids=batch_ids,
                             )
                             processed_count += len(batch_to_process)
-                            logging.info(
-                                f"Processed {processed_count}/{total_chunks} chunks"
-                            )
-                        except Exception as e:
-                            logging.error(
-                                f"Error processing batch at chunk {i}: {str(e)}"
-                            )
-                        finally:
-                            batch_to_process = []
-                            batch_ids = []
+
+                        logging.info(
+                            f"Processed {processed_count}/{total_chunks} chunks"
+                        )
+                    except Exception as e:
+                        logging.error(f"Error processing batch at chunk {i}: {str(e)}")
+                        # Log the problematic batch details for debugging
+                        problematic_counts = [
+                            len(self.simple_tokenize(b)) for b in batch_to_process
+                        ]
+                        logging.error(
+                            f"Problematic batch had {len(batch_to_process)} items "
+                            f"with token counts: {problematic_counts}"
+                        )
+                    finally:
+                        batch_to_process = []
+                        batch_ids = []
 
             # Store the embedding_id for reference
             self.embedding_id = embedding_id
+            logging.info(f"For {self.file_id}  embeddings are created successfully")
             return "completed"
         except Exception as e:
             logging.error(f"Error in create_and_store_embeddings: {str(e)}")
@@ -269,7 +378,7 @@ class BaseRAGHandler:
                     images = convert_from_path(file_path)
                     text = ""
                     for i, image in enumerate(images):
-                        logging.info(f"Processing page {i+1}")
+                        logging.info(f"Processing page {i + 1}")
                         text += pytesseract.image_to_string(image)
                     word_count = len(text.split())
 
@@ -301,13 +410,12 @@ class BaseRAGHandler:
         current_chunk = []
         current_chunk_tokens = 0
 
-        # Get appropriate token limit based on model type
-        if self.embedding_type == "azure":
-            max_tokens = self.AZURE_MAX_TOKENS
-        elif self.embedding_type == "google":
-            max_tokens = self.GEMINI_MAX_TOKENS
-        else:
-            max_tokens = self.max_tokens
+        # Use configured chunk size limit instead of Azure max tokens
+        # This is the critical fix - use the configured chunk size (e.g., 2000 tokens)
+        # instead of the Azure model limit (128,000 tokens)
+        max_tokens = self.max_tokens  # Use configured chunk_size_limit
+
+        logging.info(f"Splitting text with max_tokens limit: {max_tokens}")
 
         for paragraph in paragraphs:
             paragraph_tokens = len(self.simple_tokenize(paragraph))
@@ -344,6 +452,10 @@ class BaseRAGHandler:
 
         if current_chunk:
             chunks.append(" ".join(current_chunk))
+
+        # Log the chunking results for debugging
+        chunk_sizes = [len(self.simple_tokenize(chunk)) for chunk in chunks]
+        logging.info(f"Text split into {len(chunks)} chunks with sizes: {chunk_sizes}")
 
         return chunks
 
@@ -398,6 +510,23 @@ class BaseRAGHandler:
     def get_model_token_limit(self, model_name: str) -> int:
         """Get the token limit for a specific model."""
         return self.MODEL_TOKEN_LIMITS.get(model_name.lower(), 2000)
+
+    def truncate_text(self, text: str, max_tokens: int) -> str:
+        """Truncates text to a maximum number of tokens, preserving whole words if possible."""
+        if not text:  # Handle empty or None input text
+            return ""
+
+        tokens = self.simple_tokenize(text)  # Uses existing simple_tokenize
+        if len(tokens) <= max_tokens:
+            return text
+
+        # Join the allowed number of tokens and return
+        truncated_text = " ".join(tokens[:max_tokens])
+        logging.debug(
+            f"Truncated text from {len(tokens)} tokens to {max_tokens} tokens."
+            f"Original length: {len(text)}, Truncated length: {len(truncated_text)}"
+        )
+        return truncated_text
 
     def ensure_token_limit(self, text: str, model_name: str) -> List[str]:
         """

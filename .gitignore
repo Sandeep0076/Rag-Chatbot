@@ -20,4 +20,9 @@ tests/workflows/*.sql.runtime
 .coverage
 coverage.xml
 workflows/env_varaibles.txt
-env_varaibles.txt
+env_variables.txt
+.projectrules
+.windsurf/
+env_variables.txt
+old_working_chatwithcsv/
+userinput.py

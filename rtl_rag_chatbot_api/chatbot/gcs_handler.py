@@ -171,35 +171,110 @@ class GCSHandler:
             logging.error(f"Error checking if file exists in GCS: {str(e)}")
             return False
 
+    def _store_file_info_json_locally(self, blob_path: str, content: dict) -> None:
+        """
+        Store file_info.json locally in the chroma_db directory.
+
+        Args:
+            blob_path (str): Path of the blob in GCS
+            content (dict): Content to store in the file
+        """
+        local_path_parts = blob_path.split("/")
+        if len(local_path_parts) >= 3:
+            file_id = local_path_parts[1]
+            local_dir = f"./chroma_db/{file_id}"
+            local_path = f"{local_dir}/file_info.json"
+            os.makedirs(local_dir, exist_ok=True)
+            logging.info(f"Writing file_info.json locally to {local_path}")
+            try:
+                with open(local_path, "w") as f:
+                    json.dump(content, f, indent=2)
+            except Exception as e:
+                logging.error(f"Error writing file_info.json locally: {str(e)}")
+
+    def _store_encrypted_file_locally(self, source_path: str, blob_path: str) -> None:
+        """
+        Keep a local copy of an encrypted file in chroma_db directory.
+
+        Args:
+            source_path (str): Path to the source file
+            blob_path (str): Path of the blob in GCS
+        """
+        local_path_parts = blob_path.split("/")
+        if len(local_path_parts) >= 3 and "file-embeddings" in blob_path:
+            file_id = local_path_parts[1]
+            filename = local_path_parts[-1]
+            local_dir = f"./chroma_db/{file_id}"
+            local_path = f"{local_dir}/{filename}"
+            os.makedirs(local_dir, exist_ok=True)
+            try:
+                shutil.copy2(source_path, local_path)
+                logging.info(f"Copied encrypted file to local storage: {local_path}")
+            except Exception as e:
+                logging.error(f"Error copying encrypted file locally: {str(e)}")
+
+    def _upload_single_item(
+        self, bucket, source: Union[str, dict], destination_blob_name: str
+    ) -> None:
+        """
+        Upload a single item to GCS bucket and handle local storage if needed.
+
+        Args:
+            bucket: GCS bucket object
+            source: Source content (file path or dictionary)
+            destination_blob_name: Target blob path in GCS
+        """
+        blob = bucket.blob(destination_blob_name)
+
+        # Handle file_info.json (both GCS upload and local storage)
+        if (
+            isinstance(source, dict)
+            and "file-embeddings" in destination_blob_name
+            and destination_blob_name.endswith("/file_info.json")
+        ):
+            self._store_file_info_json_locally(destination_blob_name, source)
+
+        # Upload to GCS based on source type
+        if isinstance(source, dict):
+            blob.upload_from_string(
+                data=json.dumps(source), content_type="application/json"
+            )
+        elif isinstance(source, str):
+            # Handle encrypted files (keep local copy)
+            if destination_blob_name.endswith(".encrypted"):
+                self._store_encrypted_file_locally(source, destination_blob_name)
+
+            # Upload file to GCS
+            blob.upload_from_filename(source)
+
+        logging.info(f"Uploaded to {destination_blob_name}")
+
     def upload_to_gcs(
         self,
         bucket_name: str,
         source: Union[str, dict, Dict[str, Union[str, dict, tuple]]],
         destination_blob_name: Optional[str] = None,
     ):
+        """
+        Upload content to Google Cloud Storage.
+
+        Args:
+            bucket_name (str): Name of the GCS bucket
+            source: Content to upload, can be:
+                - A string (filepath)
+                - A dictionary (JSON content)
+                - A dictionary of (source, destination) tuples for batch upload
+            destination_blob_name (Optional[str]): Target path in GCS, not required for batch uploads
+        """
         bucket = self._storage_client.bucket(bucket_name)
 
         if isinstance(source, dict) and destination_blob_name is None:
-            # Multiple upload case
+            # Multiple upload case - process each item
             for _, (item_source, item_destination) in source.items():
-                blob = bucket.blob(item_destination)
-                if isinstance(item_source, dict):
-                    blob.upload_from_string(
-                        data=json.dumps(item_source), content_type="application/json"
-                    )
-                elif isinstance(item_source, str):
-                    blob.upload_from_filename(item_source)
-                print(f"Uploaded to {item_destination}")
+                self._upload_single_item(bucket, item_source, item_destination)
         else:
             # Single upload case
-            blob = bucket.blob(destination_blob_name)
-            if isinstance(source, dict):
-                blob.upload_from_string(
-                    data=json.dumps(source), content_type="application/json"
-                )
-            elif isinstance(source, str):
-                blob.upload_from_filename(source)
-            print(f"Uploaded to {destination_blob_name}")
+            self._upload_single_item(bucket, source, destination_blob_name)
 
     def find_existing_file_by_hash(self, file_hash):
         try:
@@ -235,27 +310,54 @@ class GCSHandler:
             if "username" in new_info:
                 current_username = new_info["username"]
 
-                # If there's an existing username field in current_info
-                if "username" in current_info:
-                    existing_username = current_info["username"]
-
-                    if not isinstance(existing_username, list):
-                        # If existing username is not already an array, convert to list
-                        existing_username = [existing_username]
-
-                    # append user to list, no matter if it's already there
-                    # the number of times the user is listed in the array is equivalent to the
-                    # number of times they've uploaded the file
-                    existing_username.append(current_username)
-                    new_info["username"] = existing_username
+                # If current_username is already a list (e.g., from URL metadata),
+                # we need to handle it differently than individual usernames
+                if isinstance(current_username, list):
+                    # If it's already a list, use it as-is for new files or merge for existing files
+                    if "username" in current_info:
+                        existing_username = current_info["username"]
+                        if not isinstance(existing_username, list):
+                            existing_username = [existing_username]
+                        # Merge the lists, preserving duplicates (tracks frequency)
+                        existing_username.extend(current_username)
+                        new_info["username"] = existing_username
+                    else:
+                        # No existing username, use the provided list as-is
+                        new_info["username"] = current_username
                 else:
-                    # No existing username, set as a single-item array
-                    new_info["username"] = [current_username]
+                    # Handle single username (traditional approach for PDFs)
+                    if "username" in current_info:
+                        existing_username = current_info["username"]
+
+                        if not isinstance(existing_username, list):
+                            # If existing username is not already an array, convert to list
+                            existing_username = [existing_username]
+
+                        # append user to list, no matter if it's already there
+                        # the number of times the user is listed in the array is equivalent to the
+                        # number of times they've uploaded the file
+                        existing_username.append(current_username)
+                        new_info["username"] = existing_username
+                    else:
+                        # No existing username, set as a single-item array
+                        new_info["username"] = [current_username]
 
             current_info.update(new_info)
             blob.upload_from_string(
                 json.dumps(current_info), content_type="application/json"
             )
+
+            # Also update the local copy of file_info.json
+            local_dir = f"./chroma_db/{file_id}"
+            local_path = f"{local_dir}/file_info.json"
+            if os.path.exists(local_path):
+                try:
+                    os.makedirs(local_dir, exist_ok=True)
+                    with open(local_path, "w") as f:
+                        json.dump(current_info, f, indent=2)
+                    logging.info(f"Updated local file_info.json at {local_path}")
+                except Exception as e:
+                    logging.error(f"Error updating local file_info.json: {str(e)}")
         else:
             # For new files, convert username to array if present
             if "username" in new_info and not isinstance(new_info["username"], list):
@@ -265,8 +367,19 @@ class GCSHandler:
                 json.dumps(new_info), content_type="application/json"
             )
 
+            # Also create the local copy of file_info.json for new files
+            local_dir = f"./chroma_db/{file_id}"
+            local_path = f"{local_dir}/file_info.json"
+            try:
+                os.makedirs(local_dir, exist_ok=True)
+                with open(local_path, "w") as f:
+                    json.dump(new_info, f, indent=2)
+                logging.info(f"Created local file_info.json at {local_path}")
+            except Exception as e:
+                logging.error(f"Error creating local file_info.json: {str(e)}")
+
     def update_username_list(self, file_id: str, username_list: list):
-        """Update the username list directly, replacing the existing list.
+        """Update the username list directly.
 
         Args:
             file_id (str): The ID of the file to update
@@ -274,14 +387,81 @@ class GCSHandler:
         """
         blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
         if blob.exists():
+            # Get the current file info from GCS
             current_info = json.loads(blob.download_as_bytes().decode("utf-8"))
-            current_info["username"] = username_list
+
+            # If we have a local copy of the file_info.json, use that for the username list
+            # to ensure we don't lose any recently added usernames
+            local_path = f"./chroma_db/{file_id}/file_info.json"
+            if os.path.exists(local_path):
+                try:
+                    with open(local_path, "r") as f:
+                        local_info = json.load(f)
+                        if "username" in local_info and isinstance(
+                            local_info["username"], list
+                        ):
+                            # Use the local username list if it exists as it may be more up-to-date
+                            current_username_list = local_info["username"]
+                        else:
+                            current_username_list = current_info.get("username", [])
+                except Exception as e:
+                    logging.error(f"Error reading local file_info.json: {str(e)}")
+                    # Fallback to the GCS version
+                    current_username_list = current_info.get("username", [])
+            else:
+                # No local file, use the GCS version
+                current_username_list = current_info.get("username", [])
+
+            # Ensure current_username_list is a list
+            if not isinstance(current_username_list, list):
+                current_username_list = (
+                    [current_username_list] if current_username_list else []
+                )
+
+            # Ensure username_list is a list
+            if not isinstance(username_list, list):
+                username_list = [username_list] if username_list else []
+
+            # Create a set for deduplication during comparison but preserve order and duplicates for storage
+            current_set = set(current_username_list)
+
+            # Add any new usernames that aren't in the current list
+            updated_list = current_username_list.copy()
+            for username in username_list:
+                if username not in current_set:
+                    updated_list.append(username)
+                    current_set.add(username)
+
+            # Update the file info with the merged username list
+            current_info["username"] = updated_list
+
+            # Upload the updated file info to GCS
             blob.upload_from_string(
                 json.dumps(current_info), content_type="application/json"
             )
-            logging.info(
-                f"Updated username list for file_id {file_id}: {username_list}"
-            )
+            logging.info(f"Updated username list for file_id {file_id}: {updated_list}")
+
+            # Also update the local copy of file_info.json
+            local_dir = f"./chroma_db/{file_id}"
+            if os.path.exists(local_path):
+                try:
+                    with open(local_path, "w") as f:
+                        json.dump(current_info, f, indent=2)
+                    logging.info(f"Updated local username list in {local_path}")
+                except Exception as e:
+                    logging.error(f"Error updating local username list: {str(e)}")
+            else:
+                try:
+                    os.makedirs(local_dir, exist_ok=True)
+                    with open(local_path, "w") as f:
+                        json.dump(current_info, f, indent=2)
+                    logging.info(
+                        f"Created local file_info.json with updated username list at {local_path}"
+                    )
+                except Exception as e:
+                    logging.error(
+                        f"Error creating local file_info.json with username list: {str(e)}"
+                    )
 
     def delete_embeddings(self, file_id: str):
         """
@@ -310,60 +490,7 @@ class GCSHandler:
             logging.error(f"Error in delete_embeddings: {str(e)}", exc_info=True)
             raise
 
-    def delete_google_embeddings(self):
-        """
-        Deletes all Google embeddings from the file-embeddings directory.
-        Only removes the 'google' folders within each file ID directory.
-        """
-        try:
-            logging.info("Starting deletion of all Google embeddings")
-            prefix = "file-embeddings/"
-
-            # List all blobs with the prefix
-            blobs = self.bucket.list_blobs(prefix=prefix)
-
-            # Track processed file IDs to avoid duplicate operations
-            processed_file_ids = set()
-
-            for blob in blobs:
-                # Extract file ID from path
-                parts = blob.name.split("/")
-                if len(parts) >= 3:
-                    file_id = parts[1]
-
-                    # Skip if we've already processed this file ID
-                    if file_id in processed_file_ids:
-                        continue
-
-                    # Only process if it's a file-embeddings directory
-                    if parts[0] == "file-embeddings":
-                        # List all blobs in the google folder for this file ID
-                        google_prefix = f"file-embeddings/{file_id}/google/"
-                        google_blobs = self.bucket.list_blobs(prefix=google_prefix)
-
-                        # Delete each blob in the google folder
-                        for google_blob in google_blobs:
-                            try:
-                                google_blob.delete()
-                                logging.info(f"Deleted blob: {google_blob.name}")
-                            except Exception as e:
-                                logging.error(
-                                    f"Error deleting blob {google_blob.name}: {str(e)}"
-                                )
-
-                        processed_file_ids.add(file_id)
-
-            logging.info(
-                f"Successfully deleted Google embeddings for {len(processed_file_ids)} file IDs"
-            )
-            return {
-                "message": f"Successfully deleted Google embeddings for {len(processed_file_ids)} file IDs"
-            }
-
-        except Exception as e:
-            error_msg = f"Error in delete_google_embeddings: {str(e)}"
-            logging.error(error_msg, exc_info=True)
-            raise Exception(error_msg)
+    # Removed delete_google_embeddings method as part of unified Azure embeddings approach
 
     def find_file_by_original_name(self, filename: str) -> Optional[str]:
         """

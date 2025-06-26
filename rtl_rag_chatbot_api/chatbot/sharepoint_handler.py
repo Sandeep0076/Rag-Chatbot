@@ -249,12 +249,8 @@ class SharePointHandler:
 
                 # Check if local embeddings exist
                 azure_path = f"./chroma_db/{existing_file_id}/azure"
-                gemini_path = f"./chroma_db/{existing_file_id}/google"
-                local_exists = (
-                    os.path.exists(azure_path)
-                    and os.path.exists(gemini_path)
-                    and os.path.exists(os.path.join(azure_path, "chroma.sqlite3"))
-                    and os.path.exists(os.path.join(gemini_path, "chroma.sqlite3"))
+                local_exists = os.path.exists(azure_path) and os.path.exists(
+                    os.path.join(azure_path, "chroma.sqlite3")
                 )
 
                 if not local_exists:

@@ -15,15 +15,15 @@ class CombinedImageGenerator:
 
     def __init__(self, configs, dalle_generator=None, imagen_generator=None):
         """
-        Initialize combined image generator with configurations.
+        Initialize combined image generator with configurations and existing generator instances.
 
         Args:
             configs: Application configuration object
-            dalle_generator: Optional existing DalleImageGenerator instance
-            imagen_generator: Optional existing ImagenGenerator instance
+            dalle_generator: Existing DalleImageGenerator instance (optional)
+            imagen_generator: Existing ImagenGenerator instance (optional)
         """
         self.configs = configs
-        # Use existing generators if provided, otherwise create new ones
+        # Use provided instances or create new ones if not provided
         self.dalle_generator = (
             dalle_generator if dalle_generator else DalleImageGenerator(configs)
         )

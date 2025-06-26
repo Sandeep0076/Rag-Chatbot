@@ -529,17 +529,111 @@ class WebsiteHandler:
         )
 
     def cleanup(self):
-        """Clean up resources used by the WebsiteHandler.
-
-        This method ensures that the Selenium WebDriver is properly closed.
-        """
+        """Clean up resources used by the WebsiteHandler."""
         if self._driver:
+            self._driver.quit()
+            self._driver = None
+
+    def extract_content_from_single_url(
+        self, url: str
+    ) -> Tuple[Optional[str], Optional[str], bool]:
+        """Extract content from a single URL using the best available method.
+
+        Args:
+            url: The URL to extract content from
+
+        Returns:
+            Tuple containing (content, title, is_successful)
+            - content: The extracted text or None if extraction failed
+            - title: The page title or None if not available
+            - is_successful: Boolean indicating whether extraction was successful
+        """
+        try:
+            logging.info(f"Attempting to extract content from URL: {url}")
+
+            # Make sure URL starts with http:// or https://
+            if not url.startswith("http://") and not url.startswith("https://"):
+                url = "https://" + url
+                logging.info(f"Added https:// prefix to URL: {url}")
+
+            # First try with trafilatura (preferred method)
             try:
-                self._driver.quit()
+                content, title = self.extract_content_with_trafilatura(url)
+                if content:
+                    logging.info(
+                        f"Successfully extracted content with trafilatura from {url},"
+                        f" title: {title}, content length: {len(content)}"
+                    )
             except Exception as e:
-                print(f"Error closing Selenium driver: {str(e)}")
-            finally:
-                self._driver = None
+                logging.warning(f"Trafilatura extraction failed for {url}: {str(e)}")
+                content, title = None, None
+
+            # If trafilatura fails, fall back to BeautifulSoup
+            if not content:
+                logging.info(
+                    f"Trafilatura failed or returned empty content for {url}, falling back to BeautifulSoup"
+                )
+                try:
+                    content = self.get_text_from_url(url)
+                    # Try to get the title using requests and BeautifulSoup
+                    response = requests.get(
+                        url,
+                        headers=self._get_browser_headers(),
+                        timeout=10,
+                        verify=False,
+                    )
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    title = soup.title.text.strip() if soup.title else None
+                    logging.info(
+                        f"Successfully extracted content with BeautifulSoup from {url}, "
+                        f"title: {title}, content length: {len(content) if content else 0}"
+                    )
+                except Exception as e:
+                    logging.error(
+                        f"Error with BeautifulSoup fallback extraction for {url}: {str(e)}"
+                    )
+                    return None, None, False
+
+            # Check if we have successfully extracted content
+            if content and len(content.strip()) > 0:
+                clean_content = content.strip()
+                logging.info(
+                    f"Content extraction successful for {url}, length: {len(clean_content)}"
+                )
+                return clean_content, title, True
+            else:
+                logging.warning(f"Content extraction failed for {url}: empty content")
+                return None, None, False
+
+        except Exception as e:
+            logging.error(
+                f"Unexpected error in extract_content_from_single_url for {url}: {str(e)}"
+            )
+            import traceback
+
+            logging.error(f"Traceback: {traceback.format_exc()}")
+            return None, None, False
+
+    def check_content_quality(self, text: str) -> Tuple[bool, int]:
+        """Check if the extracted content is substantive enough.
+
+        Args:
+            text: The text content to check
+
+        Returns:
+            Tuple of (is_substantive, word_count)
+        """
+        if not text:
+            return False, 0
+
+        # Count words in the text
+        words = text.split()
+        word_count = len(words)
+
+        # Simple heuristic: content is substantive if it has more than 150 words
+        is_substantive = word_count > 110
+
+        return is_substantive, word_count
 
     def _get_vectorstore_from_url(self, url: str) -> List[Document]:
         """Internal implementation for fetching content from a single URL.
