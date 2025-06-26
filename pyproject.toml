@@ -89,6 +89,11 @@ pytest-cov = "^5.0.0"
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 filterwarnings = [
@@ -97,8 +102,10 @@ filterwarnings = [
     "ignore::pydantic.PydanticDeprecatedSince20",
     "ignore:Type google._upb._message.MessageMapContainer uses PyType_Spec:DeprecationWarning",
     "ignore:Type google._upb._message.ScalarMapContainer uses PyType_Spec:DeprecationWarning",
-
 ]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
 
 [tool.poetry.scripts]
 start = "rtl_rag_chatbot_api.app:start"

@@ -3,7 +3,7 @@ import logging
 import os
 import tempfile
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import vertexai
 from vertexai.preview.vision_models import ImageGenerationModel
@@ -178,26 +178,42 @@ class ImagenGenerator:
         return None
 
     def _create_success_response(
-        self, image_data: str, prompt: str, size: str
+        self, image_data: Union[str, List[str]], prompt: str, size: str
     ) -> Dict[str, Any]:
-        """Create a success response with the image data.
+        """Create a success response.
 
         Args:
-            image_data: Base64 encoded image data
+            image_data: Base64 encoded image data URL or list of URLs for multiple images
             prompt: Original prompt
-            size: Original size
+            size: Image size
 
         Returns:
             Success response dictionary
         """
-        return {
-            "success": True,
-            "image_url": image_data,
-            "is_base64": True,
-            "prompt": prompt,
-            "model": self.configs.vertexai_imagen.model_name,
-            "size": size,
-        }
+        # Handle multiple images case
+        if isinstance(image_data, list):
+            return {
+                "success": True,
+                "is_base64": True,
+                "image_urls": image_data,  # List of image URLs
+                "image_url": image_data[0]
+                if image_data
+                else "",  # For backward compatibility
+                "prompt": prompt,
+                "model": self.configs.vertexai_imagen.model_name,
+                "size": size,
+            }
+        # Handle single image case (for backward compatibility)
+        else:
+            return {
+                "success": True,
+                "is_base64": True,
+                "image_url": image_data,
+                "image_urls": [image_data],  # Also include as list for consistency
+                "prompt": prompt,
+                "model": self.configs.vertexai_imagen.model_name,
+                "size": size,
+            }
 
     def _create_error_response(self, error_msg: str, prompt: str) -> Dict[str, Any]:
         """Create an error response.
@@ -276,18 +292,23 @@ class ImagenGenerator:
             logging.error("No images were generated")
             return self._create_error_response("No images were generated", prompt)
 
-        # Get the first generated image
-        generated_image = images[0]
-        logging.info(f"Generated image type: {type(generated_image)}")
+        # Process all generated images
+        all_image_data = []
 
-        # Log the attributes of the generated image
-        image_attributes = dir(generated_image)
-        logging.info(f"Image attributes: {image_attributes}")
+        for i, generated_image in enumerate(images):
+            logging.info(f"Processing image {i+1}/{len(images)}")
 
-        # Try to extract image data using all available methods
-        image_data = self._extract_image_data(generated_image)
-        if image_data:
-            return self._create_success_response(image_data, prompt, size="")
+            # Try to extract image data using all available methods
+            image_data = self._extract_image_data(generated_image)
+            if image_data:
+                all_image_data.append(image_data)
+            else:
+                logging.error(f"Failed to extract data for image {i+1}")
+
+        # Check if we extracted at least one image
+        if all_image_data:
+            logging.info(f"Successfully processed {len(all_image_data)} images")
+            return self._create_success_response(all_image_data, prompt, size="")
         else:
             return self._create_error_response(
                 "Could not extract image data from generated image", prompt

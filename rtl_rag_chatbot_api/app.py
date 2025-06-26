@@ -83,8 +83,10 @@ gemini_handler = GeminiHandler(configs, gcs_handler)
 file_handler = FileHandler(configs, gcs_handler, gemini_handler)
 model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler)
+# Initialize image handlers only once
 dalle_handler = DalleImageGenerator(configs)
 imagen_handler = ImagenGenerator(configs)
+# Pass existing handlers to avoid duplicate initialization
 combined_image_handler = CombinedImageGenerator(configs, dalle_handler, imagen_handler)
 
 # database connection

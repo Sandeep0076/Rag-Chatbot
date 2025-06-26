@@ -89,8 +89,8 @@ def prisma_to_sqlalchemy(schema: str) -> str:
                     :-2
                 ]  # Get the related model name (remove [])
                 relationship_field = (
-                    f'    {field_name} = relationship("{related_model}",',
-                    ' back_populates="{model_name.lower()}")',
+                    f'    {field_name} = relationship("{related_model}",'
+                    ' back_populates="{model_name.lower()}")'
                 )
                 relationship_fields.append(relationship_field)
 
@@ -137,8 +137,8 @@ def prisma_to_sqlalchemy(schema: str) -> str:
 
                     # add the relationship on the "many" side
                     relationship_field = (
-                        f'    {field_type.lower()} = relationship("{field_type.capitalize()}"',
-                        ', back_populates="{model_name.lower()}s")',
+                        f'    {field_type.lower()} = relationship("{field_type.capitalize()}"'
+                        ', back_populates="{model_name.lower()}s")'
                     )
                     relationship_fields.append(relationship_field)
 
@@ -160,10 +160,13 @@ def prisma_to_sqlalchemy(schema: str) -> str:
 
         # add regular fields first and then foreign key fields
         model_lines.extend(regular_fields)
+        print(f"Regular fields: {regular_fields}")
         model_lines.append("\n    # Foreign keys:")
         model_lines.extend(foreign_key_fields)
+        print(f"Foreign key fields: {foreign_key_fields}")
         model_lines.append("\n    # Relationships:")
         model_lines.extend(relationship_fields)
+        print(f"Relationship fields: {relationship_fields}")
 
         # add the model lines to the final list of models
         sqlalchemy_models.append("\n".join(model_lines))
@@ -185,8 +188,8 @@ if __name__ == "__main__":
     pydantic_output = prisma_to_pydantic(prisma_schema)
     sqlalchemy_output = prisma_to_sqlalchemy(prisma_schema)
 
-    with open("./workflows/db/models.py", "w") as models:
+    with open("./workflows/db/models-v2.py", "w") as models:
         models.writelines(pydantic_output)
 
-    with open("./workflows/db/tables.py", "w") as models:
+    with open("./workflows/db/tables-v2.py", "w") as models:
         models.writelines(sqlalchemy_output)

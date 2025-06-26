@@ -157,9 +157,7 @@ def test_mark_deletion_candidates(
 
 @patch("workflows.workflow.get_db_session")
 @patch("workflows.msgraph.is_user_account_enabled")  # Mock the Azure Graph API call
-@patch("workflows.db.helpers.iso8601_timestamp_now")  # Mock the datetime helper
 def test_already_marked_users(
-    mock_iso8601_timestamp_now,
     mock_is_user_account_enabled,
     mock_get_db_session,
     test_db_session,
@@ -168,11 +166,6 @@ def test_already_marked_users(
     # db session should use the test session. Use of __enter__ is necessary because
     # workflows.workflow.get_db_session has a `with get_db_session as ..:` statement.
     mock_get_db_session.return_value.__enter__.return_value = test_db_session
-
-    # iso8601_timestamp_now needs to be mocked because otherwise iso8601_timestamp_now()
-    # will return a new timestamp each time
-    mock_datetime_now = iso8601_timestamp_now()
-    mock_iso8601_timestamp_now.return_value = mock_datetime_now
 
     # call the workflow function
     mark_deletion_candidates()
@@ -192,3 +185,43 @@ def test_already_marked_users(
             datetime_from_iso8601_timestamp(iso8601_timestamp_now())
             - user5.wf_deletion_timestamp.replace(tzinfo=LOCAL_TIMEZONE)
         ).days > 28, "User 5's deletion timestamp should be older than 4 weeks."
+
+
+@patch("workflows.workflow.get_db_session")
+@patch("workflows.msgraph.is_user_account_enabled")  # Mock the Azure Graph API call
+def test_reactivated_user(
+    mock_is_user_account_enabled,
+    mock_get_db_session,
+    test_db_session,
+):
+    """
+    Tests that a user previously marked as a deletion candidate is unmarked
+    if their account is re-activated.
+    """
+    # db session should use the test session. Use of __enter__ is necessary because
+    # workflows.workflow.get_db_session has a `with get_db_session as ..:` statement.
+    mock_get_db_session.return_value.__enter__.return_value = test_db_session
+
+    # Mock the Azure Graph API to simulate account statuses
+    # Assume user4@example.com is re-activated (account enabled)
+    mock_is_user_account_enabled.side_effect = (
+        # new active user
+        lambda email: email == "user4@example.com"
+        # already active users
+        or email == "user1@example.com"
+        or email == "user2@example.com"
+        or email == "user3@example.com"
+    )
+
+    # Call the workflow function
+    mark_deletion_candidates()
+
+    # Verify that user4 is unmarked as a deletion candidate
+    with test_db_session as session:
+        user4 = session.query(User).filter(User.email == "user4@example.com").first()
+        assert (
+            user4.wf_deletion_candidate is False
+        ), "User4 should no longer be marked as a deletion candidate."
+        assert (
+            user4.wf_deletion_timestamp is None
+        ), "User4's deletion timestamp should be cleared."

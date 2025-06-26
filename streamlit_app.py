@@ -1134,6 +1134,8 @@ def display_chat_interface():
                                     f"visualization: {chart_config['title']}"
                                 ),
                             }
+                            # Removed unused image size and num_images selectors
+                            # These were likely intended for image generation but not connected to any functionality
                             st.session_state.messages.append(ai_message)
 
                             with st.chat_message("assistant"):

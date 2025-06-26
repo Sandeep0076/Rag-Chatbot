@@ -17,9 +17,9 @@ universal-helm-chart:
       kyverno.io/require-iap-monitoring-annotations: "ignore"
     timeoutSec: 120
   deployment:
-    scaleDown: true
+    scaleDown: false
     # switch back to 2 or 1 replica in dev after release
-    replicaCount: 4
+    replicaCount: 2
   container:
     resources:
       requests:
