@@ -75,7 +75,7 @@ or uncertainties in the interpretation. If the image does not contain text, grap
 Do not write anything that you cannot see the image."""
 
 
-def create_gpt4_payload(encoded_image: str) -> Dict[str, Any]:
+def create_gpt4_payload(encoded_image: str, temperature: float = 0.7) -> Dict[str, Any]:
     """Create payload for GPT-4-OMNI model."""
     return {
         "messages": [
@@ -99,14 +99,14 @@ def create_gpt4_payload(encoded_image: str) -> Dict[str, Any]:
                 ],
             },
         ],
-        "temperature": 0.7,
+        "temperature": temperature,
         "top_p": 0.95,
         "max_tokens": 4000,
     }
 
 
 async def analyze_single_image_gpt4(
-    image_path: str, api_key: str, endpoint: str
+    image_path: str, api_key: str, endpoint: str, temperature: float = 0.7
 ) -> Dict[str, Any]:
     """Analyze a single image using GPT-4-OMNI model."""
     try:
@@ -118,7 +118,7 @@ async def analyze_single_image_gpt4(
             "Content-Type": "application/json",
             "api-key": api_key,
         }
-        payload = create_gpt4_payload(encoded_image)
+        payload = create_gpt4_payload(encoded_image, temperature)
         logging.info(f"Making request to GPT-4 endpoint: {endpoint}")
 
         async with aiohttp.ClientSession() as session:
@@ -145,7 +145,7 @@ async def analyze_single_image_gpt4(
 
 
 async def analyze_single_image_gemini(
-    image_path: str, gemini_handler: GeminiHandler
+    image_path: str, gemini_handler: GeminiHandler, temperature: float = 0.1
 ) -> Dict[str, Any]:
     """Analyze a single image using Gemini Pro model."""
     try:
@@ -171,7 +171,7 @@ async def analyze_single_image_gemini(
         response = await loop.run_in_executor(
             None,
             lambda: gemini_handler.generative_model.generate_content(
-                [prompt, image_part], generation_config={"temperature": 0.1}
+                [prompt, image_part], generation_config={"temperature": temperature}
             ),
         )
 
@@ -209,7 +209,9 @@ async def analyze_images(
             error_msg = "AZURE_API_KEY environment variable not set"
             logging.error(error_msg)
             return {"error": error_msg}
-        tasks.append(analyze_single_image_gpt4(image_path, api_key, endpoint))
+        tasks.append(
+            analyze_single_image_gpt4(image_path, api_key, endpoint, temperature=0.7)
+        )
 
         # Note: Gemini analysis is disabled as part of unified Azure approach
         # The code for analyze_single_image_gemini is kept for reference only

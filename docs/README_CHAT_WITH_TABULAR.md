@@ -9,6 +9,7 @@ This document outlines the workflow and implementation details for chatting with
 - Manages SQL query generation and execution
 - Handles response formatting and visualization requests
 - Integrates with LLM models for natural language processing
+- **NEW**: Supports configurable temperature parameter for fine-tuning response creativity
 
 ### PrepareSQLFromTabularData
 - Handles conversion of CSV/Excel to SQLite
@@ -148,6 +149,49 @@ Common error scenarios and their handling:
 3. Query timeout → Timeout notification
 4. Data type mismatch → Data type guidance
 5. Invalid SQL → Query reformulation request
+
+## Temperature Parameter Support
+
+### Overview
+The tabular data handler now supports configurable temperature values to control the creativity and style of responses when processing natural language queries against CSV/Excel data.
+
+### Temperature Behavior for Tabular Data
+
+**Default Values:**
+- **OpenAI models (GPT series)**: `0.5` - Optimized for accurate data interpretation
+- **Gemini models**: `0.8` - Balanced for natural language explanations
+
+**Recommended Usage:**
+
+- **Low Temperature (0.1-0.3)**: For precise data queries requiring exact calculations
+  ```json
+  {
+    "text": ["What is the exact sum of revenue for Q3 2024?"],
+    "file_id": "csv-file-id",
+    "model_choice": "gpt_4o_mini",
+    "temperature": 0.2
+  }
+  ```
+
+- **Medium Temperature (0.4-0.7)**: For balanced data analysis with explanations
+  ```json
+  {
+    "text": ["Analyze the sales trends and explain the patterns"],
+    "file_id": "csv-file-id",
+    "model_choice": "gpt_4o_mini",
+    "temperature": 0.5
+  }
+  ```
+
+- **Higher Temperature (0.8-1.2)**: For creative data insights and storytelling
+  ```json
+  {
+    "text": ["Tell a story about what this sales data reveals about customer behavior"],
+    "file_id": "csv-file-id",
+    "model_choice": "gemini-flash",
+    "temperature": 1.0
+  }
+  ```
 
 ## Usage Examples
 

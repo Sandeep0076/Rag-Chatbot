@@ -168,9 +168,26 @@ Process chat queries against document content using specified language models.
     "model_choice": "gpt_4o_mini",
     "user_id": "user123",
     "session_id": "uuid-string",
+    "temperature": 0.7,
     "generate_visualization": false
   }
   ```
+
+- **Request Parameters**:
+  - `text` (required): Array of strings containing the conversation history with the current question as the last element
+  - `file_id` (optional): Single file ID for single-file chat
+  - `file_ids` (optional): Array of file IDs for multi-file chat
+  - `model_choice` (required): The language model to use (e.g., "gpt_4o_mini", "gemini-flash", "gemini-pro")
+  - `user_id` (required): Unique identifier for the user
+  - `session_id` (optional): Session identifier for tracking conversation context
+  - `temperature` (optional): Controls randomness in model responses (range: 0.0 - 2.0)
+    - **Default values**:
+      - OpenAI models (GPT series): `0.5` (more focused, coherent responses)
+      - Gemini models: `0.8` (more creative, diverse responses)
+    - **Lower values (0.0-0.3)**: More deterministic, focused responses
+    - **Medium values (0.4-0.7)**: Balanced creativity and coherence
+    - **Higher values (0.8-2.0)**: More creative, diverse, but potentially less coherent responses
+  - `generate_visualization` (optional): Whether to generate data visualizations for applicable queries
 - **Response Format**:
   ```json
   {
@@ -188,13 +205,50 @@ Process chat queries against document content using specified language models.
     "rows": [["value1", "value2"], ...]
   }
   ```
-- **Usage Example**:
+- **Usage Examples**:
+
+  **Basic Example**:
   1. Create a new request in Postman
   2. Set the request method to POST
   3. Enter the URL: `http://your-api-domain/file/chat`
   4. Go to the "Body" tab and select "raw" and "JSON"
   5. Enter the JSON request body with your query
   6. Click "Send" to chat with the document
+
+  **Temperature Usage Examples**:
+
+  *For precise, factual responses (technical documents, legal texts):*
+  ```json
+  {
+    "text": ["What are the exact specifications mentioned in this document?"],
+    "file_id": "uuid-string",
+    "model_choice": "gpt_4o_mini",
+    "user_id": "user123",
+    "temperature": 0.2
+  }
+  ```
+
+  *For balanced responses (general content, summaries):*
+  ```json
+  {
+    "text": ["Summarize the main points of this document"],
+    "file_id": "uuid-string",
+    "model_choice": "gpt_4o_mini",
+    "user_id": "user123",
+    "temperature": 0.5
+  }
+  ```
+
+  *For creative analysis (brainstorming, interpretations):*
+  ```json
+  {
+    "text": ["What are some creative applications of the concepts in this document?"],
+    "file_id": "uuid-string",
+    "model_choice": "gemini-flash",
+    "user_id": "user123",
+    "temperature": 1.0
+  }
+  ```
 
 ### Get Available Models
 
