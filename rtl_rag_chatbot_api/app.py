@@ -2029,6 +2029,44 @@ async def _format_chat_response(
     return final_response_data
 
 
+def _filter_context_from_file_info(file_info: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Filters a file_info dictionary to include only the necessary keys for context
+    and essential application logic, based on the file type.
+
+    Args:
+        file_info: The original file_info dictionary.
+
+    Returns:
+        A new, filtered dictionary.
+    """
+    if not file_info:
+        return {}
+
+    context_info = {}
+
+    # --- Essential keys for application logic ---
+    for key in ["is_tabular", "embeddings_status", "file_id"]:
+        if key in file_info:
+            context_info[key] = file_info[key]
+
+    # --- Context-specific keys based on user requirements ---
+
+    # `original_filename` is required for all types.
+    if "original_filename" in file_info:
+        context_info["original_filename"] = file_info["original_filename"]
+
+    # For URL-based files, add the `url`.
+    if "url" in file_info:
+        context_info["url"] = file_info["url"]
+
+    # For tabular files, add the `database_summary`.
+    if file_info.get("is_tabular") and "database_summary" in file_info:
+        context_info["database_summary"] = file_info["database_summary"]
+
+    return context_info
+
+
 async def _process_file_info(
     query: Query, gcs_handler: GCSHandler, generate_visualization: bool
 ) -> Dict[str, Any]:
@@ -2095,10 +2133,17 @@ async def _process_file_info(
             detail="Either file_id (for single chat) or file_ids (for multi-chat) must be provided.",
         )
 
+    # Filter the file info for each file to only include context-relevant data
+    filtered_all_file_infos = {
+        file_id: _filter_context_from_file_info(file_info)
+        for file_id, file_info in all_file_infos.items()
+    }
+    logging.info(f"Filtered context for LLM: {filtered_all_file_infos}")
+
     # Return consolidated result with consistent structure
     return {
         "is_multi_file": is_multi_file,
-        "all_file_infos": all_file_infos,
+        "all_file_infos": filtered_all_file_infos,  # Use the filtered info
         "model_key": model_key,
         "file_id_logging": file_id_logging,
         "is_tabular": is_tabular,
