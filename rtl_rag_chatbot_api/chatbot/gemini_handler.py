@@ -416,7 +416,9 @@ class GeminiHandler(BaseRAGHandler):
                         )
 
             # Construct the prompt with context
-            context_str = "\n".join(all_relevant_docs[:5])  # Limit to top 5 total docs
+            # Dynamic limit based on number of files to ensure all files get representation
+            max_docs = max(5, len(self.active_file_ids) * 3)  # At least 3 docs per file
+            context_str = "\n".join(all_relevant_docs[:max_docs])
 
             prompt = f"""{self.configs.chatbot.system_prompt_rag_llm}
             Elaborate and give detailed answer based on the context provided.
