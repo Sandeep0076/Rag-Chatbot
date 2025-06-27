@@ -177,7 +177,7 @@ Process chat queries against document content using specified language models.
   - `text` (required): Array of strings containing the conversation history with the current question as the last element
   - `file_id` (optional): Single file ID for single-file chat
   - `file_ids` (optional): Array of file IDs for multi-file chat
-  - `model_choice` (required): The language model to use (e.g., "gpt_4o_mini", "gemini-flash", "gemini-pro")
+  - `model_choice` (required): The language model to use (e.g., "gpt_4o_mini", "gemini-2.5-flash", "gemini-2.5-pro")
   - `user_id` (required): Unique identifier for the user
   - `session_id` (optional): Session identifier for tracking conversation context
   - `temperature` (optional): Controls randomness in model responses (range: 0.0 - 2.0)
@@ -244,7 +244,7 @@ Process chat queries against document content using specified language models.
   {
     "text": ["What are some creative applications of the concepts in this document?"],
     "file_id": "uuid-string",
-    "model_choice": "gemini-flash",
+    "model_choice": "gemini-2.5-flash",
     "user_id": "user123",
     "temperature": 1.0
   }
@@ -261,9 +261,9 @@ Retrieve a list of available models including Azure LLM models, Gemini models, a
 - **Response Format**:
   ```json
   {
-    "models": ["gpt_4o_mini", "gpt_4o", "gemini-flash", "gemini-pro", "dall-e-3", "imagen-3.0", "Dalle + Imagen"],
+    "models": ["gpt_4o_mini", "gpt_4o", "gemini-flash", "gemini-pro", "gemini-2.5-flash", "gemini-2.5-pro", "dall-e-3", "imagen-3.0", "Dalle + Imagen"],
     "model_types": {
-      "text": ["gpt_4o_mini", "gpt_4o", "gemini-flash", "gemini-pro"],
+      "text": ["gpt_4o_mini", "gpt_4o", "gemini-flash", "gemini-pro", "gemini-2.5-flash", "gemini-2.5-pro"],
       "image": ["dall-e-3", "imagen-3.0", "Dalle + Imagen"]
     }
   }
@@ -276,7 +276,7 @@ Retrieve a list of available models including Azure LLM models, Gemini models, a
 
 ### Chat with Gemini
 
-Chat with Gemini models (Flash or Pro) without RAG or file context.
+Chat with Gemini models (Flash, Pro, 2.5 Flash, or 2.5 Pro) without RAG or file context.
 
 - **Endpoint URL**: `/chat/gemini`
 - **HTTP Method**: POST
@@ -286,7 +286,7 @@ Chat with Gemini models (Flash or Pro) without RAG or file context.
 - **Request Body**:
   ```json
   {
-    "model": "gemini-pro",
+    "model": "gemini-2.5-pro",
     "message": "Tell me about artificial intelligence"
   }
   ```

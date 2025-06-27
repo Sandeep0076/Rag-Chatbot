@@ -188,7 +188,7 @@ The tabular data handler now supports configurable temperature values to control
   {
     "text": ["Tell a story about what this sales data reveals about customer behavior"],
     "file_id": "csv-file-id",
-    "model_choice": "gemini-flash",
+    "model_choice": "gemini-2.5-flash",
     "temperature": 1.0
   }
   ```

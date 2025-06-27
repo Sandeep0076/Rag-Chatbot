@@ -25,7 +25,7 @@ class ModelHandler:
 
             collection_name = f"rag_collection_{file_id}"
 
-            if model_choice.lower() in ["gemini-flash", "gemini-pro"]:
+            if model_choice.lower() in ["gemini-2.5-flash", "gemini-2.5-pro"]:
                 model = GeminiHandler(self.configs, self.gcs_handler)
                 model.initialize(
                     model=model_choice,

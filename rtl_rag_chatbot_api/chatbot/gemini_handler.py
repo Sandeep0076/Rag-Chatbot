@@ -111,16 +111,20 @@ class GeminiHandler(BaseRAGHandler):
 
     def _initialize_gemini_model(self, model_choice: str, temperature: float = 0.8):
         """Initialize the Gemini model with the specified model choice and temperature."""
-        # Map model choice to actual model name
+        # Map model choice to actual model name - only 2.5 models
         model_mapping = {
-            "gemini-flash": self.configs.gemini.model_flash,
-            "gemini-pro": self.configs.gemini.model_pro,
+            "gemini-2.5-flash": self.configs.gemini.model_flash_2_5,
+            "gemini-2.5-pro": self.configs.gemini.model_pro_2_5,
         }
 
         actual_model = model_mapping.get(model_choice)
         if not actual_model:
-            raise ValueError(f"Invalid model choice: {model_choice}")
+            raise ValueError(
+                f"Invalid model choice: {model_choice}. "
+                f"Available models: {list(model_mapping.keys())}"
+            )
 
+        # Use VertexAI approach for all Gemini models (including 2.5)
         generation_config = GenerationConfig(
             temperature=temperature,
             top_p=1,
@@ -275,6 +279,15 @@ class GeminiHandler(BaseRAGHandler):
     def get_gemini_response_stream(self, prompt: str) -> str:
         """Stream responses from Gemini model and concatenate them."""
         try:
+            # Ensure model is initialized
+            if self.generative_model is None:
+                if not self.model_choice:
+                    raise ValueError(
+                        "Model choice not set. Cannot initialize Gemini model."
+                    )
+                self._initialize_gemini_model(self.model_choice, self.temperature)
+
+            # Use VertexAI approach for all Gemini models (including 2.5)
             responses = self.generative_model.generate_content(prompt, stream=True)
             full_response = ""
             for response in responses:
@@ -453,7 +466,8 @@ def get_gemini_non_rag_response(
     Args:
         config: Configuration object containing Gemini settings
         prompt (str): The prompt to send to the model
-        model_choice (str): The specific Gemini model to use (e.g., 'gemini-flash', 'gemini-pro')
+        model_choice (str): The specific Gemini model to use
+            (gemini-2.5-flash or gemini-2.5-pro)
 
     Returns:
         str: The model's response
@@ -462,18 +476,22 @@ def get_gemini_non_rag_response(
         ValueError: If model configuration is invalid
     """
     try:
-        # Initialize Vertex AI
-        vertexai.init(project=config.gemini.project, location=config.gemini.location)
-
-        # Map model choice to actual model name
+        # Map model choice to actual model name - only 2.5 models
         model_mapping = {
-            "gemini-flash": config.gemini.model_flash,
-            "gemini-pro": config.gemini.model_pro,
+            "gemini-2.5-flash": config.gemini.model_flash_2_5,
+            "gemini-2.5-pro": config.gemini.model_pro_2_5,
         }
 
         model_name = model_mapping.get(model_choice)
         if not model_name:
-            raise ValueError(f"Invalid Gemini model choice: {model_choice}")
+            raise ValueError(
+                f"Invalid Gemini model choice: {model_choice}. "
+                f"Available models: {list(model_mapping.keys())}"
+            )
+
+        # Use VertexAI approach for all Gemini models (including 2.5)
+        # Initialize Vertex AI
+        vertexai.init(project=config.gemini.project, location=config.gemini.location)
 
         # Initialize the model
         model = GenerativeModel(model_name)

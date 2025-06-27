@@ -81,7 +81,7 @@ class TabularDataHandler:
         # Set temperature - use provided value or model-specific default
         if temperature is not None:
             self.temperature = temperature
-        elif model_choice.lower() in ["gemini-flash", "gemini-pro"]:
+        elif model_choice.lower() in ["gemini-2.5-flash", "gemini-2.5-pro"]:
             self.temperature = 0.8  # Higher temperature for Gemini models
         else:
             self.temperature = 0.5  # Lower temperature for OpenAI models
@@ -231,10 +231,10 @@ class TabularDataHandler:
             if not model_config:
                 raise ValueError("Configuration for Gemini model not found")
 
-            # Map model choice to actual model name
+            # Map model choice to actual model name - only 2.5 models
             model_mapping = {
-                "gemini-flash": model_config.model_flash,
-                "gemini-pro": model_config.model_pro,
+                "gemini-2.5-flash": model_config.model_flash_2_5,
+                "gemini-2.5-pro": model_config.model_pro_2_5,
             }
 
             model_name = model_mapping.get(self.model_choice)

@@ -33,13 +33,13 @@ class BaseRAGHandler:
         # Use the provided chroma_manager or create a new one
         self.chroma_manager = chroma_manager or ChromaDBManager()
 
-        # Model-specific token limBraceletits for response generation (not chunking)
+        # Model-specific token limits for response generation (not chunking)
         self.MODEL_TOKEN_LIMITS = {
             "gpt_4": 32000,
             "gpt_4o_mini": 128000,
             "gpt_4_omni": 128000,
-            "gemini-pro": 30500,
-            "gemini-flash": 15000,
+            "gemini-2.5-pro": 2097152,  # 2M tokens for Gemini 2.5 Pro
+            "gemini-2.5-flash": 1048576,  # 1M tokens for Gemini 2.5 Flash
         }
 
         self.AZURE_MAX_TOKENS = self.MODEL_TOKEN_LIMITS.get(
