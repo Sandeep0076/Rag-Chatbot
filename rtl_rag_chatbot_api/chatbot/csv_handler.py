@@ -233,8 +233,8 @@ class TabularDataHandler:
 
             # Map model choice to actual model name - only 2.5 models
             model_mapping = {
-                "gemini-2.5-flash": model_config.model_flash_2_5,
-                "gemini-2.5-pro": model_config.model_pro_2_5,
+                "gemini-2.5-flash": model_config.model_flash,
+                "gemini-2.5-pro": model_config.model_pro,
             }
 
             model_name = model_mapping.get(self.model_choice)
