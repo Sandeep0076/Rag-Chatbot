@@ -108,37 +108,37 @@ def create_gpt4_payload(encoded_image: str, temperature: float = 0.7) -> Dict[st
 async def analyze_single_image_gpt4(
     image_path: str, api_key: str, endpoint: str, temperature: float = 0.7
 ) -> Dict[str, Any]:
-    """Analyze a single image using GPT-4-OMNI model."""
+    """Analyze a single image using GPT-4.1 model."""
     try:
-        logging.info(f"Analyzing image with GPT-4: {image_path}")
+        logging.info(f"Analyzing image with GPT-4.1: {image_path}")
         encoded_image = encode_image(image_path)
-        logging.info("Image encoded successfully for GPT-4")
+        logging.info("Image encoded successfully for GPT-4.1")
 
         headers = {
             "Content-Type": "application/json",
             "api-key": api_key,
         }
         payload = create_gpt4_payload(encoded_image, temperature)
-        logging.info(f"Making request to GPT-4 endpoint: {endpoint}")
+        logging.info(f"Making request to GPT-4.1 endpoint: {endpoint}")
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 endpoint, headers=headers, json=payload
             ) as response:
-                logging.info(f"GPT-4 API Response status: {response.status}")
+                logging.info(f"GPT-4.1 API Response status: {response.status}")
                 response_json = await response.json()
 
                 if response.status != 200:
-                    error_msg = f"GPT-4 API error: {response_json.get('error', 'Unknown error')}"
+                    error_msg = f"GPT-4.1 API error: {response_json.get('error', 'Unknown error')}"
                     logging.error(error_msg)
                     return {"error": error_msg}
 
                 analysis = response_json["choices"][0]["message"]["content"]
-                logging.info(f"GPT-4 analysis successful for {image_path}")
+                logging.info(f"GPT-4.1 analysis successful for {image_path}")
                 return {"analysis": analysis}
     except Exception as e:
         error_msg = (
-            f"Failed to analyze image with GPT-4 for {image_path}. Error: {str(e)}"
+            f"Failed to analyze image with GPT-4.1 for {image_path}. Error: {str(e)}"
         )
         logging.error(error_msg)
         return {"error": error_msg}
@@ -190,7 +190,7 @@ async def analyze_images(
     model: str = "gpt4-omni",  # Default to only using GPT-4 (Azure)
     gemini_handler: Optional[GeminiHandler] = None,
 ) -> Dict[str, Any]:
-    """Analyze images using GPT-4-OMNI for unified Azure approach.
+    """Analyze images using GPT-4.1 for unified Azure approach.
     Note: Gemini analysis is kept in codebase but disabled as part of unified Azure approach.
     """
     try:
@@ -202,11 +202,13 @@ async def analyze_images(
         results = {}
         tasks = []
 
-        # Only use GPT-4 analysis task for the unified Azure approach
+        # Only use GPT-4.1 analysis task for the unified Azure approach
         endpoint = construct_endpoint_url()
-        api_key = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__API_KEY")
+        api_key = os.getenv("AZURE_LLM__MODELS__GPT_4_1__API_KEY")
         if not api_key:
-            error_msg = "AZURE_API_KEY environment variable not set"
+            error_msg = (
+                "AZURE_LLM__MODELS__GPT_4_1__API_KEY environment variable not set"
+            )
             logging.error(error_msg)
             return {"error": error_msg}
         tasks.append(
@@ -219,7 +221,7 @@ async def analyze_images(
         # Run analysis
         completed_tasks = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Process results - only Azure GPT-4 is used
+        # Process results - only Azure GPT-4.1 is used
         gpt4_result = completed_tasks[0]
         results["gpt4_analysis"] = (
             gpt4_result["analysis"]
@@ -236,10 +238,10 @@ async def analyze_images(
 
 
 def construct_endpoint_url() -> str:
-    """Construct the endpoint URL for GPT-4-OMNI model."""
-    base_url = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__ENDPOINT", "").rstrip("/")
-    deployment = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__DEPLOYMENT", "")
-    api_version = os.getenv("AZURE_LLM__MODELS__GPT_4_OMNI__API_VERSION", "")
+    """Construct the endpoint URL for GPT-4.1 model."""
+    base_url = os.getenv("AZURE_LLM__MODELS__GPT_4_1__ENDPOINT", "").rstrip("/")
+    deployment = os.getenv("AZURE_LLM__MODELS__GPT_4_1__DEPLOYMENT", "")
+    api_version = os.getenv("AZURE_LLM__MODELS__GPT_4_1__API_VERSION", "")
 
     # Construct the endpoint URL
     endpoint = f"{base_url}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
