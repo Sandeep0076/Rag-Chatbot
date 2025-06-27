@@ -49,3 +49,27 @@ make e2e # create request to local api endpoint and prints response
 ```
 make test
 ```
+
+## Documentation
+
+### API Usage
+- [API Usage Guide](README_API_USAGE.md) - Comprehensive guide for using the API endpoints
+
+### Chat Features
+- [Chat with PDF Documents](README_CHAT_WITH_PDF.md) - Guide for chatting with PDF files
+- [Chat with Multiple Files](README_CHAT_WITH_MULTIPLE_FILES.md) - Multi-file chat functionality
+- [Chat with Tabular Data](README_CHAT_WITH_TABULAR.md) - Working with CSV/Excel files
+
+### Model Integration
+- [Gemini 2.5 Models Integration](gemini-2.5-integration.md) - NEW: Guide for using Gemini 2.5 Flash and Pro models
+
+### Technical Workflows
+- [Embedding Workflow](embedding-workflow.md) - Document embedding process
+- [Async Parallel Embedding](async-parallel-embedding-guide.md) - Parallel processing guide
+- [ChromaDB Manager](chromadb-manager-guide.md) - Vector database management
+- [CSV Workflow](csv-workflow-readme.md) - Tabular data processing
+- [Cleanup Workflow](cleanup-workflow.md) - Resource cleanup procedures
+
+### Image Generation
+- [Image Generation API](image_generation_api.md) - API for generating images
+- [Image Generation Guide](image_generation.md) - Using DALL-E and Imagen models

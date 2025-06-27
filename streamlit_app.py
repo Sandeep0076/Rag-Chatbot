@@ -1249,10 +1249,14 @@ def setup_default_model_types():
 
 def setup_fallback_models():
     """Set up fallback models if API call fails."""
-    st.session_state.available_models = ["gpt_4o_mini", "gemini-pro"]
+    st.session_state.available_models = [
+        "gpt_4o_mini",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+    ]
     # Fallback model types if API call fails
     st.session_state.model_types = {
-        "text": ["gpt_4o_mini", "gemini-pro"],
+        "text": ["gpt_4o_mini", "gemini-2.5-flash", "gemini-2.5-pro"],
         "image": [
             "dall-e-3",
             "imagen-3.0-generate-002",

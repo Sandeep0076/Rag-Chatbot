@@ -56,8 +56,8 @@ class GCPResourceConfig(BaseModel):
 
 
 class GeminiConfig(BaseModel):
-    model_flash: str
-    model_pro: str
+    model_flash: str = "gemini-2.5-flash"
+    model_pro: str = "gemini-2.5-pro"
     project: str
     location: str
     model_config = {"protected_namespaces": ()}
