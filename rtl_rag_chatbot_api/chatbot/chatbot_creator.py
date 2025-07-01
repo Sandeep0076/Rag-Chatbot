@@ -263,7 +263,10 @@ class AzureChatbot(BaseRAGHandler):
                     model=self.model_config.deployment,
                     messages=messages,
                     max_completion_tokens=max_response_tokens,
-                    # Use max_completion_tokens instead of max_tokens for o3 models
+                    temperature=1,
+                    top_p=1,
+                    frequency_penalty=0,
+                    presence_penalty=0,
                     stop=None,
                     stream=False,
                 )
@@ -346,6 +349,10 @@ def get_azure_non_rag_response(
                 model=configs.azure_llm.models[model_choice].deployment,
                 messages=messages,
                 max_completion_tokens=configs.llm_hyperparams.max_tokens,
+                temperature=1,
+                top_p=1,
+                frequency_penalty=0,
+                presence_penalty=0,
                 stop=configs.llm_hyperparams.stop,
                 stream=False,
             )
