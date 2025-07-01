@@ -1764,13 +1764,12 @@ async def _initialize_chat_model(
 
 
 async def _log_session_info(query: Query) -> None:
-    """Log session information if provided in the query.
+    """Log session information from the query.
 
     Args:
-        query: Query containing optional session_id
+        query: Query containing mandatory session_id
     """
-    if query.session_id:
-        logging.info(f"Request contains session_id: {query.session_id}")
+    logging.info(f"Processing chat request for session_id: {query.session_id}")
 
 
 async def _process_single_file(query: Query, gcs_handler: GCSHandler) -> Dict[str, Any]:
@@ -1788,10 +1787,9 @@ async def _process_single_file(query: Query, gcs_handler: GCSHandler) -> Dict[st
     logging.info(f"Single-file chat request for {file_id_logging}")
     file_info_single = gcs_handler.get_file_info(query.file_id)
 
-    if query.session_id:
-        logging.info(
-            f"Processing single file {query.file_id} for session {query.session_id}"
-        )
+    logging.info(
+        f"Processing single file {query.file_id} for session {query.session_id}"
+    )
 
     is_tabular = False
     if file_info_single:
@@ -1964,10 +1962,7 @@ async def _process_multi_files(query: Query, gcs_handler: GCSHandler) -> Dict[st
 
     # The frontend is responsible for sending only the file_ids relevant to the current session
     # We trust that the file_ids provided in the query belong to the current session
-    if query.session_id:
-        logging.info(
-            f"Processing files for session {query.session_id}: {query.file_ids}"
-        )
+    logging.info(f"Processing files for session {query.session_id}: {query.file_ids}")
 
     if not query.file_ids:
         raise HTTPException(

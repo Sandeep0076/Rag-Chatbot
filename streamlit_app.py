@@ -725,19 +725,37 @@ def process_multiple_files(uploaded_files, is_image):
                         f"Added file {filename} (ID: {file_id}) to current session - Status: {status}"
                     )
             else:
-                # Handle legacy single file response (shouldn't happen with our new implementation)
+                # Handle single file response (multi_file_mode=False)
                 file_id = upload_result.get("file_id")
                 filename = upload_result.get("original_filename")
 
-                logging.warning(
-                    f"Received unexpected single-file response for file: {filename}"
-                )
+                logging.info(f"Received single-file response for file: {filename}")
 
-                # Process it anyway for robustness
+                # CRITICAL FIX: Extract and set session_id for single file uploads
+                session_id = upload_result.get("session_id")
+                logging.info(
+                    f"Extracted session_id from single file upload result: {session_id}"
+                )
+                if session_id:
+                    st.session_state.current_session_id = session_id
+                    logging.info(
+                        f"Successfully set session_id in session state: {session_id}"
+                    )
+                else:
+                    logging.error("No session_id found in single file upload response!")
+                    st.error(
+                        "Upload succeeded but no session ID was returned. Please try again."
+                    )
+
+                # Process file info
                 if file_id:
-                    # Same processing as above
+                    # Reset file_ids for new session
+                    st.session_state.file_ids = []
+
+                    # Set session state
                     st.session_state.file_id = file_id
                     st.session_state.file_uploaded = True
+                    st.session_state.multi_file_mode = False
 
                     if "processed_file_map" not in st.session_state:
                         st.session_state.processed_file_map = {}
@@ -751,14 +769,15 @@ def process_multiple_files(uploaded_files, is_image):
                     st.session_state.uploaded_files[file_id] = {
                         "name": filename,
                         "type": st.session_state.file_type,
+                        "session_id": session_id,  # Track which session this file belongs to
                     }
                     st.session_state.file_names[file_id] = filename
 
-                    if file_id not in st.session_state.file_ids:
-                        st.session_state.file_ids.append(file_id)
-                        logging.info(
-                            f"Added file {filename} (ID: {file_id}) to active list (single mode)"
-                        )
+                    # Add to file_ids list for current session
+                    st.session_state.file_ids.append(file_id)
+                    logging.info(
+                        f"Added file {filename} (ID: {file_id}) to current session (single mode)"
+                    )
 
             return True
         else:
@@ -994,9 +1013,21 @@ def handle_file_upload():
 
                                 # Store session_id if provided
                                 session_id = result.get("session_id")
+                                logging.info(
+                                    f"Extracted session_id from upload result: {session_id}"
+                                )
                                 if session_id:
                                     st.session_state.current_session_id = session_id
-                                    logging.info(f"Set session_id: {session_id}")
+                                    logging.info(
+                                        f"Successfully set session_id in session state: {session_id}"
+                                    )
+                                else:
+                                    logging.error(
+                                        "No session_id found in upload response!"
+                                    )
+                                    st.error(
+                                        "Upload succeeded but no session ID was returned. Please try again."
+                                    )
 
                                 logging.info(
                                     f"Final session state: multi_file_mode={st.session_state.multi_file_mode}, "
@@ -1095,6 +1126,17 @@ def display_chat_interface():
                 )
 
                 # Prepare chat payload based on mode (single or multi-file)
+                # Ensure we have a valid session_id before making the request
+                if not st.session_state.current_session_id:
+                    st.error(
+                        "Error: No session ID available. Please upload the file again."
+                    )
+                    return
+
+                logging.info(
+                    f"Using session_id for chat: {st.session_state.current_session_id}"
+                )
+
                 chat_payload = {
                     "text": previous_messages,  # This will include history and current message
                     "model_choice": st.session_state.model_choice,
@@ -1592,6 +1634,20 @@ def process_url_input(url_input):
                 )
                 return
 
+            # CRITICAL FIX: Extract and set session_id for URL uploads
+            session_id = upload_result.get("session_id")
+            logging.info(f"Extracted session_id from URL upload result: {session_id}")
+            if session_id:
+                st.session_state.current_session_id = session_id
+                logging.info(
+                    f"Successfully set session_id in session state: {session_id}"
+                )
+            else:
+                logging.error("No session_id found in URL upload response!")
+                st.error(
+                    "URL processing succeeded but no session ID was returned. Please try again."
+                )
+
             st.session_state.file_uploaded = True
             st.session_state.messages = []  # Reset chat history
         else:
@@ -1646,6 +1702,22 @@ def process_file_upload(uploaded_file, is_image):
                 st.warning(f"{uploaded_file.name}: {upload_result['message']}")
             else:
                 st.info(upload_result["message"])
+
+            # CRITICAL FIX: Extract and set session_id for single file uploads
+            session_id = upload_result.get("session_id")
+            logging.info(
+                f"Extracted session_id from single file upload result: {session_id}"
+            )
+            if session_id:
+                st.session_state.current_session_id = session_id
+                logging.info(
+                    f"Successfully set session_id in session state: {session_id}"
+                )
+            else:
+                logging.error("No session_id found in single file upload response!")
+                st.error(
+                    "File upload succeeded but no session ID was returned. Please try again."
+                )
 
             if is_image:
                 st.session_state.uploaded_image = uploaded_file

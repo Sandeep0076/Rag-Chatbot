@@ -194,7 +194,7 @@ Process chat queries against document content using specified language models.
   - `file_ids` (optional): Array of file IDs for multi-file chat
   - `model_choice` (required): The language model to use (e.g., "gpt_4o_mini", "gemini-2.5-flash", "gemini-2.5-pro")
   - `user_id` (required): Unique identifier for the user
-  - `session_id` (optional): Session identifier for tracking conversation context
+  - `session_id` (required): Session identifier for tracking conversation context
   - `temperature` (optional): Controls randomness in model responses (range: 0.0 - 2.0)
     - **Default values**:
       - OpenAI models (GPT series): `0.5` (more focused, coherent responses)

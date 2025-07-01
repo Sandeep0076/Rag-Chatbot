@@ -139,6 +139,7 @@ Expected response when ready:
     ],
     "model_choice": "gpt_4o_mini",
     "user_id": "your-user-id",
+    "session_id": "uuid-session-string",
     "temperature": 0.7
 }
 ```
@@ -152,7 +153,7 @@ Expected response when ready:
 | `model_choice` | ✅ | AI model to use | `"gpt_4o_mini"` |
 | `user_id` | ✅ | Unique user identifier | `"user123"` |
 | `temperature` | ❌ | Response creativity (0.0-2.0) | `0.7` |
-| `session_id` | ❌ | Session tracking | `"session-uuid"` |
+| `session_id` | ✅ | Session tracking | `"session-uuid"` |
 
 #### 3.5 Available Models
 - `gpt_4o_mini` (recommended for most cases)
@@ -190,7 +191,8 @@ For follow-up questions, include conversation history in the `text` array:
     ],
     "file_ids": ["uuid1", "uuid2", "uuid3"],
     "model_choice": "gpt_4o_mini",
-    "user_id": "user123"
+    "user_id": "user123",
+    "session_id": "uuid-session-string"
 }
 ```
 
