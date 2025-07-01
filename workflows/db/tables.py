@@ -43,6 +43,18 @@ class Message(Base):
     conversation = relationship("Conversation", back_populates="messages")
 
 
+class Citation(Base):
+    __tablename__ = "Citation"
+
+    id = Column(String, primary_key=True, unique=True, nullable=False)
+    title = Column(String, nullable=False)
+    url = Column(String, nullable=False)
+    messageId = Column(String, nullable=False)
+
+    # Foreign keys:
+    messageId = mapped_column(ForeignKey("Message.id"))
+
+
 class Conversation(Base):
     __tablename__ = "Conversation"
 
