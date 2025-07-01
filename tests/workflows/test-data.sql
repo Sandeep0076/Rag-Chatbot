@@ -59,6 +59,13 @@ INSERT INTO Message (id, role, content, createdAt, conversationId) VALUES
 ('msg14_id', 'user', 'User feedback here.', '2024-09-25 13:10:00', 'conv12_id'),
 ('msg15_id', 'system', 'User feedback here.', '2024-09-25 13:10:00', 'conv13_id');
 
+INSERT INTO Citation (id, title, url, messageId) VALUES
+-- these are citations attached to messages which should be deleted
+('citation1_id', 'Title 1', 'https://some.url.com/page1', 'msg8_id'),
+('citation2_id', 'Title 2', 'https://some.url.com/page2', 'msg8_id'),
+('citation3_id', 'Title 3', 'https://some.url.com/page3', 'msg9_id'),
+('citation4_id', 'Title 4', 'https://some.url.com/page4', 'msg10_id');
+
 -- Insert some prompts
 INSERT INTO Prompt (id, name, description, prompt, folderId, published, userId, createdAt, updatedAt, tag, copyCount, publishedAt) VALUES
 -- two published published prompts by deleted users
