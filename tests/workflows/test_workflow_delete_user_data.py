@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from workflows.db.tables import Base, Conversation, Folder, Message, User
+from workflows.db.tables import Base, Citation, Conversation, Folder, Message, User
 from workflows.workflow import delete_candidate_user_data, get_users_deletion_candidates
 
 # Create a session for a SQLite in-memory database
@@ -91,11 +91,11 @@ def test_deletion_successful_logging(mock_get_db_session, mock_log, test_db_sess
         ),
         # log reports about user5
         call("Loading user data for user5@example.com"),
-        call("About to delete: 3 messages, 2 conversations, 2 folders."),
+        call("About to delete: 4 citations, 3 messages, 2 conversations, 2 folders."),
         call("Successfully deleted data for user user5@example.com."),
         # log reports about user6
         call("Loading user data for user6@example.com"),
-        call("About to delete: 0 messages, 0 conversations, 0 folders."),
+        call("About to delete: 0 citations, 0 messages, 0 conversations, 0 folders."),
         call("Successfully deleted data for user user6@example.com."),
         call("Workflow step deletion of user data completed."),
     ]
@@ -125,6 +125,11 @@ def test_all_deletion_candidates_data_gone(
                 .filter(Conversation.userEmail == user["email"])
                 .all()
             )
+            citations = (
+                db.query(Citation)
+                .filter(Citation.messageId.in_([message.id for message in messages]))
+                .all()
+            )
             # 3. get the list of Conversations related to the user
             conversations = (
                 db.query(Conversation)
@@ -137,6 +142,12 @@ def test_all_deletion_candidates_data_gone(
             assert len(messages) == 0
             assert len(conversations) == 0
             assert len(folders) == 0
+            assert len(citations) == 0
+
+            citations = db.query(
+                Citation
+            ).count()  # Check if there are any citations left
+            assert citations == 0, f"Expected 0 citations, but found {citations}"
 
 
 @patch("workflows.workflow.get_db_session")
