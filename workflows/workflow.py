@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 import workflows.db.helpers as db_helpers
 import workflows.msgraph as msgraph
 from workflows.app_config import config
-from workflows.db.tables import Conversation, Folder, Message, Prompt, User
+from workflows.db.tables import Citation, Conversation, Folder, Message, Prompt, User
 from workflows.gcs.helpers import delete_embeddings, file_present_in_gcp
 
 logging.basicConfig(
@@ -310,13 +310,26 @@ def delete_candidate_user_data():
                 )
                 # 4. get the list of Folders related to the user
                 folders = session.query(Folder).filter(Folder.userId == user.id).all()
+                # 5. get the list of Citations related to user's messages
+                citations = (
+                    session.query(Citation)
+                    .filter(
+                        Citation.messageId.in_([message.id for message in messages])
+                    )
+                    .all()
+                )
 
                 log.info(
                     "About to delete: "
+                    f"{len(citations)} citations, "
                     f"{len(messages)} messages, "
                     f"{len(conversations)} conversations, "
                     f"{len(folders)} folders."
                 )
+
+                # delete the citations related to the user's messages
+                for citation in citations:
+                    session.delete(citation)
 
                 # delete the messages, conversations, and folders related to the user
                 for message in messages:
