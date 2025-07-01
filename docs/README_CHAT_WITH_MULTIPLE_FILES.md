@@ -16,6 +16,7 @@ The multi-file chat feature extends the RAG (Retrieval Augmented Generation) sys
    - Each file is uploaded individually through the `/file/upload` endpoint
    - Files can be PDFs, images, or tabular data (CSV/Excel)
    - Files can also be sourced from URLs using the `urls` parameter
+   - **Multiple URL Processing**: URLs can be provided in comma-separated or newline-separated format for batch processing
    - Each file receives a unique `file_id`
 
 2. **Parallel Embedding Generation**

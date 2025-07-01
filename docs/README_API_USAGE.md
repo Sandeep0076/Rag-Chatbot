@@ -57,7 +57,7 @@ Upload a file (PDF, image, CSV, or Excel) to the API.
     - `files`: Multiple files to upload (List[File]) - optional for multiple files
     - `is_image`: Whether the file is an image (Boolean)
     - `username`: Username for tracking file ownership (String)
-    - `urls`: URLs to process content from (String) - optional
+    - `urls`: URLs to process content from (String) - optional. Multiple URLs can be separated by commas or newlines
 - **Response Format**:
   ```json
   {
@@ -85,6 +85,21 @@ Upload a file (PDF, image, CSV, or Excel) to the API.
      - Key: `username`, Value: Enter a username
      - Key: `urls`, Value: Enter URLs separated by commas or newlines (optional)
   6. Click "Send" to upload the file
+
+  **Multiple URL Processing Example**:
+  To process multiple URLs simultaneously:
+  - Key: `username`, Value: `your-username`
+  - Key: `urls`, Value:
+    ```
+    https://example1.com, https://example2.com, https://example3.com
+    ```
+    or
+    ```
+    https://example1.com
+    https://example2.com
+    https://example3.com
+    ```
+  - The response will include `file_ids` array with multiple file IDs for multi-file chat
 
 
 ### Check Embeddings
