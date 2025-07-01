@@ -254,10 +254,13 @@ class AzureChatbot(BaseRAGHandler):
             )
             # logging.debug(f"Messages for LLM: {messages}") # Be careful logging full context
 
-            # Check for any o3 models, not just o3-mini
-            if "o3" in self.model_config.deployment.lower():
+            # Check for any o3 or o4 models (both use max_completion_tokens)
+            if (
+                "o3" in self.model_config.deployment.lower()
+                or "o4" in self.model_config.deployment.lower()
+            ):
                 logging.info(
-                    f"Using o3-specific parameters for model: {self.model_config.deployment}"
+                    f"Using o3/o4-specific parameters for model: {self.model_config.deployment}"
                 )
                 response = self.llm_client.chat.completions.create(
                     model=self.model_config.deployment,
@@ -337,11 +340,12 @@ def get_azure_non_rag_response(
         logging.info(
             f"Non-RAG model deployment name: {configs.azure_llm.models[model_choice].deployment}"
         )
-        # Check for any o3 models, not just o3-mini
-        if "o3" in configs.azure_llm.models[model_choice].deployment.lower():
+        # Check for any o3 or o4 models (both use max_completion_tokens)
+        deployment_lower = configs.azure_llm.models[model_choice].deployment.lower()
+        if "o3" in deployment_lower or "o4" in deployment_lower:
             logging.info(
                 (
-                    f"Using o3-specific parameters for non-RAG response with model: "
+                    f"Using o3/o4-specific parameters for non-RAG response with model: "
                     f"{configs.azure_llm.models[model_choice].deployment}"
                 )
             )

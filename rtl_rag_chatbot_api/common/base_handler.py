@@ -41,6 +41,7 @@ class BaseRAGHandler:
             "gpt_4_1": 200000,  # GPT-4.1 token limit
             "o3": 100000,  # O3 token limit
             "o3_mini": 100000,  # O3-mini token limit
+            "o4_mini": 100000,  # O4-mini token limit
             "gemini-2.5-pro": 2097152,  # 2M tokens for Gemini 2.5 Pro
             "gemini-2.5-flash": 1048576,  # 1M tokens for Gemini 2.5 Flash
         }
