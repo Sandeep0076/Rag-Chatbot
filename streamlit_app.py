@@ -554,7 +554,8 @@ def display_uploaded_files_list():
                     ):  # If other processed files exist, make the last one 'active'
                         st.session_state.file_id = st.session_state.file_ids[-1]
                         st.session_state.file_uploaded = True
-            st.rerun()
+            # Removed st.rerun() to avoid RerunData error
+            # Session state changes trigger automatic rerun
     st.markdown(
         "<p><em>All files in this list will provide context during chat.</em></p>",
         unsafe_allow_html=True,
@@ -899,167 +900,221 @@ def process_single_file(uploaded_file_obj, is_image):
         return False
 
 
-def handle_file_upload():
-    """Handle file upload UI and logic."""
-    logging.info("========== ENTERING handle_file_upload ===========")
-    if not st.session_state.username:
-        st.warning("Please enter a username before uploading files")
-        return
-
-    is_image = st.session_state.file_type == "Image"
-    file_types = {
+def _get_file_types_for_upload():
+    """Get file types based on current file type selection."""
+    return {
         "Image": ["jpg", "png"],
         "CSV/Excel": ["xlsx", "xls", "csv"],
         "Database": ["db", "sqlite"],
         "PDF": ["pdf"],
         "Text": ["txt", "doc", "docx"],
         "URL": [],
+        "Existing Files": [],
     }[st.session_state.file_type]
 
+
+def _display_file_type_info():
+    """Display information based on the selected file type."""
     if st.session_state.file_type == "Database":
         st.info(
             "Upload SQLite database files (.db or .sqlite) to chat with their contents."
         )
 
-    if st.session_state.file_type == "URL":
-        st.info(
-            "Enter one or more URLs separated by commas to chat with their contents."
+
+def _handle_url_input():
+    """Handle URL input and processing."""
+    st.info("Enter one or more URLs separated by commas to chat with their contents.")
+    url_input = st.text_area("Enter URLs (comma-separated for multiple URLs)")
+    if url_input and st.button("Process URLs"):
+        handle_url_processing(url_input)
+
+
+def _handle_existing_file_ids_input():
+    """Handle existing file IDs input and processing."""
+    st.info("Enter existing file IDs to chat with files that already have embeddings.")
+    existing_file_ids_input = st.text_area(
+        "Enter File IDs (comma or newline separated for multiple files)",
+        placeholder="file-id-1, file-id-2\nfile-id-3",
+    )
+    if existing_file_ids_input and st.button("Process Existing File IDs"):
+        handle_existing_file_ids_processing(existing_file_ids_input)
+
+
+def _setup_file_uploader(file_types):
+    """Setup file uploader and get uploaded files."""
+    if "uploaded_files_list" not in st.session_state:
+        st.session_state.uploaded_files_list = []
+
+    st.markdown("### Upload New Files")
+    _ = st.file_uploader(
+        f"Select or Add {st.session_state.file_type} file(s)",
+        type=file_types,
+        accept_multiple_files=True,
+        key="multi_file_uploader_static",
+        on_change=handle_file_uploader_change,
+    )
+
+    display_uploaded_files_list()
+    return st.session_state.uploaded_files_list
+
+
+def _get_existing_file_ids_input():
+    """Get existing file IDs input from user."""
+    st.markdown("### Or Use Existing File IDs")
+    return st.text_area(
+        "Enter existing File IDs (optional, can combine with new uploads)",
+        placeholder="file-id-1, file-id-2",
+    )
+
+
+def _calculate_process_items(uploaded_files, existing_file_ids_input):
+    """Calculate what items need to be processed."""
+    has_new_files = uploaded_files and len(uploaded_files) > 0
+    has_existing_file_ids = existing_file_ids_input and existing_file_ids_input.strip()
+
+    process_items = []
+    if has_new_files:
+        process_items.append(
+            f"{len(uploaded_files)} new file{'s' if len(uploaded_files) > 1 else ''}"
         )
-        url_input = st.text_area("Enter URLs (comma-separated for multiple URLs)")
-        if url_input and st.button("Process URLs"):
-            handle_url_processing(url_input)
-    else:
-        if "uploaded_files_list" not in st.session_state:
-            st.session_state.uploaded_files_list = []
-
-        _ = st.file_uploader(
-            f"Select or Add {st.session_state.file_type} file(s)",
-            type=file_types,
-            accept_multiple_files=True,
-            key="multi_file_uploader_static",
-            on_change=handle_file_uploader_change,
+    if has_existing_file_ids:
+        file_ids_list = existing_file_ids_input.replace("\n", ",").split(",")
+        existing_count = len([fid.strip() for fid in file_ids_list if fid.strip()])
+        process_items.append(
+            f"{existing_count} existing file ID{'s' if existing_count > 1 else ''}"
         )
 
-        display_uploaded_files_list()
-        uploaded_files = st.session_state.uploaded_files_list
+    return has_new_files, has_existing_file_ids, process_items
 
-        if uploaded_files and len(uploaded_files) > 0:
+
+def _update_session_state_with_files(file_ids, filenames):
+    """Update session state with processed file information."""
+    logging.info(f"Received {len(file_ids)} file IDs from enhanced upload")
+
+    # Set multi_file_mode based on actual number of files
+    st.session_state.multi_file_mode = len(file_ids) > 1
+
+    # Initialize session state dictionaries if needed
+    if "processed_file_map" not in st.session_state:
+        st.session_state.processed_file_map = {}
+    if "file_ids" not in st.session_state:
+        st.session_state.file_ids = []
+    if "file_names" not in st.session_state:
+        st.session_state.file_names = {}
+
+    # Reset file_ids for new session to ensure clean state
+    st.session_state.file_ids = []
+
+    # Process each file ID and filename
+    for i, file_id in enumerate(file_ids):
+        filename = filenames[i] if i < len(filenames) else f"file_{file_id}"
+        st.session_state.processed_file_map[filename] = file_id
+        st.session_state.file_ids.append(file_id)
+        st.session_state.file_names[file_id] = filename
+
+    # Set file_id for single file compatibility
+    st.session_state.file_id = file_ids[0] if file_ids else None
+    st.session_state.file_uploaded = True
+
+
+def _process_upload_response(upload_response):
+    """Process the upload response and update session state."""
+    if upload_response and upload_response.status_code == 200:
+        try:
+            result = upload_response.json()
             logging.info(
-                f"[handle_file_upload] Files selected: {len(uploaded_files)} - {[f.name for f in uploaded_files]}"
-            )
-            file_count = len(uploaded_files)
-            upload_button_label = (
-                f"Upload and Process ({file_count}) "
-                f"Selected File{'s' if file_count > 1 else ''}"
-            )
-            logging.info(
-                f"[handle_file_upload] Showing upload button with label: {upload_button_label}"
+                f"Enhanced upload successful with status code: {upload_response.status_code}"
             )
 
-            if st.button(upload_button_label):
+            file_ids = result.get("file_ids", [])
+            filenames = result.get("original_filenames", [])
+
+            if file_ids:
+                _update_session_state_with_files(file_ids, filenames)
+
+                # Store session_id if provided
+                session_id = result.get("session_id")
+                if session_id:
+                    st.session_state.current_session_id = session_id
+                    logging.info(
+                        f"Successfully set session_id in session state: {session_id}"
+                    )
+
                 logging.info(
-                    f"[handle_file_upload] UPLOAD BUTTON CLICKED - Processing {len(uploaded_files)} files"
+                    f"Final session state: multi_file_mode={st.session_state.multi_file_mode}, "
+                    f"file_id={st.session_state.file_id}, file_ids={st.session_state.file_ids}"
                 )
-                with st.spinner(
-                    f"Uploading and processing {len(uploaded_files)} files in parallel..."
-                ):
-                    # Call batch_upload_files to send all files in one request
-                    upload_response = batch_upload_files(uploaded_files, is_image)
 
-                    if upload_response and upload_response.status_code == 200:
-                        try:
-                            result = upload_response.json()
-                            logging.info(
-                                f"Batch upload successful with status code: {upload_response.status_code}"
-                            )
+                st.success(f"{len(file_ids)} files processed successfully!")
+                return True
+            else:
+                st.error("No file IDs returned from the server.")
+                return False
+        except Exception as e:
+            logging.error(f"Error processing enhanced upload response: {str(e)}")
+            st.error(f"Error processing server response: {str(e)}")
+            return False
+    else:
+        error_msg = "Unknown error" if not upload_response else upload_response.text
+        logging.error(f"Enhanced upload failed: {error_msg}")
+        st.error(f"Failed to process files: {error_msg}")
+        return False
 
-                            file_ids = result.get("file_ids", [])
-                            filenames = result.get("original_filenames", [])
 
-                            if file_ids:
-                                logging.info(
-                                    f"Received {len(file_ids)} file IDs from batch upload"
-                                )
-                                # Fix: Set multi_file_mode based on actual number of files
-                                st.session_state.multi_file_mode = len(file_ids) > 1
+def _handle_file_processing(uploaded_files, existing_file_ids_input, is_image):
+    """Handle the file processing logic."""
+    has_new_files, has_existing_file_ids, process_items = _calculate_process_items(
+        uploaded_files, existing_file_ids_input
+    )
 
-                                if "processed_file_map" not in st.session_state:
-                                    st.session_state.processed_file_map = {}
-                                if "file_ids" not in st.session_state:
-                                    st.session_state.file_ids = []
-                                if "file_names" not in st.session_state:
-                                    st.session_state.file_names = {}
+    if has_new_files or has_existing_file_ids:
+        button_label = "Process " + " and ".join(process_items)
 
-                                # Reset file_ids for new session to ensure clean state
-                                st.session_state.file_ids = []
+        if st.button(button_label):
+            logging.info(
+                "[handle_file_upload] PROCESS BUTTON CLICKED - Processing mixed content"
+            )
+            with st.spinner("Processing files and file IDs..."):
+                upload_response = enhanced_batch_upload(
+                    uploaded_files, existing_file_ids_input, is_image
+                )
+                _process_upload_response(upload_response)
 
-                                for i, file_id in enumerate(file_ids):
-                                    filename = (
-                                        filenames[i]
-                                        if i < len(filenames)
-                                        else uploaded_files[i].name
-                                    )
-                                    st.session_state.processed_file_map[
-                                        filename
-                                    ] = file_id
-                                    st.session_state.file_ids.append(file_id)
-                                    st.session_state.file_names[file_id] = filename
 
-                                # Set file_id for single file compatibility
-                                st.session_state.file_id = (
-                                    file_ids[0] if file_ids else None
-                                )
-                                st.session_state.file_uploaded = True
-
-                                # Store session_id if provided
-                                session_id = result.get("session_id")
-                                logging.info(
-                                    f"Extracted session_id from upload result: {session_id}"
-                                )
-                                if session_id:
-                                    st.session_state.current_session_id = session_id
-                                    logging.info(
-                                        f"Successfully set session_id in session state: {session_id}"
-                                    )
-                                else:
-                                    logging.error(
-                                        "No session_id found in upload response!"
-                                    )
-                                    st.error(
-                                        "Upload succeeded but no session ID was returned. Please try again."
-                                    )
-
-                                logging.info(
-                                    f"Final session state: multi_file_mode={st.session_state.multi_file_mode}, "
-                                    f"file_id={st.session_state.file_id}, file_ids={st.session_state.file_ids}"
-                                )
-
-                                st.success(
-                                    f"{len(file_ids)} files processed successfully!"
-                                )
-                            else:
-                                st.error("No file IDs returned from the server.")
-                        except Exception as e:
-                            logging.error(
-                                f"Error processing batch upload response: {str(e)}"
-                            )
-                            st.error(f"Error processing server response: {str(e)}")
-                    else:
-                        error_msg = (
-                            "Unknown error"
-                            if not upload_response
-                            else upload_response.text
-                        )
-                        logging.error(f"Batch upload failed: {error_msg}")
-                        st.error(f"Failed to upload files: {error_msg}")
-
-    # Display image in a dedicated section if it's an image file
+def _display_uploaded_image():
+    """Display uploaded image if it's an image file type."""
+    is_image = st.session_state.file_type == "Image"
     if is_image and st.session_state.uploaded_image is not None:
         st.markdown('<div class="file-info">', unsafe_allow_html=True)
         st.subheader("Uploaded Image:")
         img = Image.open(st.session_state.uploaded_image)
         st.image(img, width=400)
         st.markdown("</div>", unsafe_allow_html=True)
+
+
+def handle_file_upload():
+    """Handle file upload UI and logic."""
+    logging.info("========== ENTERING handle_file_upload ===========")
+
+    if not st.session_state.username:
+        st.warning("Please enter a username before uploading files")
+        return
+
+    is_image = st.session_state.file_type == "Image"
+    file_types = _get_file_types_for_upload()
+
+    _display_file_type_info()
+
+    if st.session_state.file_type == "URL":
+        _handle_url_input()
+    elif st.session_state.file_type == "Existing Files":
+        _handle_existing_file_ids_input()
+    else:
+        uploaded_files = _setup_file_uploader(file_types)
+        existing_file_ids_input = _get_existing_file_ids_input()
+        _handle_file_processing(uploaded_files, existing_file_ids_input, is_image)
+
+    _display_uploaded_image()
 
 
 def display_chat_interface():
@@ -1738,150 +1793,15 @@ def process_file_upload(uploaded_file, is_image):
 
 def render_sidebar():
     """Render the sidebar components."""
-    # Add New Chat button at the top
-    if st.button("New Chat", key="new_chat_btn"):
-        cleanup_files()
-        st.rerun()
+    _render_new_chat_button()
+    _render_file_type_selection()
 
-    # Don't force multi_file_mode - let it be set based on actual upload results
-    # multi_file_mode is set correctly during file upload based on number of files
-
-    # Show file type selection only when Chat is selected
     if st.session_state.nav_option == "Chat":
-        st.markdown(
-            '<div class="sidebar-header">Select file type:</div>',
-            unsafe_allow_html=True,
-        )
-        st.session_state.file_type = st.selectbox(
-            "Select file type:",
-            ["PDF", "Text", "CSV/Excel", "Database", "Image", "URL"],
-            key="file_type_select",
-            label_visibility="collapsed",
-        )
+        _render_chat_file_interface()
 
-        # Move file uploader to sidebar (right after file type selection)
-        # Always show file uploader in Chat mode regardless of username
-        is_image = st.session_state.file_type == "Image"
-        file_types = {
-            "Image": ["jpg", "png"],
-            "CSV/Excel": ["xlsx", "xls", "csv"],
-            "Database": ["db", "sqlite"],
-            "PDF": ["pdf"],
-            "Text": ["txt", "doc", "docx"],
-            "URL": [],  # No file types for URL
-        }[st.session_state.file_type]
-
-        # Display help text for database files
-        if st.session_state.file_type == "Database":
-            st.info(
-                "Upload SQLite database files (.db or .sqlite) to chat with their contents. "
-            )
-
-        # Handle URL input
-        if st.session_state.file_type == "URL":
-            st.info(
-                "Enter one or more URLs separated by commas to chat with their contents."
-            )
-            url_input = st.text_area("Enter URLs (comma-separated for multiple URLs)")
-
-            if url_input and st.button("Process URLs"):
-                process_url_input(url_input)
-        else:
-            # Allow multiple files to be selected
-            uploaded_files = st.file_uploader(
-                f"Choose {st.session_state.file_type} file(s)",  # Updated label
-                type=file_types,
-                accept_multiple_files=True,  # Enable multi-file upload
-            )
-
-            # Process uploaded files if any are selected and button is pressed
-            if uploaded_files:  # Check if the list is not empty
-                if st.button(
-                    f"Upload and Process ({len(uploaded_files)}) Selected File(s)"
-                ):  # Updated button label
-                    # FIXED: Use batch processing instead of calling process_file_upload in a loop
-                    # This sends all files in a single request with the 'files' parameter
-                    logging.info(
-                        f"Processing {len(uploaded_files)} files in batch mode"
-                    )
-                    with st.spinner(
-                        f"Uploading and processing {len(uploaded_files)} files in parallel..."
-                    ):
-                        success = process_multiple_files(uploaded_files, is_image)
-                        if success:
-                            st.success(
-                                f"{len(uploaded_files)} files processed successfully!"
-                            )
-                        else:
-                            st.error("Error processing files. Please check the logs.")
-                    st.rerun()  # Rerun to update UI after processing all files
-
-        # Display image in a dedicated section if it's an image file
-        if is_image and st.session_state.uploaded_image is not None:
-            st.markdown('<div class="file-info">', unsafe_allow_html=True)
-            st.subheader("Uploaded Image:")
-            img = Image.open(st.session_state.uploaded_image)
-            st.image(img, width=200)  # Smaller for sidebar
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        st.markdown("---")
-
-    # User information section - always show
-    st.markdown(
-        '<div class="sidebar-header">User Information</div>', unsafe_allow_html=True
-    )
-    username = st.text_input("Enter your username:")
-    st.session_state.username = username
-
-    # Model selection dropdown - always show
-    st.markdown(
-        '<div class="sidebar-header">Model Selection</div>', unsafe_allow_html=True
-    )
-    st.selectbox(
-        "Select Model",
-        options=st.session_state.available_models,
-        index=st.session_state.available_models.index(st.session_state.model_choice),
-        key="temp_model_choice",
-        on_change=on_model_change,
-    )
-
-    # Temperature control section
-    st.markdown(
-        '<div class="sidebar-header">Temperature Settings</div>', unsafe_allow_html=True
-    )
-
-    # Add help text for temperature
-    st.markdown(
-        "<small>Temperature controls randomness: 0.0 = focused, 1.0 = creative</small>",
-        unsafe_allow_html=True,
-    )
-
-    # Temperature control with checkbox for auto mode
-    use_auto_temperature = st.checkbox(
-        "Use model defaults",
-        value=st.session_state.temperature is None,
-        help="Let the system choose optimal temperature based on model type (OpenAI: 0.5, Gemini: 0.8)",
-    )
-
-    if use_auto_temperature:
-        st.session_state.temperature = None
-        st.markdown(
-            '<small style="color: #666;">Using automatic temperature based on model</small>',
-            unsafe_allow_html=True,
-        )
-    else:
-        # Temperature slider (0.0 to 2.0, step 0.1, default 0.7)
-        temperature_value = st.slider(
-            "Temperature",
-            min_value=0.0,
-            max_value=2.0,
-            value=0.7
-            if st.session_state.temperature is None
-            else st.session_state.temperature,
-            step=0.1,
-            help="Higher values make output more random, lower values more focused",
-        )
-        st.session_state.temperature = temperature_value
+    _render_user_information()
+    _render_model_selection()
+    _render_temperature_settings()
 
 
 def main():
@@ -1922,6 +1842,410 @@ def main():
         st.title("📚 Reference")
         st.markdown("### Welcome to the RAG Chatbot Reference Page")
         # Keep the existing reference section code as is
+
+
+def enhanced_batch_upload(files_list, existing_file_ids_input, is_image=False):
+    """Enhanced upload function that supports both new files and existing file IDs."""
+    file_count = len(files_list) if files_list else 0
+    has_file_ids = bool(existing_file_ids_input)
+    logging.info(
+        f"[enhanced_batch_upload] Processing files: {file_count}, existing file IDs input: {has_file_ids}"
+    )
+
+    # Prepare the files for the multipart/form-data request
+    files_data = []
+    if files_list:
+        for file in files_list:
+            file_content = file.read()
+            files_data.append(("files", (file.name, file_content, file.type)))
+            file.seek(0)  # Reset file pointer
+
+    # Prepare form data
+    form_data = {
+        "username": st.session_state.username,
+        "is_image": str(is_image).lower(),
+    }
+
+    # Add existing file IDs if provided
+    if existing_file_ids_input and existing_file_ids_input.strip():
+        form_data["existing_file_ids"] = existing_file_ids_input.strip()
+
+    # Send the request
+    try:
+        response = requests.post(
+            f"{API_URL}/file/upload",
+            files=files_data if files_data else None,
+            data=form_data,
+        )
+        logging.info(f"[enhanced_batch_upload] Response status: {response.status_code}")
+        return response
+    except Exception as e:
+        logging.error(f"[enhanced_batch_upload] Error: {str(e)}")
+        return None
+
+
+def handle_existing_file_ids_processing(existing_file_ids_input):
+    """Handle processing of existing file IDs only."""
+    logging.info(
+        f"[handle_existing_file_ids_processing] Processing file IDs: {existing_file_ids_input}"
+    )
+
+    if not st.session_state.username:
+        st.warning("Please enter a username before processing file IDs")
+        return
+
+    with st.spinner("Processing existing file IDs..."):
+        # Use enhanced upload with no files, only existing file IDs
+        upload_response = enhanced_batch_upload(None, existing_file_ids_input, False)
+
+        if upload_response and upload_response.status_code == 200:
+            try:
+                result = upload_response.json()
+                logging.info(
+                    f"File IDs processing successful with status code: {upload_response.status_code}"
+                )
+
+                file_ids = result.get("file_ids", [])
+                filenames = result.get("original_filenames", [])
+
+                if file_ids:
+                    logging.info(
+                        f"Received {len(file_ids)} file IDs from existing file processing"
+                    )
+                    # Set multi_file_mode based on actual number of files
+                    st.session_state.multi_file_mode = len(file_ids) > 1
+
+                    if "processed_file_map" not in st.session_state:
+                        st.session_state.processed_file_map = {}
+                    if "file_ids" not in st.session_state:
+                        st.session_state.file_ids = []
+                    if "file_names" not in st.session_state:
+                        st.session_state.file_names = {}
+
+                    # Reset file_ids for new session
+                    st.session_state.file_ids = []
+
+                    for i, file_id in enumerate(file_ids):
+                        filename = (
+                            filenames[i] if i < len(filenames) else f"file_{file_id}"
+                        )
+                        st.session_state.processed_file_map[filename] = file_id
+                        st.session_state.file_ids.append(file_id)
+                        st.session_state.file_names[file_id] = filename
+
+                    # Set file_id for single file compatibility
+                    st.session_state.file_id = file_ids[0] if file_ids else None
+                    st.session_state.file_uploaded = True
+
+                    # Store session_id if provided
+                    session_id = result.get("session_id")
+                    if session_id:
+                        st.session_state.current_session_id = session_id
+                        logging.info(
+                            f"Successfully set session_id in session state: {session_id}"
+                        )
+
+                    st.success(
+                        f"{len(file_ids)} existing files processed successfully!"
+                    )
+                else:
+                    st.error("No file IDs returned from the server.")
+            except Exception as e:
+                logging.error(f"Error processing file IDs response: {str(e)}")
+                st.error(f"Error processing server response: {str(e)}")
+        else:
+            error_msg = "Unknown error" if not upload_response else upload_response.text
+            logging.error(f"File IDs processing failed: {error_msg}")
+            st.error(f"Failed to process file IDs: {error_msg}")
+
+
+def _render_new_chat_button():
+    """Render the New Chat button."""
+    if st.button("New Chat", key="new_chat_btn"):
+        cleanup_files()
+
+
+def _render_file_type_selection():
+    """Render file type selection for Chat mode."""
+    if st.session_state.nav_option == "Chat":
+        st.markdown(
+            '<div class="sidebar-header">Select file type:</div>',
+            unsafe_allow_html=True,
+        )
+        st.session_state.file_type = st.selectbox(
+            "Select file type:",
+            ["PDF", "Text", "CSV/Excel", "Database", "Image", "URL", "Existing Files"],
+            key="file_type_select",
+            label_visibility="collapsed",
+        )
+
+
+def _get_file_types_config():
+    """Get file types configuration."""
+    return {
+        "Image": ["jpg", "png"],
+        "CSV/Excel": ["xlsx", "xls", "csv"],
+        "Database": ["db", "sqlite"],
+        "PDF": ["pdf"],
+        "Text": ["txt", "doc", "docx"],
+        "URL": [],
+    }[st.session_state.file_type]
+
+
+def _render_database_info():
+    """Render database file information."""
+    if st.session_state.file_type == "Database":
+        st.info(
+            "Upload SQLite database files (.db or .sqlite) to chat with their contents. "
+        )
+
+
+def _process_url_and_file_ids(url_input, existing_file_ids_input):
+    """Process URLs and existing file IDs."""
+    has_urls = url_input and url_input.strip()
+    has_existing_file_ids = existing_file_ids_input and existing_file_ids_input.strip()
+
+    if has_urls and has_existing_file_ids:
+        # Mixed mode: URLs + existing file IDs
+        with st.spinner("Processing URLs and existing file IDs..."):
+            data = {
+                "username": st.session_state.username,
+                "urls": url_input,
+                "existing_file_ids": existing_file_ids_input,
+            }
+
+            upload_response = requests.post(f"{API_URL}/file/upload", data=data)
+            _process_sidebar_upload_response(upload_response)
+    elif has_urls:
+        process_url_input(url_input)
+    elif has_existing_file_ids:
+        with st.spinner("Processing existing file IDs..."):
+            upload_response = enhanced_batch_upload(
+                None, existing_file_ids_input, False
+            )
+            _process_sidebar_upload_response(upload_response)
+
+
+def _process_sidebar_upload_response(upload_response):
+    """Process upload response in sidebar context."""
+    if upload_response and upload_response.status_code == 200:
+        try:
+            result = upload_response.json()
+            file_ids = result.get("file_ids", [])
+            filenames = result.get("original_filenames", [])
+
+            if file_ids:
+                _update_sidebar_session_state(file_ids, filenames, result)
+                st.success(f"{len(file_ids)} items processed successfully!")
+                st.session_state.messages = []  # Reset chat history
+            else:
+                st.error("No file IDs returned from the server.")
+        except Exception as e:
+            logging.error(f"Error processing response: {str(e)}")
+            st.error(f"Error processing server response: {str(e)}")
+    else:
+        error_msg = "Unknown error" if not upload_response else upload_response.text
+        logging.error(f"Processing failed: {error_msg}")
+        st.error(f"Failed to process: {error_msg}")
+
+
+def _update_sidebar_session_state(file_ids, filenames, result):
+    """Update session state from sidebar upload."""
+    st.session_state.multi_file_mode = len(file_ids) > 1
+    st.session_state.file_ids = file_ids
+    st.session_state.file_id = file_ids[0] if file_ids else None
+    st.session_state.file_uploaded = True
+
+    # Initialize session state dicts if needed
+    if "file_names" not in st.session_state:
+        st.session_state.file_names = {}
+    if "processed_file_map" not in st.session_state:
+        st.session_state.processed_file_map = {}
+
+    # Store file names
+    for i, file_id in enumerate(file_ids):
+        filename = filenames[i] if i < len(filenames) else f"file_{file_id}"
+        st.session_state.file_names[file_id] = filename
+        st.session_state.processed_file_map[filename] = file_id
+
+    # Store session_id if provided
+    session_id = result.get("session_id")
+    if session_id:
+        st.session_state.current_session_id = session_id
+
+
+def _render_url_interface():
+    """Render URL input interface."""
+    st.info("Enter one or more URLs separated by commas to chat with their contents.")
+    url_input = st.text_area("Enter URLs (comma-separated for multiple URLs)")
+
+    st.markdown("**file ids:**")
+    existing_file_ids_input = st.text_input(
+        "Enter existing File IDs (comma-separated)",
+        placeholder="file-id-1, file-id-2",
+        label_visibility="collapsed",
+        key="url_file_ids",
+    )
+
+    has_urls = url_input and url_input.strip()
+    has_existing_file_ids = existing_file_ids_input and existing_file_ids_input.strip()
+
+    if has_urls or has_existing_file_ids:
+        process_items = []
+        if has_urls:
+            url_count = len(
+                [
+                    url.strip()
+                    for url in url_input.replace("\n", ",").split(",")
+                    if url.strip()
+                ]
+            )
+            process_items.append(f"{url_count} URL{'s' if url_count > 1 else ''}")
+        if has_existing_file_ids:
+            file_ids_list = existing_file_ids_input.replace("\n", ",").split(",")
+            existing_count = len([fid.strip() for fid in file_ids_list if fid.strip()])
+            process_items.append(
+                f"{existing_count} existing file ID{'s' if existing_count > 1 else ''}"
+            )
+
+        button_label = "Process " + " and ".join(process_items)
+
+        if st.button(button_label, key="process_url_and_fileids"):
+            _process_url_and_file_ids(url_input, existing_file_ids_input)
+
+
+def _render_file_uploader_interface():
+    """Render file uploader interface."""
+    is_image = st.session_state.file_type == "Image"
+    file_types = _get_file_types_config()
+
+    uploaded_files = st.file_uploader(
+        f"Choose {st.session_state.file_type} file(s)",
+        type=file_types,
+        accept_multiple_files=True,
+    )
+
+    st.markdown("**file ids:**")
+    existing_file_ids_input = st.text_input(
+        "Enter existing File IDs (comma-separated)",
+        placeholder="file-id-1, file-id-2",
+        label_visibility="collapsed",
+    )
+
+    has_new_files = uploaded_files and len(uploaded_files) > 0
+    has_existing_file_ids = existing_file_ids_input and existing_file_ids_input.strip()
+
+    if has_new_files or has_existing_file_ids:
+        process_items = []
+        if has_new_files:
+            process_items.append(
+                f"{len(uploaded_files)} file{'s' if len(uploaded_files) > 1 else ''}"
+            )
+        if has_existing_file_ids:
+            file_ids_list = existing_file_ids_input.replace("\n", ",").split(",")
+            existing_count = len([fid.strip() for fid in file_ids_list if fid.strip()])
+            process_items.append(
+                f"{existing_count} existing file ID{'s' if existing_count > 1 else ''}"
+            )
+
+        button_label = "Process " + " and ".join(process_items)
+
+        if st.button(button_label):
+            file_count = len(uploaded_files) if uploaded_files else 0
+            has_file_ids = bool(existing_file_ids_input)
+            logging.info(
+                f"Processing mixed content from sidebar: files={file_count}, file_ids={has_file_ids}"
+            )
+
+            with st.spinner("Processing files and file IDs..."):
+                upload_response = enhanced_batch_upload(
+                    uploaded_files, existing_file_ids_input, is_image
+                )
+                _process_sidebar_upload_response(upload_response)
+
+
+def _render_uploaded_image_sidebar():
+    """Render uploaded image in sidebar."""
+    is_image = st.session_state.file_type == "Image"
+    if is_image and st.session_state.uploaded_image is not None:
+        st.markdown('<div class="file-info">', unsafe_allow_html=True)
+        st.subheader("Uploaded Image:")
+        img = Image.open(st.session_state.uploaded_image)
+        st.image(img, width=200)  # Smaller for sidebar
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_chat_file_interface():
+    """Render file interface for Chat mode."""
+    _render_database_info()
+
+    if st.session_state.file_type == "URL":
+        _render_url_interface()
+    else:
+        _render_file_uploader_interface()
+
+    _render_uploaded_image_sidebar()
+    st.markdown("---")
+
+
+def _render_user_information():
+    """Render user information section."""
+    st.markdown(
+        '<div class="sidebar-header">User Information</div>', unsafe_allow_html=True
+    )
+    username = st.text_input("Enter your username:")
+    st.session_state.username = username
+
+
+def _render_model_selection():
+    """Render model selection section."""
+    st.markdown(
+        '<div class="sidebar-header">Model Selection</div>', unsafe_allow_html=True
+    )
+    st.selectbox(
+        "Select Model",
+        options=st.session_state.available_models,
+        index=st.session_state.available_models.index(st.session_state.model_choice),
+        key="temp_model_choice",
+        on_change=on_model_change,
+    )
+
+
+def _render_temperature_settings():
+    """Render temperature settings section."""
+    st.markdown(
+        '<div class="sidebar-header">Temperature Settings</div>', unsafe_allow_html=True
+    )
+
+    st.markdown(
+        "<small>Temperature controls randomness: 0.0 = focused, 1.0 = creative</small>",
+        unsafe_allow_html=True,
+    )
+
+    use_auto_temperature = st.checkbox(
+        "Use model defaults",
+        value=st.session_state.temperature is None,
+        help="Let the system choose optimal temperature based on model type (OpenAI: 0.5, Gemini: 0.8)",
+    )
+
+    if use_auto_temperature:
+        st.session_state.temperature = None
+        st.markdown(
+            '<small style="color: #666;">Using automatic temperature based on model</small>',
+            unsafe_allow_html=True,
+        )
+    else:
+        temperature_value = st.slider(
+            "Temperature",
+            min_value=0.0,
+            max_value=2.0,
+            value=0.7
+            if st.session_state.temperature is None
+            else st.session_state.temperature,
+            step=0.1,
+            help="Higher values make output more random, lower values more focused",
+        )
+        st.session_state.temperature = temperature_value
 
 
 if __name__ == "__main__":

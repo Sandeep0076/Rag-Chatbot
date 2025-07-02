@@ -944,66 +944,139 @@ async def upload_file(
     is_image: bool = Form(False),
     username: str = Form(...),
     urls: str = Form(None),
+    existing_file_ids: str = Form(None),  # New parameter for existing file IDs
     current_user=Depends(get_current_user),
 ):
     """
     Handles file upload and automatically creates embeddings for PDFs and images.
-    Supports three modes of operation:
+    Now also supports existing file IDs alongside new document uploads.
+
+    Supports four modes of operation:
     1. URL processing: Extract content from URLs and create embeddings
     2. Multiple file upload: Process multiple files concurrently using asyncio.gather()
     3. Single file upload: Process a single file (for backward compatibility)
+    4. Existing file IDs: Process existing file IDs with embeddings validation and download
 
     All file processing is done asynchronously and in parallel when multiple files are uploaded.
     Embeddings creation and other post-processing happens in background tasks.
     """
     try:
-        # Handle URL processing
+        # Parse existing file IDs if provided (do this before URL processing)
+        parsed_existing_file_ids = []
+        if existing_file_ids:
+            try:
+                # Split by comma, newline, or both and clean up
+                parsed_existing_file_ids = [
+                    fid.strip()
+                    for fid in existing_file_ids.replace("\n", ",").split(",")
+                    if fid.strip()
+                ]
+                logging.info(
+                    f"Processing {len(parsed_existing_file_ids)} existing file IDs"
+                )
+            except Exception as e:
+                logging.error(f"Error parsing existing_file_ids: {str(e)}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid format for existing_file_ids: {str(e)}",
+                )
+
+        # Handle URL processing - may need to combine with existing file IDs
         if urls:
-            response_data = await process_url_content(
-                file_handler, embedding_handler, urls, username, background_tasks
-            )
-            return JSONResponse(content=response_data)
+            # Check if we also have existing file IDs to process
+            if parsed_existing_file_ids:
+                # Combined mode: URLs + existing file IDs
+                logging.info(
+                    f"Processing URLs and {len(parsed_existing_file_ids)} existing file IDs together"
+                )
+
+                # Process URLs first
+                url_response_data = await process_url_content(
+                    file_handler, embedding_handler, urls, username, background_tasks
+                )
+
+                # Process existing file IDs
+                existing_results = await process_existing_file_ids_in_parallel(
+                    parsed_existing_file_ids, username, background_tasks
+                )
+
+                # Extract URL results and combine with existing file IDs
+                url_file_ids = url_response_data.get("file_ids", [])
+                url_filenames = url_response_data.get("original_filenames", [])
+                # Safely handle case where filenames list might be shorter than file_ids list
+                url_results = []
+                for i, file_id in enumerate(url_file_ids):
+                    filename = (
+                        url_filenames[i]
+                        if i < len(url_filenames)
+                        else f"url_file_{file_id}"
+                    )
+                    url_results.append((file_id, filename, False))
+
+                # Combine both results
+                return combine_upload_results(existing_results, url_results)
+            else:
+                # URLs only
+                response_data = await process_url_content(
+                    file_handler, embedding_handler, urls, username, background_tasks
+                )
+                return JSONResponse(content=response_data)
+
+        # Continue processing existing file IDs and new files if no URLs were processed
 
         # Combine files from both parameters
         all_files = prepare_file_list(file, files)
 
-        # Process all files in parallel
-        if len(all_files) > 0:
-            logging.info(f"Processing {len(all_files)} files with parallel processing")
-
-            # Process files in parallel and collect results
-            (
-                results,
-                processed_file_ids,
-                original_filenames,
-                is_tabular_flags,
-                statuses,
-            ) = await process_files_in_parallel(
-                file_handler, all_files, is_image, username
+        # Process existing file IDs and new files
+        if len(parsed_existing_file_ids) > 0 or len(all_files) > 0:
+            logging.info(
+                f"Processing {len(all_files)} new files and {len(parsed_existing_file_ids)} existing file IDs"
             )
 
-            # Process each file based on its type
-            await process_files_by_type(
-                background_tasks,
-                all_files,
-                results,
-                processed_file_ids,
-                original_filenames,
-                is_tabular_flags,
-                is_image,
-                username,
-            )
+            # Process existing file IDs in parallel
+            existing_results = []
+            if parsed_existing_file_ids:
+                existing_results = await process_existing_file_ids_in_parallel(
+                    parsed_existing_file_ids, username, background_tasks
+                )
 
-            # Format and return the response
-            return format_upload_response(
-                processed_file_ids, original_filenames, is_tabular_flags
-            )
+            # Process new files in parallel (existing logic)
+            new_file_results = []
+            if len(all_files) > 0:
+                (
+                    results,
+                    processed_file_ids,
+                    original_filenames,
+                    is_tabular_flags,
+                    statuses,
+                ) = await process_files_in_parallel(
+                    file_handler, all_files, is_image, username
+                )
 
-        # No files provided case
+                # Process each file based on its type
+                await process_files_by_type(
+                    background_tasks,
+                    all_files,
+                    results,
+                    processed_file_ids,
+                    original_filenames,
+                    is_tabular_flags,
+                    is_image,
+                    username,
+                )
+
+                new_file_results = list(
+                    zip(processed_file_ids, original_filenames, is_tabular_flags)
+                )
+
+            # Combine results from existing file IDs and new files
+            return combine_upload_results(existing_results, new_file_results)
+
+        # No files or file IDs provided case
         return JSONResponse(
             status_code=400,
             content={
-                "message": "No files provided in either 'file' or 'files' parameters."
+                "message": "No files provided in either 'file', 'files', 'urls', or 'existing_file_ids' parameters."
             },
         )
 
@@ -1110,6 +1183,130 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
         except Exception as upload_error:
             logging.error(f"Error updating file_info.json: {str(upload_error)}")
         raise
+
+
+async def process_existing_file_ids_in_parallel(
+    file_ids: List[str], username: str, background_tasks: BackgroundTasks
+) -> List[tuple]:
+    """
+    Process existing file IDs in parallel - validate embeddings and download if needed.
+
+    Args:
+        file_ids: List of existing file IDs to process
+        username: Username to add to the file's username list
+        background_tasks: Background tasks for async operations
+
+    Returns:
+        List of tuples: (file_id, original_filename, is_tabular)
+    """
+
+    async def process_single_existing_file_id(file_id: str) -> tuple:
+        """Process a single existing file ID"""
+        try:
+            # Check if embeddings exist using existing endpoint logic
+            result = await _check_file_embeddings(
+                file_id, "gpt_4o_mini"
+            )  # Default model for checking
+
+            if not result.get("embeddings_exist", False):
+                logging.warning(f"Embeddings not found for file ID: {file_id}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Embeddings not found for file {file_id}. Please create embeddings first.",
+                )
+
+            # Get file info to determine filename and type
+            file_info = gcs_handler.get_file_info(file_id)
+            if not file_info:
+                logging.warning(f"File info not found for file ID: {file_id}")
+                raise HTTPException(
+                    status_code=404, detail=f"File info not found for file {file_id}"
+                )
+
+            original_filename = file_info.get("original_filename", f"file_{file_id}")
+            is_tabular = file_info.get("file_type") in ["tabular", "database"]
+
+            # Check if embeddings exist locally, download if not
+            local_embeddings_exist = embedding_handler.has_local_embeddings(file_id)
+            if not local_embeddings_exist:
+                logging.info(f"Downloading embeddings for file {file_id}")
+                gcs_handler.download_files_from_folder_by_id(file_id)
+
+            # Update username in background (similar to existing file handling)
+            background_tasks.add_task(
+                update_username_for_existing_file,
+                file_id,
+                username,
+                file_info.get("username", []),
+            )
+
+            logging.info(f"Successfully processed existing file ID: {file_id}")
+            return (file_id, original_filename, is_tabular)
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logging.error(f"Error processing existing file ID {file_id}: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Error processing file ID {file_id}: {str(e)}"
+            )
+
+    # Process all file IDs in parallel
+    try:
+        results = await asyncio.gather(
+            *[process_single_existing_file_id(file_id) for file_id in file_ids],
+            return_exceptions=True,
+        )
+
+        # Handle any exceptions in results
+        processed_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                if isinstance(result, HTTPException):
+                    raise result
+                else:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Error processing file ID {file_ids[i]}: {str(result)}",
+                    )
+            processed_results.append(result)
+
+        return processed_results
+
+    except Exception as e:
+        logging.error(f"Error in parallel processing of existing file IDs: {str(e)}")
+        raise
+
+
+def combine_upload_results(
+    existing_results: List[tuple], new_file_results: List[tuple]
+) -> JSONResponse:
+    """
+    Combine results from existing file IDs and new file uploads into a unified response.
+
+    Args:
+        existing_results: List of tuples from existing file ID processing
+        new_file_results: List of tuples from new file processing
+
+    Returns:
+        JSONResponse with combined results
+    """
+    # Combine all results
+    all_results = existing_results + new_file_results
+
+    if not all_results:
+        return JSONResponse(
+            status_code=400,
+            content={"message": "No valid files or file IDs were processed."},
+        )
+
+    # Extract data from combined results
+    all_file_ids = [result[0] for result in all_results]
+    all_filenames = [result[1] for result in all_results]
+    all_is_tabular_flags = [result[2] for result in all_results]
+
+    # Use existing format_upload_response function for consistency
+    return format_upload_response(all_file_ids, all_filenames, all_is_tabular_flags)
 
 
 async def update_metadata_in_background(
