@@ -1080,8 +1080,12 @@ async def upload_file(
             },
         )
 
+    except HTTPException as http_ex:
+        # Re-raise HTTPException with proper status codes (these are expected API errors)
+        logging.error(f"API error in upload_file: {http_ex.detail}")
+        raise http_ex
     except Exception as e:
-        logging.exception(f"Error in upload_file: {str(e)}")
+        logging.exception(f"Unexpected error in upload_file: {str(e)}")
         # Return a more detailed error response with stack trace in dev mode
         if configs.app.dev:
             import traceback
@@ -1190,6 +1194,7 @@ async def process_existing_file_ids_in_parallel(
 ) -> List[tuple]:
     """
     Process existing file IDs in parallel - validate embeddings and download if needed.
+    Now handles errors gracefully by collecting all invalid file IDs and providing detailed error information.
 
     Args:
         file_ids: List of existing file IDs to process
@@ -1198,30 +1203,32 @@ async def process_existing_file_ids_in_parallel(
 
     Returns:
         List of tuples: (file_id, original_filename, is_tabular)
+
+    Raises:
+        HTTPException: With detailed information about invalid file IDs if any are found
     """
 
     async def process_single_existing_file_id(file_id: str) -> tuple:
         """Process a single existing file ID"""
         try:
             # Check if embeddings exist using existing endpoint logic
-            result = await _check_file_embeddings(
+            result = await _check_file_embeddings_safe(
                 file_id, "gpt_4o_mini"
             )  # Default model for checking
 
             if not result.get("embeddings_exist", False):
                 logging.warning(f"Embeddings not found for file ID: {file_id}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Embeddings not found for file {file_id}. Please create embeddings first.",
+                return (
+                    "error",
+                    file_id,
+                    f"Embeddings not found for file {file_id}. Please create embeddings first.",
                 )
 
             # Get file info to determine filename and type
             file_info = gcs_handler.get_file_info(file_id)
             if not file_info:
                 logging.warning(f"File info not found for file ID: {file_id}")
-                raise HTTPException(
-                    status_code=404, detail=f"File info not found for file {file_id}"
-                )
+                return ("error", file_id, f"File info not found for file {file_id}")
 
             original_filename = file_info.get("original_filename", f"file_{file_id}")
             is_tabular = file_info.get("file_type") in ["tabular", "database"]
@@ -1243,13 +1250,9 @@ async def process_existing_file_ids_in_parallel(
             logging.info(f"Successfully processed existing file ID: {file_id}")
             return (file_id, original_filename, is_tabular)
 
-        except HTTPException:
-            raise
         except Exception as e:
             logging.error(f"Error processing existing file ID {file_id}: {str(e)}")
-            raise HTTPException(
-                status_code=500, detail=f"Error processing file ID {file_id}: {str(e)}"
-            )
+            return ("error", file_id, f"Error processing file ID {file_id}: {str(e)}")
 
     # Process all file IDs in parallel
     try:
@@ -1258,24 +1261,60 @@ async def process_existing_file_ids_in_parallel(
             return_exceptions=True,
         )
 
-        # Handle any exceptions in results
+        # Separate successful results from errors
         processed_results = []
+        error_details = []
+
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                if isinstance(result, HTTPException):
-                    raise result
+                error_details.append({"file_id": file_ids[i], "error": str(result)})
+            elif isinstance(result, tuple) and len(result) == 3:
+                if result[0] == "error":
+                    error_details.append({"file_id": result[1], "error": result[2]})
                 else:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Error processing file ID {file_ids[i]}: {str(result)}",
-                    )
-            processed_results.append(result)
+                    processed_results.append(result)
+            else:
+                processed_results.append(result)
+
+        # If there are errors, raise an HTTPException with detailed information
+        if error_details:
+            valid_file_count = len(processed_results)
+            invalid_file_count = len(error_details)
+
+            error_message = f"Found {invalid_file_count} invalid file ID(s) out of {len(file_ids)} total."
+            if valid_file_count > 0:
+                error_message += (
+                    f" {valid_file_count} file(s) were processed successfully."
+                )
+
+            # Create detailed error information
+            detailed_errors = {
+                "message": error_message,
+                "total_files": len(file_ids),
+                "valid_files": valid_file_count,
+                "invalid_files": invalid_file_count,
+                "errors": error_details,
+                "successfully_processed": [result[0] for result in processed_results]
+                if processed_results
+                else [],
+            }
+
+            logging.error(
+                f"Error in parallel processing of existing file IDs: {error_message}"
+            )
+            raise HTTPException(status_code=400, detail=detailed_errors)
 
         return processed_results
 
-    except Exception as e:
-        logging.error(f"Error in parallel processing of existing file IDs: {str(e)}")
+    except HTTPException:
         raise
+    except Exception as e:
+        logging.error(
+            f"Unexpected error in parallel processing of existing file IDs: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Unexpected error processing file IDs: {str(e)}"
+        )
 
 
 def combine_upload_results(
@@ -2049,6 +2088,28 @@ async def _check_file_embeddings(file_id: str, model_choice: str) -> Dict[str, A
             detail=f"Embeddings not found for file {file_id}. Please create embeddings first.",
         )
     return result
+
+
+async def _check_file_embeddings_safe(
+    file_id: str, model_choice: str
+) -> Dict[str, Any]:
+    """Check if embeddings exist for a specific file and model choice without raising exceptions.
+
+    This is a safe version of _check_file_embeddings that returns the result without raising HTTPException.
+
+    Args:
+        file_id: The ID of the file to check
+        model_choice: The model choice to check embeddings for
+
+    Returns:
+        Dictionary containing embeddings check result (including embeddings_exist: False if not found)
+    """
+    try:
+        result = await embedding_handler.check_embeddings_exist(file_id, model_choice)
+        return result
+    except Exception as e:
+        logging.error(f"Error checking embeddings for file {file_id}: {str(e)}")
+        return {"embeddings_exist": False, "error": str(e)}
 
 
 async def _classify_file_types(file_ids: List[str]) -> Tuple[List[str], List[str]]:
