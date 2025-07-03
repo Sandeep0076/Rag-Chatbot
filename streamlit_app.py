@@ -909,7 +909,6 @@ def _get_file_types_for_upload():
         "PDF": ["pdf"],
         "Text": ["txt", "doc", "docx"],
         "URL": [],
-        "Existing Files": [],
     }[st.session_state.file_type]
 
 
@@ -1107,8 +1106,6 @@ def handle_file_upload():
 
     if st.session_state.file_type == "URL":
         _handle_url_input()
-    elif st.session_state.file_type == "Existing Files":
-        _handle_existing_file_ids_input()
     else:
         uploaded_files = _setup_file_uploader(file_types)
         existing_file_ids_input = _get_existing_file_ids_input()
@@ -1974,7 +1971,7 @@ def _render_file_type_selection():
         )
         st.session_state.file_type = st.selectbox(
             "Select file type:",
-            ["PDF", "Text", "CSV/Excel", "Database", "Image", "URL", "Existing Files"],
+            ["PDF", "Text", "CSV/Excel", "Database", "Image", "URL"],
             key="file_type_select",
             label_visibility="collapsed",
         )
