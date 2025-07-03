@@ -19,246 +19,426 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Inject custom CSS for glassy blue-purple gradient background (main + sidebar + buttons)
+# Modern Neumorphic Design System - Inspired by Reference UI
 
 custom_css = """
 <style>
-    body, .stApp {
-        background: linear-gradient(135deg, #cbe5fd 0%, #d7d8f8 60%, #b9b7f8 100%);
-        background-attachment: fixed;
+    /* === ROOT VARIABLES === */
+    :root {
+        --bg-primary: #f5f7fa;
+        --bg-secondary: #ffffff;
+        --bg-card: #ffffff;
+        --color-primary: #64748b;
+        --color-secondary: #94a3b8;
+        --color-accent: #0ea5e9;
+        --color-text: #475569;
+        --color-text-muted: #94a3b8;
+        --border-radius: 24px;
+        --border-radius-lg: 32px;
+        --shadow-soft: 0 4px 20px -2px rgba(148, 163, 184, 0.1), 0 8px 16px -4px rgba(148, 163, 184, 0.1);
+        --shadow-card: 0 8px 32px -4px rgba(148, 163, 184, 0.15), 0 16px 24px -8px rgba(148, 163, 184, 0.1);
+        --shadow-inset: inset 0 2px 8px rgba(148, 163, 184, 0.1);
+        --gradient-primary: linear-gradient(135deg, #0ea5e9 0%, #3b82f6 100%);
+        --gradient-soft: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
     }
-    /* Glass effect for main content */
-    .stApp > header, .stApp > div:first-child {
-        background: rgba(255, 255, 255, 0.35);
-        backdrop-filter: blur(8px) saturate(180%);
-        -webkit-backdrop-filter: blur(8px) saturate(180%);
-        border-radius: 16px;
-        box-shadow: 0 4px 32px 0 rgba(31, 38, 135, 0.12);
-    }
-    /* Glassy gradient sidebar */
+
+         /* === BASE STYLES === */
+     body, .stApp {
+         background: var(--bg-primary) !important;
+         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+         color: var(--color-text) !important;
+         margin: 0 !important;
+         padding: 0 !important;
+         width: 100% !important;
+     }
+
+     /* Remove any default Streamlit margins/padding */
+     .main {
+         padding: 0 !important;
+         margin: 0 !important;
+         width: 100% !important;
+     }
+
+         /* === MAIN CONTAINER === */
+     .main .block-container {
+         background: transparent !important;
+         padding: 1rem !important;
+         max-width: 100% !important;
+         width: 100% !important;
+     }
+
+    /* === SIDEBAR STYLING === */
     section[data-testid="stSidebar"], .stSidebar {
-        background: linear-gradient(135deg, #cbe5fd 0%, #d7d8f8 60%, #b9b7f8 100%) !important;
-        background-attachment: fixed !important;
-        backdrop-filter: blur(10px) saturate(180%) !important;
-        -webkit-backdrop-filter: blur(10px) saturate(180%) !important;
-        border-radius: 16px !important;
-        box-shadow: 0 4px 32px 0 rgba(31, 38, 135, 0.10) !important;
-        opacity: 0.95;
-    }
-    /* --- BUTTONS & RADIO --- */
-    /* Style for radio buttons */
-    div[data-baseweb="radio"] label {
-        background: rgba(203, 229, 253, 0.7);
-        border-radius: 12px;
-        padding: 6px 14px;
-        margin-bottom: 6px;
-        color: #1E3A8A;
-        font-weight: 500;
-        transition: background 0.2s, color 0.2s;
-        box-shadow: 0 1px 6px 0 rgba(31,38,135,0.07);
-    }
-    div[data-baseweb="radio"] label[data-checked="true"],
-    div[data-baseweb="radio"] input[type="radio"]:checked + div {
-        background: linear-gradient(90deg, #7ecbff 0%, #b9b7f8 100%);
-        color: #fff;
-        font-weight: 700;
-        box-shadow: 0 2px 10px 0 rgba(31,38,135,0.13);
-    }
-    /* Style for navigation buttons (smaller size) */
-    .nav-btn {
-        padding: 4px 12px !important;
-        font-size: 13px !important;
-        height: 32px !important;
-        min-width: 60px !important;
-        border-radius: 16px !important;
-        background: linear-gradient(90deg, #7ecbff 0%, #b9b7f8 100%) !important;
-        color: #1E3A8A !important;
-        font-weight: 500 !important;
+        background: var(--bg-secondary) !important;
         border: none !important;
-        margin-right: 6px !important;
-        box-shadow: 0 1px 6px 0 rgba(31,38,135,0.07) !important;
-        transition: background 0.2s, color 0.2s;
+        box-shadow: var(--shadow-card) !important;
+        border-radius: 0 var(--border-radius) var(--border-radius) 0 !important;
     }
-    .nav-btn.selected {
-        background: linear-gradient(90deg, #b9b7f8 0%, #7ecbff 100%) !important;
-        color: #fff !important;
-        font-weight: 700 !important;
-        box-shadow: 0 2px 10px 0 rgba(31,38,135,0.13) !important;
-    }
-    /* Style for Streamlit tab buttons */
-    button[data-baseweb="tab"] {
-        background: rgba(203, 229, 253, 0.7);
-        border-radius: 10px 10px 0 0;
-        color: #1E3A8A;
-        font-weight: 500;
-        border: none;
-        margin-right: 4px;
-        padding: 8px 20px;
-        transition: background 0.2s, color 0.2s;
-    }
-    button[data-baseweb="tab"][aria-selected="true"] {
-        background: linear-gradient(90deg, #7ecbff 0%, #b9b7f8 100%);
-        color: #fff;
-        font-weight: 700;
-        box-shadow: 0 2px 10px 0 rgba(31,38,135,0.13);
-    }
-    /* Comprehensive styling for all chat-related elements */
-    /* Make all chat containers transparent or glassy */
-    .stChatFloatingInputContainer,
-    .stChatFloatingInput,
-    .stChatInput,
-    .stChatContainer,
-    .stChatMessage,
-    section[data-testid="stChatMessageContainer"],
-    div[data-testid="stChatMessageContainer"],
-    footer.stChatInputContainer,
-    .stTextInput > div,
-    div[data-testid="stFormSubmitButton"] > div,
-    /* Target all possible parent containers */
-    div.main > div > div > div > div > div > footer,
-    div.main > div > div > div > div > footer,
-    div.main > div > div > div > footer,
-    div.main > div > div > footer,
-    .element-container:has(footer) {
+
+    .stSidebar > div {
         background: transparent !important;
-        background-color: transparent !important;
+        padding: 1.5rem !important;
+    }
+
+         /* === HEADER STYLING === */
+     .main-header {
+         background: var(--bg-card) !important;
+         border-radius: var(--border-radius-lg) !important;
+         padding: 2rem 1rem !important;
+         margin: 0 0 1.5rem 0 !important;
+         box-shadow: var(--shadow-card) !important;
+         text-align: center !important;
+         border: 1px solid rgba(148, 163, 184, 0.1) !important;
+         width: 100% !important;
+         max-width: 100% !important;
+     }
+
+     .main-header h1 {
+         background: var(--gradient-primary) !important;
+         -webkit-background-clip: text !important;
+         background-clip: text !important;
+         -webkit-text-fill-color: transparent !important;
+         font-weight: 600 !important;
+         font-size: 2rem !important;
+         margin-bottom: 0.5rem !important;
+         letter-spacing: -0.5px !important;
+         line-height: 1.2 !important;
+     }
+
+    /* === BUTTON STYLING === */
+    .stButton > button {
+        background: var(--gradient-primary) !important;
+        color: white !important;
         border: none !important;
-        box-shadow: none !important;
+        border-radius: var(--border-radius) !important;
+        padding: 0.75rem 2rem !important;
+        font-weight: 600 !important;
+        font-size: 0.95rem !important;
+        box-shadow: var(--shadow-soft) !important;
+        transition: all 0.3s ease !important;
+        height: auto !important;
+        min-height: 48px !important;
     }
 
-    /* Target the white background container specifically */
-    div.stChatContainer > div:first-child,
-    footer.stChatInputContainer,
-    div.stChatFloatingInputContainer,
-    /* Target dynamically loaded containers */
-    div[data-testid="stFormSubmitButton"] > div,
-    div.main div.element-container:has(footer) > div,
-    div.main footer,
-    div.main div:has(> footer) {
-        background: rgba(255, 255, 255, 0.25) !important;
-        background-color: rgba(255, 255, 255, 0.25) !important;
-        backdrop-filter: blur(8px) saturate(180%) !important;
-        -webkit-backdrop-filter: blur(8px) saturate(180%) !important;
-        border-radius: 16px !important;
-        border: 1px solid rgba(185, 183, 248, 0.3) !important;
-        box-shadow: 0 4px 20px 0 rgba(31, 38, 135, 0.10) !important;
+    .stButton > button:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 8px 32px -2px rgba(14, 165, 233, 0.3), 0 16px 24px -8px rgba(14, 165, 233, 0.2) !important;
     }
 
-    /* Style for all input fields in chat */
-    div[data-testid="stChatInput"] input,
-    div[data-testid="stTextInput"] input,
-    .stChatFloatingInput input,
-    .stChatInputContainer input,
-    footer input,
-    div.main input[type="text"] {
-        background: rgba(255, 255, 255, 0.35) !important;
-        backdrop-filter: blur(8px) saturate(180%) !important;
-        -webkit-backdrop-filter: blur(8px) saturate(180%) !important;
-        border-radius: 12px !important;
-        border: 1.5px solid #b9b7f8 !important;
-        color: #1E3A8A !important;
-        font-weight: 500;
-        box-shadow: 0 2px 10px 0 rgba(31,38,135,0.10) !important;
+    .stButton > button:active {
+        transform: translateY(0) !important;
     }
 
-    /* Super aggressive targeting of ANY white backgrounds */
+    /* === NAVIGATION BUTTONS === */
+    .nav-container button {
+        background: var(--bg-card) !important;
+        color: var(--color-text) !important;
+        border: 1px solid rgba(148, 163, 184, 0.15) !important;
+        border-radius: var(--border-radius) !important;
+        padding: 0.5rem 1.5rem !important;
+        margin-right: 0.5rem !important;
+        box-shadow: var(--shadow-soft) !important;
+        transition: all 0.3s ease !important;
+        font-weight: 500 !important;
+    }
+
+    .nav-container button:hover,
+    .nav-container button[data-selected="true"] {
+        background: var(--gradient-primary) !important;
+        color: white !important;
+        transform: translateY(-1px) !important;
+    }
+
+    /* === CARDS AND CONTAINERS === */
+    .modern-card {
+        background: var(--bg-card) !important;
+        border-radius: var(--border-radius) !important;
+        padding: 1.5rem !important;
+        margin-bottom: 1rem !important;
+        box-shadow: var(--shadow-card) !important;
+        border: 1px solid rgba(148, 163, 184, 0.1) !important;
+    }
+
+    /* === INPUT FIELDS === */
+    .stTextInput > div > div > input,
+    .stTextArea > div > div > textarea,
+    .stSelectbox > div > div > div > div,
+    div[data-testid="stChatInput"] input {
+        background: var(--bg-card) !important;
+        border: 1px solid rgba(148, 163, 184, 0.2) !important;
+        border-radius: var(--border-radius) !important;
+        padding: 1rem 1.5rem !important;
+        color: var(--color-text) !important;
+        font-size: 0.95rem !important;
+        box-shadow: var(--shadow-inset) !important;
+        transition: all 0.3s ease !important;
+    }
+
+    .stTextInput > div > div > input:focus,
+    .stTextArea > div > div > textarea:focus,
+    div[data-testid="stChatInput"] input:focus {
+        border-color: var(--color-accent) !important;
+        box-shadow: var(--shadow-inset), 0 0 0 3px rgba(14, 165, 233, 0.1) !important;
+        outline: none !important;
+    }
+
+    /* === CHAT INTERFACE === */
+    .stChatInputContainer,
+    div[data-testid="stChatInputContainer"] {
+        background: var(--bg-card) !important;
+        border-radius: var(--border-radius) !important;
+        padding: 1rem !important;
+        margin: 1rem 0 !important;
+        box-shadow: var(--shadow-card) !important;
+        border: 1px solid rgba(148, 163, 184, 0.1) !important;
+    }
+
+    /* === CHAT MESSAGES === */
+    div[data-testid="stChatMessage"] {
+        margin: 1rem 0 !important;
+    }
+
+    div[data-testid="stChatMessage"] > div {
+        background: var(--bg-card) !important;
+        border-radius: var(--border-radius) !important;
+        padding: 1.5rem !important;
+        box-shadow: var(--shadow-card) !important;
+        border: 1px solid rgba(148, 163, 184, 0.1) !important;
+        margin: 0 !important;
+    }
+
+    /* User messages */
+    div[data-testid="stChatMessage"]:has([data-testid="user-message"]) > div,
+    div[data-testid="stChatMessage"]:nth-child(odd) > div {
+        background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%) !important;
+        border-left: 4px solid var(--color-accent) !important;
+    }
+
+    /* Assistant messages */
+    div[data-testid="stChatMessage"]:has([data-testid="assistant-message"]) > div,
+    div[data-testid="stChatMessage"]:nth-child(even) > div {
+        background: var(--gradient-soft) !important;
+        border-left: 4px solid var(--color-secondary) !important;
+    }
+
+    /* === FILE UPLOAD AREA === */
+    .stFileUploader {
+        background: var(--bg-card) !important;
+        border: 2px dashed rgba(148, 163, 184, 0.3) !important;
+        border-radius: var(--border-radius) !important;
+        padding: 2rem !important;
+        text-align: center !important;
+        transition: all 0.3s ease !important;
+        box-shadow: var(--shadow-soft) !important;
+    }
+
+    .stFileUploader:hover {
+        border-color: var(--color-accent) !important;
+        background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%) !important;
+    }
+
+    [data-testid="stFileUploadDropzone"] {
+        background: transparent !important;
+        border: none !important;
+    }
+
+         /* === SIDEBAR STYLING CONTINUED === */
+
+    .sidebar-header {
+        color: var(--color-text) !important;
+        font-weight: 600 !important;
+        font-size: 1.1rem !important;
+        margin-bottom: 1rem !important;
+        padding-bottom: 0.5rem !important;
+        border-bottom: 2px solid rgba(148, 163, 184, 0.1) !important;
+    }
+
+    /* === ALERTS AND NOTIFICATIONS === */
+    .stAlert,
+    .stSuccess,
+    .stError,
+    .stWarning,
+    .stInfo {
+        border-radius: var(--border-radius) !important;
+        border: none !important;
+        box-shadow: var(--shadow-soft) !important;
+        padding: 1rem 1.5rem !important;
+    }
+
+    /* === EXPANDER === */
+    .streamlit-expanderHeader {
+        background: var(--bg-card) !important;
+        border-radius: var(--border-radius) !important;
+        border: 1px solid rgba(148, 163, 184, 0.1) !important;
+        box-shadow: var(--shadow-soft) !important;
+    }
+
+    .streamlit-expanderContent {
+        background: var(--bg-card) !important;
+        border-radius: 0 0 var(--border-radius) var(--border-radius) !important;
+        border: 1px solid rgba(148, 163, 184, 0.1) !important;
+        border-top: none !important;
+        box-shadow: var(--shadow-soft) !important;
+    }
+
+         /* === SELECTBOX AND DROPDOWN === */
+     .stSelectbox > div > div {
+         background: transparent !important;
+         border: none !important;
+         box-shadow: none !important;
+     }
+
+     /* Clean, minimal selectbox - just text but keep functionality */
+     .stSelectbox div[data-baseweb="select"] {
+         background: transparent !important;
+         border: none !important;
+         box-shadow: none !important;
+         min-height: auto !important;
+         display: flex !important;
+         align-items: center !important;
+         cursor: pointer !important;
+     }
+
+     /* Control container - no styling, center text, keep clickable */
+     .stSelectbox div[data-baseweb="select"] > div {
+         background: transparent !important;
+         border: none !important;
+         padding: 4px 0 !important;
+         min-height: auto !important;
+         display: flex !important;
+         align-items: center !important;
+         cursor: pointer !important;
+         width: 100% !important;
+     }
+
+     /* Selected value styling - clean text, centered, clickable */
+     .stSelectbox div[data-baseweb="select"] span {
+         color: var(--color-text) !important;
+         font-weight: 500 !important;
+         font-size: 1rem !important;
+         display: flex !important;
+         align-items: center !important;
+         cursor: pointer !important;
+         pointer-events: all !important;
+     }
+
+     /* Dropdown arrow - minimal but visible and clickable */
+     .stSelectbox svg {
+         color: var(--color-secondary) !important;
+         width: 16px !important;
+         height: 16px !important;
+         margin-left: 8px !important;
+         cursor: pointer !important;
+         pointer-events: all !important;
+     }
+
+     /* Ensure the entire selectbox area is clickable */
+     .stSelectbox {
+         cursor: pointer !important;
+     }
+
+     .stSelectbox > div {
+         cursor: pointer !important;
+     }
+
+     .stSelectbox > div > div {
+         cursor: pointer !important;
+     }
+
+     /* Dropdown menu - only style the popup */
+     .stSelectbox [data-baseweb="popover"] {
+         background: var(--bg-card) !important;
+         border-radius: 12px !important;
+         box-shadow: var(--shadow-card) !important;
+         border: 1px solid rgba(148, 163, 184, 0.15) !important;
+         margin-top: 4px !important;
+     }
+
+     /* Dropdown options */
+     .stSelectbox [data-baseweb="popover"] > div {
+         background: var(--bg-card) !important;
+         border-radius: 12px !important;
+         padding: 8px !important;
+     }
+
+     .stSelectbox [role="option"] {
+         background: transparent !important;
+         color: var(--color-text) !important;
+         padding: 0.75rem 1rem !important;
+         border-radius: 8px !important;
+         margin: 2px 0 !important;
+         transition: all 0.2s ease !important;
+         font-size: 0.95rem !important;
+         cursor: pointer !important;
+     }
+
+     .stSelectbox [role="option"]:hover {
+         background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%) !important;
+         color: var(--color-accent) !important;
+     }
+
+     /* Remove visual styling but keep functionality */
+     .stSelectbox > div > div > div,
+     .stSelectbox [data-baseweb="select"] > div > div,
+     .stSelectbox [data-baseweb="select"] > div,
+     .stSelectbox div {
+         background: transparent !important;
+         border: none !important;
+         box-shadow: none !important;
+     }
+
+     /* Only hide truly empty divs, not functional elements */
+     .stSelectbox > div > div > div:empty {
+         display: none !important;
+     }
+
+    /* === SLIDER === */
+    .stSlider > div > div > div > div {
+        background: var(--color-accent) !important;
+    }
+
+    /* === CHECKBOX === */
+    .stCheckbox > label > div {
+        background: var(--bg-card) !important;
+        border-radius: 6px !important;
+        border: 1px solid rgba(148, 163, 184, 0.2) !important;
+        box-shadow: var(--shadow-inset) !important;
+    }
+
+    /* === REMOVE UNWANTED BACKGROUNDS === */
     div.main > div > div > div > div,
     div.block-container,
     div[data-testid="stVerticalBlock"] > div,
-    div.stMarkdown,
-    div.stFileUploader,
-    .stFileUploader > div,
-    div.stButton,
-    div.stMarkdown div,
     div.element-container,
-    div.stAlert,
-    div.stSuccessAlert,
-    div.stSpinner,
-    /* Target chat message containers specifically */
-    div.stChatMessageContent,
-    div.stChatMessage,
-    div[data-testid="stChatMessage"],
-    div.stChatMessageContent > div,
-    /* Target the bottom input area specifically */
-    footer,
-    footer > div,
-    div[data-testid="stForm"],
-    div[data-testid="stForm"] > div,
-    /* Target absolutely all divs in the entire app */
-    div.main div,
-    div.stApp div,
-    div {
-        background-color: transparent !important;
+    div.stMarkdown,
+    div.stSpinner {
+        background: transparent !important;
     }
 
-    /* Target the specific chat input container at the bottom */
-    .stChatInputContainer,
-    .stChatFloatingInputContainer,
-    footer,
-    form,
-    div[data-testid="stForm"],
-    div[data-baseweb],
-    div[data-testid="stFormSubmitButton"],
-    /* Target the chat message area */
-    section[data-testid="stChatMessageContainer"] > div {
-        background: rgba(255, 255, 255, 0.25) !important;
-        backdrop-filter: blur(8px) saturate(180%) !important;
-        -webkit-backdrop-filter: blur(8px) saturate(180%) !important;
-        border-radius: 12px !important;
-        border: 1px solid rgba(185, 183, 248, 0.3) !important;
+    /* === TYPOGRAPHY === */
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        color: var(--color-text) !important;
+        font-weight: 600 !important;
     }
 
-    /* Style user messages differently from assistant messages */
-    /* User messages - blue gradient */
-    div[data-testid="stChatMessage"]:nth-child(odd) > div {
-        background: linear-gradient(90deg, rgba(126, 203, 255, 0.4) 0%, rgba(185, 183, 248, 0.3) 100%) !important;
-        border-radius: 15px !important;
-        border: 1px solid rgba(126, 203, 255, 0.5) !important;
-        box-shadow: 0 2px 10px 0 rgba(31, 38, 135, 0.1) !important;
-        margin: 8px 0 !important;
-        padding: 10px !important;
+    .stMarkdown p {
+        color: var(--color-text) !important;
+        line-height: 1.6 !important;
     }
 
-    /* Assistant messages - purple gradient */
-    div[data-testid="stChatMessage"]:nth-child(even) > div {
-        background: linear-gradient(90deg, rgba(185, 183, 248, 0.4) 0%, rgba(126, 203, 255, 0.3) 100%) !important;
-        border-radius: 15px !important;
-        border: 1px solid rgba(185, 183, 248, 0.5) !important;
-        box-shadow: 0 2px 10px 0 rgba(31, 38, 135, 0.1) !important;
-        margin: 8px 0 !important;
-        padding: 10px !important;
+    /* === CUSTOM UTILITIES === */
+    .glass-effect {
+        backdrop-filter: blur(10px) !important;
+        -webkit-backdrop-filter: blur(10px) !important;
+        background: rgba(255, 255, 255, 0.9) !important;
     }
 
-    /* Hide any default icons that might be causing duplication */
-    div[data-testid="stChatMessage"] .stAvatar {
-        /* Keep the built-in avatars, remove our custom ones */
+    .soft-shadow {
+        box-shadow: var(--shadow-soft) !important;
     }
 
-    /* Make all file uploader and success alerts match the theme */
-    .uploadedFile,
-    .uploadedFile > div,
-    .row-widget.stButton,
-    .stAlert,
-    .stSuccessAlert,
-    .css-1kyxreq,
-    [data-testid="stFileUploadDropzone"] {
-        background: rgba(255, 255, 255, 0.25) !important;
-        backdrop-filter: blur(8px) saturate(180%) !important;
-        -webkit-backdrop-filter: blur(8px) saturate(180%) !important;
-        border-radius: 12px !important;
-        border: 1px solid rgba(185, 183, 248, 0.3) !important;
-    }
-
-    /* Force the entire app body to have the gradient background */
-    body::before {
-        content: "";
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: linear-gradient(135deg, #cbe5fd 0%, #d7d8f8 60%, #b9b7f8 100%);
-        z-index: -1;
+    .card-shadow {
+        box-shadow: var(--shadow-card) !important;
     }
 </style>
 """
@@ -1579,7 +1759,7 @@ def plot_chart(chart_config):
 
 
 def render_navigation():
-    """Render the top navigation bar with buttons."""
+    """Render the top navigation bar with horizontal modern buttons."""
     # Make sure model_types exists in session state
     if "model_types" not in st.session_state:
         st.session_state.model_types = {"text": [], "image": []}
@@ -1591,13 +1771,32 @@ def render_navigation():
     ):
         st.session_state.nav_option = "Image generation"
 
-    nav_options = ["Chat", "Image generation"]
-    nav_cols = st.columns(len(nav_options))
-    for i, nav in enumerate(nav_options):
-        if nav_cols[i].button(
-            nav, key=f"nav_{nav}", help=f"Go to {nav}", use_container_width=False
+    # Create navigation container with modern styling
+    st.markdown(
+        "<div class='nav-container' style='margin-bottom: 1.5rem; text-align: center; width: 100%;'>",
+        unsafe_allow_html=True,
+    )
+
+    # Create horizontal layout for navigation buttons
+    nav_cols = st.columns([3, 1, 1, 3])  # Center the two buttons horizontally
+
+    # Place each button in its own column for horizontal layout
+    with nav_cols[1]:
+        if st.button(
+            "Chat", key="nav_Chat", help="Go to Chat", use_container_width=True
         ):
-            st.session_state.nav_option = nav
+            st.session_state.nav_option = "Chat"
+
+    with nav_cols[2]:
+        if st.button(
+            "Image generation",
+            key="nav_Image_generation",
+            help="Go to Image generation",
+            use_container_width=True,
+        ):
+            st.session_state.nav_option = "Image generation"
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def process_url_input(url_input):
@@ -1957,17 +2156,16 @@ def handle_existing_file_ids_processing(existing_file_ids_input):
 
 
 def _render_new_chat_button():
-    """Render the New Chat button."""
+    """Render the New Chat button with modern styling."""
     if st.button("New Chat", key="new_chat_btn"):
         cleanup_files()
 
 
 def _render_file_type_selection():
-    """Render file type selection for Chat mode."""
+    """Render file type selection for Chat mode with modern styling."""
     if st.session_state.nav_option == "Chat":
         st.markdown(
-            '<div class="sidebar-header">Select file type:</div>',
-            unsafe_allow_html=True,
+            '<div class="sidebar-header">File Type</div>', unsafe_allow_html=True
         )
         st.session_state.file_type = st.selectbox(
             "Select file type:",
@@ -2173,7 +2371,9 @@ def _render_uploaded_image_sidebar():
 
 
 def _render_chat_file_interface():
-    """Render file interface for Chat mode."""
+    """Render file interface for Chat mode with modern styling."""
+    st.markdown('<div class="sidebar-header">File Upload</div>', unsafe_allow_html=True)
+
     _render_database_info()
 
     if st.session_state.file_type == "URL":
@@ -2182,20 +2382,23 @@ def _render_chat_file_interface():
         _render_file_uploader_interface()
 
     _render_uploaded_image_sidebar()
-    st.markdown("---")
 
 
 def _render_user_information():
-    """Render user information section."""
+    """Render user information section with modern styling."""
     st.markdown(
         '<div class="sidebar-header">User Information</div>', unsafe_allow_html=True
     )
-    username = st.text_input("Enter your username:")
+    username = st.text_input(
+        "Enter your username:",
+        label_visibility="collapsed",
+        placeholder="Enter your username",
+    )
     st.session_state.username = username
 
 
 def _render_model_selection():
-    """Render model selection section."""
+    """Render model selection section with modern styling."""
     st.markdown(
         '<div class="sidebar-header">Model Selection</div>', unsafe_allow_html=True
     )
@@ -2205,17 +2408,19 @@ def _render_model_selection():
         index=st.session_state.available_models.index(st.session_state.model_choice),
         key="temp_model_choice",
         on_change=on_model_change,
+        label_visibility="collapsed",
     )
 
 
 def _render_temperature_settings():
-    """Render temperature settings section."""
+    """Render temperature settings section with modern styling."""
     st.markdown(
         '<div class="sidebar-header">Temperature Settings</div>', unsafe_allow_html=True
     )
 
     st.markdown(
-        "<small>Temperature controls randomness: 0.0 = focused, 1.0 = creative</small>",
+        "<small style='color: var(--color-text-muted);'>"
+        "Temperature controls randomness: 0.0 = focused, 1.0 = creative</small>",
         unsafe_allow_html=True,
     )
 
@@ -2228,7 +2433,7 @@ def _render_temperature_settings():
     if use_auto_temperature:
         st.session_state.temperature = None
         st.markdown(
-            '<small style="color: #666;">Using automatic temperature based on model</small>',
+            '<small style="color: var(--color-text-muted);">Using automatic temperature based on model</small>',
             unsafe_allow_html=True,
         )
     else:
@@ -2241,6 +2446,7 @@ def _render_temperature_settings():
             else st.session_state.temperature,
             step=0.1,
             help="Higher values make output more random, lower values more focused",
+            label_visibility="collapsed",
         )
         st.session_state.temperature = temperature_value
 
