@@ -5,7 +5,7 @@ import requests
 import streamlit as st
 from PIL import Image
 
-from streamlit_image_generation import display_app_header, handle_image_generation
+from streamlit_image_generation import handle_image_generation
 
 # Configure logging
 logging.basicConfig(
@@ -83,9 +83,9 @@ custom_css = """
          /* === HEADER STYLING === */
      .main-header {
          background: var(--bg-card) !important;
-         border-radius: var(--border-radius-lg) !important;
-         padding: 2rem 1rem !important;
-         margin: 0 0 1.5rem 0 !important;
+         border-radius: var(--border-radius) !important;
+         padding: 1rem 1rem !important;
+         margin: 0 0 1rem 0 !important;
          box-shadow: var(--shadow-card) !important;
          text-align: center !important;
          border: 1px solid rgba(148, 163, 184, 0.1) !important;
@@ -98,38 +98,50 @@ custom_css = """
          -webkit-background-clip: text !important;
          background-clip: text !important;
          -webkit-text-fill-color: transparent !important;
-         font-weight: 600 !important;
-         font-size: 2rem !important;
-         margin-bottom: 0.5rem !important;
-         letter-spacing: -0.5px !important;
-         line-height: 1.2 !important;
+         font-weight: 500 !important;
+         font-size: 1.5rem !important;
+         margin-bottom: 0.3rem !important;
+         letter-spacing: -0.75px !important;
+         line-height: 1.1 !important;
      }
 
     /* === BUTTON STYLING === */
     .stButton > button {
-        background: var(--gradient-primary) !important;
-        color: white !important;
-        border: none !important;
+        background: linear-gradient(145deg, #f0f4f8, #d6e4ed) !important;
+        color: var(--color-text) !important;
+        border: 1px solid rgba(148, 163, 184, 0.2) !important;
         border-radius: var(--border-radius) !important;
         padding: 0.75rem 2rem !important;
         font-weight: 600 !important;
         font-size: 0.95rem !important;
-        box-shadow: var(--shadow-soft) !important;
+        box-shadow: 8px 8px 16px rgba(148, 163, 184, 0.15), -8px -8px 16px rgba(255, 255, 255, 0.7) !important;
         transition: all 0.3s ease !important;
         height: auto !important;
         min-height: 48px !important;
     }
 
     .stButton > button:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 8px 32px -2px rgba(14, 165, 233, 0.3), 0 16px 24px -8px rgba(14, 165, 233, 0.2) !important;
+        background: linear-gradient(145deg, #e2e8f0, #cbd5e0) !important;
+        box-shadow: 6px 6px 12px rgba(148, 163, 184, 0.2), -6px -6px 12px rgba(255, 255, 255, 0.8) !important;
+        transform: translateY(-1px) !important;
     }
 
     .stButton > button:active {
+        background: linear-gradient(145deg, #cbd5e0, #e2e8f0) !important;
+        box-shadow: inset 4px 4px 8px rgba(148, 163, 184, 0.2), inset -4px -4px 8px rgba(255, 255, 255, 0.7) !important;
         transform: translateY(0) !important;
     }
 
     /* === NAVIGATION BUTTONS === */
+    .nav-container {
+        background: var(--bg-card) !important;
+        border-radius: var(--border-radius) !important;
+        padding: 0.75rem !important;
+        margin-bottom: 1rem !important;
+        box-shadow: var(--shadow-card) !important;
+        border: 1px solid rgba(148, 163, 184, 0.1) !important;
+    }
+
     .nav-container button {
         background: var(--bg-card) !important;
         color: var(--color-text) !important;
@@ -187,10 +199,46 @@ custom_css = """
     div[data-testid="stChatInputContainer"] {
         background: var(--bg-card) !important;
         border-radius: var(--border-radius) !important;
-        padding: 1rem !important;
-        margin: 1rem 0 !important;
+        padding: 1.5rem !important;
+        margin: 2rem 0 1rem 0 !important;
         box-shadow: var(--shadow-card) !important;
-        border: 1px solid rgba(148, 163, 184, 0.1) !important;
+        border: 1px solid rgba(148, 163, 184, 0.2) !important;
+    }
+
+    /* Style the chat input itself to be more visible and stick to bottom */
+    div[data-testid="stChatInput"] {
+        margin-top: 2rem !important;
+        margin-bottom: 1rem !important;
+        background: var(--bg-card) !important;
+        border-radius: var(--border-radius) !important;
+        padding: 1.5rem !important;
+        box-shadow: var(--shadow-card) !important;
+        border: 1px solid rgba(148, 163, 184, 0.2) !important;
+        position: fixed !important;
+        bottom: 2rem !important;
+        left: 50% !important;
+        transform: translateX(-50%) !important;
+        width: calc(100% - 20rem) !important;
+        z-index: 1000 !important;
+    }
+
+    /* Make the actual input field more visible */
+    div[data-testid="stChatInput"] input {
+        background: var(--bg-card) !important;
+        border: 1px solid rgba(148, 163, 184, 0.3) !important;
+        border-radius: var(--border-radius) !important;
+        padding: 1rem 1.5rem !important;
+        color: var(--color-text) !important;
+        font-size: 1rem !important;
+        box-shadow: var(--shadow-inset) !important;
+        width: 100% !important;
+    }
+
+    /* Chat input focus state */
+    div[data-testid="stChatInput"] input:focus {
+        border-color: var(--color-accent) !important;
+        box-shadow: var(--shadow-inset), 0 0 0 3px rgba(14, 165, 233, 0.1) !important;
+        outline: none !important;
     }
 
     /* === CHAT MESSAGES === */
@@ -207,18 +255,51 @@ custom_css = """
         margin: 0 !important;
     }
 
-    /* User messages */
+    /* User messages - keep white/light */
     div[data-testid="stChatMessage"]:has([data-testid="user-message"]) > div,
     div[data-testid="stChatMessage"]:nth-child(odd) > div {
-        background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%) !important;
-        border-left: 4px solid var(--color-accent) !important;
+        background: var(--bg-card) !important;
+        border-left: 4px solid #cbd5e0 !important;
     }
 
-    /* Assistant messages */
+    /* Assistant messages - light gray, darker than user messages */
     div[data-testid="stChatMessage"]:has([data-testid="assistant-message"]) > div,
     div[data-testid="stChatMessage"]:nth-child(even) > div {
-        background: var(--gradient-soft) !important;
-        border-left: 4px solid var(--color-secondary) !important;
+        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%) !important;
+        border-left: 4px solid #94a3b8 !important;
+    }
+
+    /* === CHAT AVATARS/ICONS === */
+    /* Make chat avatars darker and more visible */
+    div[data-testid="stChatMessage"] img,
+    div[data-testid="stChatMessage"] svg,
+    div[data-testid="stChatMessage"] [data-testid="chatAvatarIcon-user"],
+    div[data-testid="stChatMessage"] [data-testid="chatAvatarIcon-assistant"] {
+        opacity: 1 !important;
+        filter: brightness(0.6) contrast(1.5) !important;
+        background: rgba(71, 85, 105, 0.8) !important;
+        border-radius: 50% !important;
+        padding: 8px !important;
+        color: white !important;
+    }
+
+    /* Target the avatar container */
+    div[data-testid="stChatMessage"] > div:first-child,
+    .stChatMessage [data-testid="chatAvatarIcon-user"],
+    .stChatMessage [data-testid="chatAvatarIcon-assistant"] {
+        background: rgba(71, 85, 105, 0.8) !important;
+        border-radius: 50% !important;
+        min-width: 40px !important;
+        min-height: 40px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+
+    /* Make the icons inside avatars darker */
+    div[data-testid="stChatMessage"] svg path {
+        fill: white !important;
+        stroke: white !important;
     }
 
     /* === FILE UPLOAD AREA === */
@@ -1320,7 +1401,8 @@ def display_chat_interface():
         """,
             unsafe_allow_html=True,
         )
-        # Display messages if any exist
+
+        # Display messages first
         if len(st.session_state.messages) > 0:
             for message in st.session_state.messages:
                 with st.chat_message(message["role"]):
@@ -1333,13 +1415,11 @@ def display_chat_interface():
                     else:
                         st.write(message["content"])
 
-        # Chat input - immediately below file info with no gap
+        # Handle user input first (this processes the submission)
         user_input = st.chat_input("Enter your message")
 
         if user_input:
             st.session_state.messages.append({"role": "user", "content": user_input})
-            with st.chat_message("user"):
-                st.write(user_input)
 
             with st.spinner("Processing your request..."):
                 # Get previous messages to include in history
@@ -1429,8 +1509,6 @@ def display_chat_interface():
                             "content": chat_result.get("response", str(chat_result)),
                         }
                         st.session_state.messages.append(ai_message)
-                        with st.chat_message("assistant"):
-                            st.write(ai_message["content"])
                 else:
                     st.error(f"Request failed: {chat_response.text}")
     else:
@@ -1498,6 +1576,8 @@ def initialize_models_state():
 
     if "model_choice" not in st.session_state:
         st.session_state.model_choice = "gpt_4o_mini"
+    if "temp_model_choice" not in st.session_state:
+        st.session_state.temp_model_choice = st.session_state.model_choice
     if "model_initialized" not in st.session_state:
         st.session_state.model_initialized = False
 
@@ -1989,6 +2069,7 @@ def process_file_upload(uploaded_file, is_image):
 
 def render_sidebar():
     """Render the sidebar components."""
+    _render_model_selection()
     _render_new_chat_button()
     _render_file_type_selection()
 
@@ -1996,7 +2077,6 @@ def render_sidebar():
         _render_chat_file_interface()
 
     _render_user_information()
-    _render_model_selection()
     _render_temperature_settings()
 
 
@@ -2008,36 +2088,25 @@ def main():
     # Initialize session state
     initialize_session_state()
 
-    # Main content area - title
-    display_app_header()
-
-    # Top navigation bar
+    # Top navigation bar (moved to very top)
     render_navigation()
 
-    # Add horizontal line for visual separation
-    st.markdown("<hr/>", unsafe_allow_html=True)
-
-    # Create sidebar with conditional content based on navigation selection
+    # Use proper sidebar for collapsibility
     with st.sidebar:
         render_sidebar()
 
+    # Main content area
     # Display different content based on navigation selection
     if st.session_state.nav_option == "Chat":
-        # File upload is now handled in the sidebar
         display_chat_interface()
     elif st.session_state.nav_option == "Image generation":
-        # Handle image generation interface and API calls
         handle_image_generation()
     elif st.session_state.nav_option == "Chart Generation":
-        # Existing code for chart generation
         st.title("Chart Generation")
         st.write("Upload CSV/Excel files and generate visualizations.")
-        # Keep the existing chart generation code as is
     elif st.session_state.nav_option == "Reference":
-        # Existing code for reference section
         st.title("📚 Reference")
         st.markdown("### Welcome to the RAG Chatbot Reference Page")
-        # Keep the existing reference section code as is
 
 
 def enhanced_batch_upload(files_list, existing_file_ids_input, is_image=False):

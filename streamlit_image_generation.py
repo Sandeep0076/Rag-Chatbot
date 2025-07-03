@@ -12,7 +12,7 @@ def display_app_header():
         (
             "<div class='main-header'>"
             "<h1>RTL-Deutschland RAG Chatbot</h1>"
-            "<div style='font-size: 1.2rem; font-weight: 400; color: var(--color-text-muted); margin-top: 0.5rem;'>"
+            "<div style='font-size: 0.9rem; font-weight: 400; color: var(--color-text-muted); margin-top: 0.2rem;'>"
             "Chat with your PDFs, Images, Tables, and more"
             "</div>"
             "</div>"
