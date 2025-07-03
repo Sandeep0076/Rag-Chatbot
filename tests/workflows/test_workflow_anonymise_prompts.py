@@ -100,4 +100,4 @@ def test_anonymise_prompts(mock_get_db_session, mock_log, test_db_session):
             .all()
         )
 
-        assert len(prompts) == 2, f"Expected 2 prompts, but found {len(prompts)}"
+        assert len(prompts) == 3, f"Expected 3 prompts, but found {len(prompts)}"

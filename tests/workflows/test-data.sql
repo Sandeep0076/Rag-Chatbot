@@ -68,19 +68,20 @@ INSERT INTO Citation (id, title, url, messageId) VALUES
 
 -- Insert some prompts
 INSERT INTO Prompt (id, name, description, prompt, folderId, published, userId, createdAt, updatedAt, tag, copyCount, publishedAt) VALUES
--- two published published prompts by deleted users
+-- three published published prompts by deleted users
 -- should not be deleted and the user be replaced with id of "user.deleted@rtl.de", because they were published
 ('prompt1_id', 'Prompt 1', 'This is a system prompt', 'Prompt content 1', 'prompt_folder1_id', True, 'user5_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, '2024-09-25 08:00:00'),
-('prompt2_id', 'Prompt 2', 'This is a user prompt', 'Prompt content 2', 'prompt_folder2_id', True, 'user6_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, '2024-09-25 08:00:00'),
+('prompt2_id', 'Prompt 2', 'This is some prompt', 'Prompt content 2', 'prompt_folder1_id', True, 'user5_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, '2024-09-25 08:00:00'),
+('prompt3_id', 'Prompt 3', 'This is a user prompt', 'Prompt content 3', 'prompt_folder2_id', True, 'user6_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, '2024-09-25 08:00:00'),
 -- two non-published prompts by deleted users -> should be deleted
-('prompt3_id', 'Prompt 5', 'This is a system prompt', 'Prompt content 3', 'prompt_folder1_id', False, 'user5_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, NULL),
-('prompt4_id', 'Prompt 6', 'This is a user prompt', 'Prompt content 4', 'prompt_folder2_id', False, 'user6_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, NULL),
+('prompt4_id', 'Prompt 4', 'This is a system prompt', 'Prompt content 4', 'prompt_folder1_id', False, 'user5_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, NULL),
+('prompt5_id', 'Prompt 5', 'This is a user prompt', 'Prompt content 5', 'prompt_folder2_id', False, 'user6_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, NULL),
 -- two published prompts by non-deleted users -> shoud remain unchanged
-('prompt5_id', 'Prompt 3', 'This is a system prompt', 'Prompt content 5', 'prompt_folder3_id', True, 'user1_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, '2024-09-25 08:00:00'),
-('prompt6_id', 'Prompt 4', 'This is a user prompt', 'Prompt content 6', 'prompt_folder4_id', True, 'user2_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, '2024-09-25 08:00:00'),
+('prompt6_id', 'Prompt 6', 'This is a system prompt', 'Prompt content 6', 'prompt_folder3_id', True, 'user1_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, '2024-09-25 08:00:00'),
+('prompt7_id', 'Prompt 7', 'This is a user prompt', 'Prompt content 7', 'prompt_folder4_id', True, 'user2_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, '2024-09-25 08:00:00'),
 -- two non-published prompts by non-deleted users -> shoud remain unchanged
-('prompt7_id', 'Prompt 7', 'This is a system prompt', 'Prompt content 7', 'prompt_folder3_id', False, 'user1_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, NULL),
-('prompt8_id', 'Prompt 8', 'This is a user prompt', 'Prompt content 8', 'prompt_folder4_id', False, 'user2_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, NULL);
+('prompt8_id', 'Prompt 8', 'This is a system prompt', 'Prompt content 8', 'prompt_folder3_id', False, 'user1_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, NULL),
+('prompt9_id', 'Prompt 9', 'This is a user prompt', 'Prompt content 9', 'prompt_folder4_id', False, 'user2_id', '2024-09-25 08:00:00', '2024-09-25 08:00:00', 'some tag', 0, NULL);
 
 -- Insert some prompt folders
 INSERT INTO PromptFolder (id, name, userId, rootFolder, createdAt, updatedAt) VALUES
@@ -90,3 +91,11 @@ INSERT INTO PromptFolder (id, name, userId, rootFolder, createdAt, updatedAt) VA
 -- folders of non-deleted users
 ('prompt_folder3_id', 'Allgemein', 'user1_id', True, '2024-09-25 08:00:00', '2024-09-25 08:00:00'),
 ('prompt_folder4_id', 'Allgemein', 'user2_id', True, '2024-09-25 08:00:00', '2024-09-25 08:00:00');
+
+-- Insert some prompt likes
+INSERT INTO PromptLike (id, userId, promptId, createdAt) VALUES
+-- likes of shared prompts by active users on prompts of deletion candidates
+('prompt_like1_id', 'user1_id', 'prompt1_id', '2024-09-25 08:00:00'), -- belongs to user5_id
+('prompt_like2_id', 'user4_id', 'prompt1_id', '2024-09-25 08:00:00'), -- belongs to user5_id
+-- likes of non-deleted users
+('prompt_like3_id', 'user2_id', 'prompt6_id', '2024-09-25 08:00:00'); -- belongs to user1_id
