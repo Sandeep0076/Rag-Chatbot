@@ -75,7 +75,7 @@ def test_published_prompts(test_db_session):
         prompt_count = (
             db.query(Prompt).filter(Prompt.published).count()
         )  # Query the number of shared prompts in the Prompt table
-        assert prompt_count == 4, f"Expected 4 prompts, but found {prompt_count}"
+        assert prompt_count == 5, f"Expected 5 prompts, but found {prompt_count}"
 
 
 def test_citations(test_db_session):

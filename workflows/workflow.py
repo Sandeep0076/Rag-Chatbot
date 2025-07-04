@@ -7,14 +7,22 @@ import time
 from contextlib import contextmanager
 from typing import Dict, List
 
-from sqlalchemy import and_, create_engine, distinct, text
+from sqlalchemy import and_, create_engine, distinct, or_, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 import workflows.db.helpers as db_helpers
 import workflows.msgraph as msgraph
 from workflows.app_config import config
-from workflows.db.tables import Citation, Conversation, Folder, Message, Prompt, User
+from workflows.db.tables import (
+    Citation,
+    Conversation,
+    Folder,
+    Message,
+    Prompt,
+    PromptFolder,
+    User,
+)
 from workflows.gcs.helpers import delete_embeddings, file_present_in_gcp
 
 logging.basicConfig(
@@ -279,6 +287,82 @@ def anonymise_shared_prompts():
     log.info("Workflow step anonymising shared prompts completed.")
 
 
+def delete_private_prompts():
+    """"""
+
+    # 1. Get the list of users marked for deletion from the chatbot database
+    # 2. and delete the private prompts
+    users = get_users_deletion_candidates()
+
+    if not users:
+        log.info("No users found: no prompts and related objects to delete.")
+        log.info("Workflow step 'deleting private prompts' completed.")
+        return
+
+    with get_db_session() as session:
+        try:
+            # NOTE: PromptLikes do not have to be deleted, since private Prompts did not receive any likes.
+            # NOTE: PromptTags do not have to be deleted, since those are unique and should remain in the database.
+
+            # Query for prompts that are not published (where Prompt.published is None) → delete
+            prompts = (
+                session.query(Prompt)
+                .filter(
+                    and_(
+                        Prompt.userId.in_([user.id for user in users]),
+                        # private prompts are not published
+                        or_(Prompt.published.is_(None), Prompt.published.isnot(True)),
+                    )
+                )
+                .all()
+            )
+
+            log.info("About to delete: " f"{len(prompts)} private Prompts.")
+
+            # delete the prompts ..
+            for prompt in prompts:
+                session.delete(prompt)
+
+            session.commit()
+
+            # Query for folders that have no published prompts (where Prompt.published is None) → delete
+            promptFolders = (
+                session.query(PromptFolder)
+                .join(Prompt)
+                .filter(
+                    and_(
+                        Prompt.userId.in_([user.id for user in users]),
+                        # private prompts are not published
+                        or_(Prompt.published.is_(None), Prompt.published.isnot(True)),
+                    )
+                )
+                .distinct()
+                .all()
+            )
+
+            log.info(
+                "About to delete: "
+                f"{len(promptFolders)} PromptFolders related to private Prompts."
+            )
+
+            # .. and promptFolders related to the user
+            for promptFolder in promptFolders:
+                session.delete(promptFolder)
+
+            # Commit changes
+            session.commit()
+
+            # Log success
+            log.info("Successfully deleted Prompts and PromptFolders for users.")
+
+        except Exception as e:
+            session.rollback()
+            log.error(f"Failed to delete prompts and folders for users: {e}")
+            return
+
+    log.info("Workflow step 'deleting private prompts' completed.")
+
+
 def delete_candidate_user_data():
     """
     Workflow to delete user data for those marked as deletion candidates.
@@ -341,9 +425,8 @@ def delete_candidate_user_data():
                 for folder in folders:
                     session.delete(folder)
 
-                # TODO delete prompts
-
-                # NOTE anonmising shared prompts is handled in anaonymise_shared_prompts()
+                # NOTE private prompts and related objects are deleted in separate step: delete_private_prompts()
+                # NOTE anonmising shared prompts is handled in separate workflow step: anonymise_shared_prompts()
 
                 # Finally, delete the user itself
                 session.delete(user)
