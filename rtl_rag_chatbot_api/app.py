@@ -1652,9 +1652,7 @@ async def check_embeddings(
     """
     try:
         # Initialize the embedding handler
-        embedding_handler = EmbeddingHandler(
-            configs=configs, gcs_handler=gcs_handler, file_info=[]
-        )
+        embedding_handler = EmbeddingHandler(configs=configs, gcs_handler=gcs_handler)
 
         # Check if embeddings exist
         result = await embedding_handler.check_embeddings_exist(
