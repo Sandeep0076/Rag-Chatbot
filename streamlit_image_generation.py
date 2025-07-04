@@ -7,16 +7,12 @@ API_URL = "http://localhost:8080"
 
 
 def display_app_header():
-    """Display the app header with title and logo."""
+    """Display the app header with modern neumorphic design."""
     st.markdown(
         (
-            "<div style='background: linear-gradient(90deg, #1e3a8a 0%, #2563eb 100%); "
-            "padding: 2rem 1rem 1rem 1rem; border-radius: 1rem; "
-            "box-shadow: 0 4px 16px rgba(30,58,138,0.07); margin-bottom: 1rem; text-align: center;'>"
-            "<span style='font-size: 2.5rem; font-weight: 700; color: #fff; letter-spacing: 1px;'>"
-            "RTL-Deutschland RAG Chatbot"
-            "</span>"
-            "<div style='font-size: 1.2rem; font-weight: 400; color: #e0e7ef; margin-top: 0.5rem;'>"
+            "<div class='main-header'>"
+            "<h1>RTL-Deutschland RAG Chatbot</h1>"
+            "<div style='font-size: 0.9rem; font-weight: 400; color: var(--color-text-muted); margin-top: 0.2rem;'>"
             "Chat with your PDFs, Images, Tables, and more"
             "</div>"
             "</div>"
@@ -231,7 +227,7 @@ def display_imagen_image(imagen_result, prompt, col):
                 st.markdown('<div class="imagen-container">', unsafe_allow_html=True)
                 st.image(
                     imagen_url,
-                    caption=f"Generated with Imagen (Image {i+1}/{len(image_urls)})",
+                    caption=f"Generated with Imagen (Image {i + 1}/{len(image_urls)})",
                 )
                 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -249,10 +245,10 @@ def display_imagen_image(imagen_result, prompt, col):
                         onclick="
                             const link = document.getElementById('{download_link_id}');
                             link.href = 'data:image/png;base64,{base64_data}';
-                            link.download = 'imagen_image_{i+1}.png';
+                            link.download = 'imagen_image_{i + 1}.png';
                             link.click();
                         ">
-                        Download Imagen Image {i+1}</button>
+                        Download Imagen Image {i + 1}</button>
                         """,
                         unsafe_allow_html=True,
                     )
@@ -307,7 +303,7 @@ def display_single_model_results(result, current_model):
     for i, image_url in enumerate(image_urls):
         # Add a container to visually separate multiple images
         if len(image_urls) > 1:
-            st.markdown(f"#### Image {i+1}/{len(image_urls)}")
+            st.markdown(f"#### Image {i + 1}/{len(image_urls)}")
 
         # Display the image
         st.image(image_url, caption=f"Generated with {current_model}")
@@ -318,17 +314,17 @@ def display_single_model_results(result, current_model):
             if image_url.startswith("data:image/png;base64,"):
                 base64_data = image_url.split(",")[1]
                 st.download_button(
-                    label=f"Download Image {i+1 if len(image_urls) > 1 else ''}",
+                    label=f"Download Image {i + 1 if len(image_urls) > 1 else ''}",
                     data=base64_data,
-                    file_name=f"generated_image_{i+1 if len(image_urls) > 1 else '1'}.png",
+                    file_name=f"generated_image_{i + 1 if len(image_urls) > 1 else '1'}.png",
                     mime="image/png",
                 )
         else:
             # For URL-based images (DALL-E), use HTML download link
             download_url = image_url
-            file_name = f"generated_image_{i+1 if len(image_urls) > 1 else '1'}.png"
+            file_name = f"generated_image_{i + 1 if len(image_urls) > 1 else '1'}.png"
             button_text = (
-                f"Download Image {i+1}" if len(image_urls) > 1 else "Download Image"
+                f"Download Image {i + 1}" if len(image_urls) > 1 else "Download Image"
             )
 
             st.markdown(

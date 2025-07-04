@@ -10,7 +10,7 @@ class Query(BaseModel):
     file_ids: Optional[List[str]] = None  # For multiple files
     model_choice: str = Field(..., description="The chosen language model")
     user_id: str
-    session_id: Optional[str] = None  # For session-based file isolation
+    session_id: str  # Mandatory session ID for tracking and isolation
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     model_config = {"protected_namespaces": ()}
 

@@ -45,31 +45,30 @@ The typical workflow for using the API is:
 
 ### File Upload
 
-Upload a file (PDF, image, CSV, or Excel) to the API.
+Upload files to create embeddings for subsequent chat queries. The API automatically processes different file types including PDFs, images, CSV files, and SQLite databases.
 
 - **Endpoint URL**: `/file/upload`
 - **HTTP Method**: POST
 - **Request Headers**:
   - `Authorization`: Your auth token
-- **Request Body**:
-  - Form data:
-    - `file`: The file to upload (File) - optional for single file
-    - `files`: Multiple files to upload (List[File]) - optional for multiple files
-    - `is_image`: Whether the file is an image (Boolean)
-    - `username`: Username for tracking file ownership (String)
-    - `urls`: URLs to process content from (String) - optional
+  - `Content-Type`: `multipart/form-data`
+- **Request Parameters**:
+  - `file`: Single file upload (optional if using `files` or `existing_file_ids`)
+  - `files`: Multiple file upload (optional if using `file` or `existing_file_ids`)
+  - `existing_file_ids`: Comma or newline separated list of existing file IDs (optional)
+  - `is_image`: Boolean flag for image processing (default: false)
+  - `username`: Required username for tracking
+  - `urls`: Comma or newline separated URLs for web content processing (optional)
 - **Response Format**:
   ```json
   {
-    "file_id": "uuid-string",
-    "file_ids": ["uuid-string1", "uuid-string2"],
-    "multi_file_mode": false,
-    "message": "File uploaded successfully",
-    "status": "success",
-    "original_filename": "example.pdf",
-    "original_filenames": ["example1.pdf", "example2.pdf"],
+    "message": "Files processed successfully",
+    "file_ids": ["uuid1", "uuid2", "uuid3"],
+    "original_filenames": ["doc1.pdf", "data.csv", "existing_file.pdf"],
     "is_image": false,
     "is_tabular": false,
+    "status": "success",
+    "multi_file_mode": true,
     "session_id": "uuid-string"
   }
   ```
@@ -81,11 +80,49 @@ Upload a file (PDF, image, CSV, or Excel) to the API.
   5. Add the following key-value pairs:
      - Key: `file`, Value: Select a file from your computer (for single file)
      - Key: `files`, Value: Select multiple files from your computer (for multiple files)
+     - Key: `existing_file_ids`, Value: `file-id-1, file-id-2, file-id-3` (for existing files)
      - Key: `is_image`, Value: `false` (or `true` if uploading an image)
      - Key: `username`, Value: Enter a username
      - Key: `urls`, Value: Enter URLs separated by commas or newlines (optional)
   6. Click "Send" to upload the file
 
+  **Multiple URL Processing Example**:
+  To process multiple URLs simultaneously:
+  - Key: `username`, Value: `your-username`
+  - Key: `urls`, Value:
+    ```
+    https://example1.com, https://example2.com, https://example3.com
+    ```
+    or
+    ```
+    https://example1.com
+    https://example2.com
+    https://example3.com
+    ```
+  - The response will include `file_ids` array with multiple file IDs for multi-file chat
+
+  **Existing File IDs Processing Example**:
+  To use existing file IDs with embeddings already created:
+  - Key: `username`, Value: `your-username`
+  - Key: `existing_file_ids`, Value:
+    ```
+    uuid-file-1, uuid-file-2, uuid-file-3
+    ```
+    or
+    ```
+    uuid-file-1
+    uuid-file-2
+    uuid-file-3
+    ```
+  - The system will validate embeddings exist, download them locally if needed, and prepare for chat
+
+  **Mixed Processing Example**:
+  To combine new file uploads with existing file IDs:
+  - Key: `username`, Value: `your-username`
+  - Key: `files`, Value: Select new files to upload
+  - Key: `existing_file_ids`, Value: `uuid-file-1, uuid-file-2`
+  - Key: `urls`, Value: `https://example.com`
+  - All files (new, existing, and URL content) will be processed in parallel
 
 ### Check Embeddings
 
@@ -179,7 +216,7 @@ Process chat queries against document content using specified language models.
   - `file_ids` (optional): Array of file IDs for multi-file chat
   - `model_choice` (required): The language model to use (e.g., "gpt_4o_mini", "gemini-2.5-flash", "gemini-2.5-pro")
   - `user_id` (required): Unique identifier for the user
-  - `session_id` (optional): Session identifier for tracking conversation context
+  - `session_id` (required): Session identifier for tracking conversation context
   - `temperature` (optional): Controls randomness in model responses (range: 0.0 - 2.0)
     - **Default values**:
       - OpenAI models (GPT series): `0.5` (more focused, coherent responses)
