@@ -211,15 +211,20 @@ custom_css = """
         margin-bottom: 1rem !important;
         background: var(--bg-card) !important;
         border-radius: var(--border-radius) !important;
-        padding: 1.5rem !important;
+        padding: 1rem !important;
         box-shadow: var(--shadow-card) !important;
         border: 1px solid rgba(148, 163, 184, 0.2) !important;
-        position: fixed !important;
-        bottom: 2rem !important;
-        left: 50% !important;
-        transform: translateX(-50%) !important;
-        width: calc(100% - 20rem) !important;
-        z-index: 1000 !important;
+        position: relative !important;
+        width: 100% !important;
+        z-index: 1 !important;
+    }
+
+    div[data-testid="stChatInput"] > div {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        position: relative !important;
+        overflow: hidden !important;
     }
 
     /* Make the actual input field more visible */
@@ -227,11 +232,29 @@ custom_css = """
         background: var(--bg-card) !important;
         border: 1px solid rgba(148, 163, 184, 0.3) !important;
         border-radius: var(--border-radius) !important;
-        padding: 1rem 1.5rem !important;
+        padding: 1rem 1.5rem 1rem 1.5rem !important;
+        padding-right: 3.5rem !important; /* Leave room for send button */
         color: var(--color-text) !important;
         font-size: 1rem !important;
         box-shadow: var(--shadow-inset) !important;
-        width: 100% !important;
+        flex: 1;
+        border: none !important;
+    }
+
+    /* Position the send button container inside the chat input */
+    div[data-testid="stChatInput"] button {
+        position: absolute !important;
+        right: 0.5rem !important;
+        top: 50% !important;
+        transform: translateY(-50%) !important;
+        background: transparent !important;
+        border: none !important;
+        padding: 0.25rem !important;
+        border-radius: 50% !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        z-index: 10 !important;
     }
 
     /* Chat input focus state */
@@ -1511,6 +1534,7 @@ def display_chat_interface():
                         st.session_state.messages.append(ai_message)
                 else:
                     st.error(f"Request failed: {chat_response.text}")
+            st.rerun()
     else:
         st.warning("Please upload and process a file first")
 
