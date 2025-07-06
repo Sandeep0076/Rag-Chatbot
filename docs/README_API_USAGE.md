@@ -298,9 +298,9 @@ Retrieve a list of available models including Azure LLM models, Gemini models, a
 - **Response Format**:
   ```json
   {
-    "models": ["gpt_4o_mini", "gpt_4o", "gemini-flash", "gemini-pro", "gemini-2.5-flash", "gemini-2.5-pro", "dall-e-3", "imagen-3.0", "Dalle + Imagen"],
+    "models": ["gpt_4o_mini", "gpt_4o", "gemini-2.5-flash", "gemini-2.5-pro", "dall-e-3", "imagen-3.0", "Dalle + Imagen"],
     "model_types": {
-      "text": ["gpt_4o_mini", "gpt_4o", "gemini-flash", "gemini-pro", "gemini-2.5-flash", "gemini-2.5-pro"],
+      "text": ["gpt_4o_mini", "gpt_4o", "gemini-2.5-flash", "gemini-2.5-pro"],
       "image": ["dall-e-3", "imagen-3.0", "Dalle + Imagen"]
     }
   }

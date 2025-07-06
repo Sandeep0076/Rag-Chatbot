@@ -284,3 +284,59 @@ def test_chat_with_doc_gemini(client):
 
     # Assert that the correct answer is in the response (case-insensitive)
     assert any(val in response_text for val in ["50", "fifty"])
+
+
+def test_chat_with_csv_visualization(client):
+    """
+    Tests that a query asking for a chart from a CSV file
+    returns a valid chart configuration.
+    """
+    print("\n--- Running Test: Chat with CSV (Visualization) ---")
+    with open(MOCK_CSV_FILE, "rb") as f:
+        files = {"file": ("mock_file.csv", f, "text/csv")}
+        upload_response = client.post(
+            "/file/upload", data={"username": "testuser"}, files=files
+        )
+
+    assert upload_response.status_code == 200
+    upload_json = upload_response.json()
+    file_id = upload_json.get("file_id")
+    session_id = upload_json.get("session_id")
+    assert file_id and session_id
+    print(f"Uploaded CSV file. Received file_id: {file_id}")
+
+    # Poll the status endpoint to ensure the tabular data is processed
+    print(f"Polling for status of file_id: {file_id}...")
+    start_time = time.time()
+    while time.time() - start_time < 60:
+        status_response = client.get(f"/embeddings/status/{file_id}")
+        assert status_response.status_code == 200
+        if status_response.json().get("can_chat"):
+            print(f"Success! CSV file {file_id} is ready for chat.")
+            break
+        time.sleep(3)
+    else:
+        pytest.fail(f"Timeout waiting for CSV file {file_id} to process.")
+
+    # Chat with a query that should trigger a visualization
+    chat_data = {
+        "text": [
+            "Generate a chart for Relationship between pregnancies and age for first 10 entries"
+        ],
+        "file_id": file_id,
+        "session_id": session_id,
+        "model_choice": "gemini-2.5-pro",
+        "user_id": "testuser",
+    }
+    chat_response = client.post("/file/chat", json=chat_data)
+
+    assert chat_response.status_code == 200
+    response_json = chat_response.json()
+    print(f"Received visualization response: {response_json}")
+
+    # Verify chart configuration
+    assert "chart_config" in response_json
+    chart_config = response_json["chart_config"]
+    assert isinstance(chart_config, dict)
+    assert "data" in chart_config
+    assert "datasets" in chart_config["data"]
