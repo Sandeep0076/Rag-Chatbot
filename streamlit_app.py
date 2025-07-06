@@ -1426,7 +1426,7 @@ def display_chat_interface():
         )
 
         # Display messages first
-        if len(st.session_state.messages) > 0:
+        if False and len(st.session_state.messages) > 0:
             for message in st.session_state.messages:
                 # If the assistant returned a chart configuration, render the chart *outside*
                 # of the styled chat container so none of the custom CSS interferes.
