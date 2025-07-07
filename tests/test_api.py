@@ -325,7 +325,7 @@ def test_chat_with_csv_visualization(client):
         ],
         "file_id": file_id,
         "session_id": session_id,
-        "model_choice": "gemini-2.5-pro",
+        "model_choice": "gpt_4o_mini",
         "user_id": "testuser",
     }
     chat_response = client.post("/file/chat", json=chat_data)

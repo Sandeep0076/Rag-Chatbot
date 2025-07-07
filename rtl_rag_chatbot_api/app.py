@@ -37,6 +37,7 @@ from rtl_rag_chatbot_api.chatbot.file_handler import FileHandler
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.chatbot.gemini_handler import (
     GeminiHandler,
+    GeminiSafetyFilterError,
     get_gemini_non_rag_response,
 )
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
@@ -1892,11 +1893,11 @@ def handle_visualization(
     temperature: float,
 ) -> JSONResponse:
     """
-    Handle visualization generation for chat responses.
+    Generate visualization configuration based on the response.
 
     Args:
-        response: The initial response from the model
-        query: The query object containing user request details
+        response: The response from the model
+        query: The original query object
         is_tabular: Whether the data is tabular
         configs: Application configuration dictionary
 
@@ -1909,12 +1910,21 @@ def handle_visualization(
     try:
         if is_tabular:
             current_question = query.text[-1] + response + VISUALISATION_PROMPT
-            if query.model_choice.startswith("gemini"):
-                response = get_gemini_non_rag_response(
-                    configs, current_question, query.model_choice, temperature
+            try:
+                if query.model_choice.startswith("gemini"):
+                    response = get_gemini_non_rag_response(
+                        configs, current_question, query.model_choice, temperature
+                    )
+                else:
+                    response = get_azure_non_rag_response(configs, current_question)
+            except GeminiSafetyFilterError as e:
+                # If safety filter blocks visualization, return error response
+                logging.warning(
+                    f"Visualization generation blocked by safety filter: {str(e)}"
                 )
-            else:
-                response = get_azure_non_rag_response(configs, current_question)
+                raise HTTPException(
+                    status_code=422, detail=f"Cannot generate visualization: {str(e)}"
+                )
 
         # Parse response into JSON
         if isinstance(response, str):
@@ -1940,6 +1950,9 @@ def handle_visualization(
             status_code=400,
             detail=f"Invalid chart configuration format: {str(je)}",
         )
+    except HTTPException:
+        # Re-raise HTTPExceptions (including our safety filter ones)
+        raise
     except Exception as e:
         logging.error(f"Error generating chart: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to generate chart")
@@ -2449,14 +2462,25 @@ async def _detect_visualization_need(
 
     if should_visualize_filter:
         question_for_detection = CHART_DETECTION_PROMPT + question
-        vis_detection_response = get_gemini_non_rag_response(
-            configs, question_for_detection, "gemini-2.5-flash", temperature
-        )
-        if (
-            vis_detection_response.lower() == "true"
-            or "true" in vis_detection_response.lower()
-        ):
-            generate_visualization = True
+        try:
+            vis_detection_response = get_gemini_non_rag_response(
+                configs, question_for_detection, "gemini-2.5-flash", temperature
+            )
+            if (
+                vis_detection_response.lower() == "true"
+                or "true" in vis_detection_response.lower()
+            ):
+                generate_visualization = True
+        except GeminiSafetyFilterError as e:
+            # If safety filter blocks the visualization detection, default to False
+            logging.warning(
+                f"Visualization detection blocked by safety filter: {str(e)}"
+            )
+            generate_visualization = False
+        except Exception as e:
+            # For other errors, also default to False
+            logging.error(f"Error in visualization detection: {str(e)}")
+            generate_visualization = False
 
     return generate_visualization
 
@@ -2570,6 +2594,17 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
     except HTTPException:
         raise
+    except GeminiSafetyFilterError as e:
+        # Handle Gemini safety filter errors with a proper error response
+        logging.warning(
+            f"Gemini safety filter blocked response for {file_id_logging}: {str(e)}"
+        )
+        return {
+            "answer": f"I apologize, but I cannot provide a response to this question. {str(e)}",
+            "source_files": [],
+            "error_type": "safety_filter",
+            "error_message": str(e),
+        }
     except Exception as e:
         logging.error(
             f"Error in chat endpoint: {str(e)} for {file_id_logging}", exc_info=True
