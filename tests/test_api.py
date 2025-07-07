@@ -186,6 +186,82 @@ class TestEndToEndPipeline:
             "Received multi-file chat response and found 'Uzbekistan' and 'Andrew Lang'"
         )
 
+    def test_6_delete_single_file(self, client):
+        """Deletes the single file uploaded and chatted with in previous tests."""
+        print("\n--- Running Test: 6. Delete Single File ---")
+        file_id = self.shared_data.get("single_file_id")
+        assert file_id
+
+        delete_data = {"file_ids": file_id, "include_gcs": True, "username": "testuser"}
+        response = client.request("DELETE", "/delete", json=delete_data)
+
+        assert response.status_code == 200
+        response_json = response.json()
+        assert "message" in response_json
+        # The delete endpoint may either delete embeddings or just remove username
+        assert any(
+            keyword in response_json["message"].lower()
+            for keyword in ["deleted", "removed", "success"]
+        ), f"Unexpected delete response: {response_json['message']}"
+        print(
+            f"Successfully processed delete for single file: {file_id} - {response_json['message']}"
+        )
+
+    def test_7_delete_multi_files(self, client):
+        """Deletes the multiple files uploaded and chatted with in previous tests."""
+        print("\n--- Running Test: 7. Delete Multi Files ---")
+        file_ids = self.shared_data.get("multi_file_ids")
+        single_file_id = self.shared_data.get("single_file_id")
+        assert file_ids and len(file_ids) == 2
+
+        # Filter out the single_file_id that was already deleted in test_6
+        # Only delete the new file that was added in the multi-file upload
+        remaining_file_ids = [fid for fid in file_ids if fid != single_file_id]
+
+        if not remaining_file_ids:
+            print("No remaining files to delete (all were already deleted)")
+            return
+
+        delete_data = {
+            "file_ids": remaining_file_ids,
+            "include_gcs": True,
+            "username": "testuser",
+        }
+        response = client.request("DELETE", "/delete", json=delete_data)
+
+        assert response.status_code == 200
+        response_json = response.json()
+
+        # Handle both single file response format and multi-file response format
+        if "message" in response_json:
+            # Single file deletion response format
+            assert any(
+                keyword in response_json["message"].lower()
+                for keyword in ["deleted", "removed", "success"]
+            ), f"Unexpected delete response: {response_json['message']}"
+            print(
+                f"Successfully processed delete for remaining file: "
+                f"{remaining_file_ids[0]} - {response_json['message']}"
+            )
+        elif "results" in response_json:
+            # Multi-file deletion response format
+            results = response_json["results"]
+            assert len(results) == len(remaining_file_ids)
+
+            # Check that all remaining files were successfully processed (deleted or username removed)
+            for file_id in remaining_file_ids:
+                assert file_id in results
+                assert (
+                    "Success" in results[file_id]
+                ), f"Failed to process file {file_id}: {results[file_id]}"
+
+            print(
+                f"Successfully processed delete for remaining files: "
+                f"{remaining_file_ids}"
+            )
+        else:
+            pytest.fail(f"Unexpected response format: {response_json}")
+
 
 def test_chat_with_csv(client):
     """
@@ -759,3 +835,75 @@ def test_chat_with_multiple_urls(client):
         measurement in response_text
         for measurement in ["113.8", "2,895", "113", "2895"]
     ), f"Expected wheelbase measurement (113.8 inches or 2,895 mm) for Tesla in response: {response_text}"
+
+
+def test_generate_dalle3_images(client):
+    """
+    Tests the DALL-E 3 image generation endpoint.
+    """
+    print("\n--- Running Test: Generate DALL-E 3 Images ---")
+
+    # Define the test prompt (content policy safe)
+    test_prompt = "A peaceful mountain landscape with a serene lake reflecting the sky, digital art style"
+
+    # Prepare request data for DALL-E 3
+    request_data = {
+        "prompt": test_prompt,
+        "size": "1024x1024",
+        "n": 1,  # DALL-E 3 only supports 1 image
+        "model_choice": "dall-e-3",
+    }
+
+    # Call the image generation endpoint
+    response = client.post("/image/generate", json=request_data)
+
+    # Verify response is successful
+    assert response.status_code == 200
+    response_data = response.json()
+    print(f"Received DALL-E 3 response: {response_data.keys()}")
+
+    # Check most important response elements
+    assert response_data["success"] is True
+    assert "image_url" in response_data
+    assert "dall-e" in response_data["model"].lower()
+
+    print(f"Successfully generated DALL-E 3 image with model: {response_data['model']}")
+
+
+def test_generate_imagen3_images(client):
+    """
+    Tests the Imagen 3 image generation endpoint.
+    """
+    print("\n--- Running Test: Generate Imagen 3 Images ---")
+
+    # Define the test prompt (content policy safe)
+    test_prompt = (
+        "A beautiful garden with colorful flowers and butterflies, watercolor style"
+    )
+
+    # Prepare request data for Imagen 3
+    request_data = {
+        "prompt": test_prompt,
+        "size": "1024x1024",
+        "n": 2,  # Imagen supports multiple images
+        "model_choice": "imagen-3.0-generate-002",
+    }
+
+    # Call the image generation endpoint
+    response = client.post("/image/generate", json=request_data)
+
+    # Verify response is successful
+    assert response.status_code == 200
+    response_data = response.json()
+    print(f"Received Imagen 3 response: {response_data.keys()}")
+
+    # Check most important response elements
+    assert response_data["success"] is True
+    assert "image_urls" in response_data
+    assert "imagen" in response_data["model"].lower()
+    assert len(response_data["image_urls"]) == 2  # Requested 2 images
+
+    print(
+        f"Successfully generated {len(response_data['image_urls'])} Imagen 3 images "
+        f"with model: {response_data['model']}"
+    )
