@@ -23,3 +23,4 @@ universal-helm-chart:
         memory: 2Gi
 gcp:
   project_id: "dat-itowe-pre"
+gcpProject: "dat-itowe-pre"
