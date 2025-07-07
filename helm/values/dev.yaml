@@ -28,6 +28,6 @@ universal-helm-chart:
       limits:
         cpu: 700m
         memory: 2Gi
+  gcpProject: "dat-itowe-dev"
 gcp:
   project_id: "dat-itowe-dev"
-gcpProject: "dat-itowe-dev"
