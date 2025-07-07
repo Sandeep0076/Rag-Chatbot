@@ -2452,7 +2452,7 @@ async def _detect_visualization_need(
     if should_visualize_filter:
         question_for_detection = CHART_DETECTION_PROMPT + question
         vis_detection_response = get_gemini_non_rag_response(
-            configs, question_for_detection, "gemini-flash", temperature
+            configs, question_for_detection, "gemini-2.5-flash", temperature
         )
         if (
             vis_detection_response.lower() == "true"

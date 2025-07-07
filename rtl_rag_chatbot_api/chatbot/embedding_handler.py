@@ -409,7 +409,7 @@ class EmbeddingHandler:
                 file_id, "gpt_4o_mini"
             )
             gemini_embeddings_check = await self.check_embeddings_exist(
-                file_id, "gemini-flash"
+                file_id, "gemini-2.5-flash"
             )
 
             # Convert check results to proper format
