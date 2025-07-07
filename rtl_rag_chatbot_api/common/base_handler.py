@@ -52,7 +52,7 @@ class BaseRAGHandler:
             128000,  # Default to gpt_4o_mini's limit for Azure if not specified elsewhere
         )
         self.GEMINI_MAX_TOKENS = self.MODEL_TOKEN_LIMITS.get(
-            "gemini-flash", 15000
+            "gemini-2.5-flash", 15000
         )  # Use Gemini Flash limit
         self.BATCH_SIZE = 5
 
