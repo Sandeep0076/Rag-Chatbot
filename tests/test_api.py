@@ -36,6 +36,10 @@ MOCK_FILE_1 = os.path.join(MOCK_FILE_DIR, "mock_file1.pdf")
 MOCK_FILE_2 = os.path.join(MOCK_FILE_DIR, "mock_file2.pdf")
 MOCK_CSV_FILE = os.path.join(MOCK_FILE_DIR, "mock_file.csv")
 MOCK_TXT_FILE = os.path.join(MOCK_FILE_DIR, "mock_txt.txt")
+MOCK_IMAGE_FILE = os.path.join(MOCK_FILE_DIR, "mock_file.png")
+MOCK_IMAGE_FILE_2 = os.path.join(MOCK_FILE_DIR, "mock_file2.jpg")
+MOCK_DB_FILE = os.path.join(MOCK_FILE_DIR, "mock_file.sqlite")
+MOCK_EXCEL_FILE = os.path.join(MOCK_FILE_DIR, "mock_file.xlsx")
 
 
 @pytest.fixture(scope="module")
@@ -340,3 +344,153 @@ def test_chat_with_csv_visualization(client):
     assert isinstance(chart_config, dict)
     assert "data" in chart_config
     assert "datasets" in chart_config["data"]
+
+
+def test_chat_with_single_image(client):
+    """
+    Tests the full pipeline for uploading and chatting with a single image file.
+    """
+    print("\n--- Running Test: Chat with Single Image ---")
+    with open(MOCK_IMAGE_FILE, "rb") as f:
+        files = {"file": ("mock_file.png", f, "image/png")}
+        upload_response = client.post(
+            "/file/upload",
+            data={"username": "testuser", "is_image": "true"},
+            files=files,
+        )
+
+    assert upload_response.status_code == 200
+    upload_json = upload_response.json()
+    file_id = upload_json.get("file_id")
+    session_id = upload_json.get("session_id")
+    assert file_id and session_id
+    print(f"Uploaded image file. Received file_id: {file_id}")
+
+    # Poll the status endpoint to ensure the image is processed
+    print(f"Polling for status of file_id: {file_id}...")
+    start_time = time.time()
+    while time.time() - start_time < 60:  # 1-minute timeout for image processing
+        status_response = client.get(f"/embeddings/status/{file_id}")
+        assert status_response.status_code == 200
+        if status_response.json().get("can_chat"):
+            print(f"Success! Image file {file_id} is ready for chat.")
+            break
+        time.sleep(3)
+    else:
+        pytest.fail(f"Timeout waiting for image file {file_id} to process.")
+
+    # Chat with the processed image file
+    chat_data = {
+        "text": ["Who has highest gdp per capita?"],
+        "file_id": file_id,
+        "session_id": session_id,
+        "model_choice": "gpt_4o_mini",
+        "user_id": "testuser",
+    }
+    chat_response = client.post("/file/chat", json=chat_data)
+
+    assert chat_response.status_code == 200
+    response_json = chat_response.json()
+    response_text = response_json.get("response", "")
+    print(f"Received chat response for image: '{response_text}'")
+
+    # Assert that the response contains reference to United States or similar
+    assert any(
+        country in response_text for country in ["United States", "US", "USA"]
+    ), f"Expected US reference in response: {response_text}"
+
+
+def test_chat_with_multiple_images(client):
+    """
+    Tests the full pipeline for uploading and chatting with multiple image files.
+    """
+    print("\n--- Running Test: Chat with Multiple Images ---")
+
+    # First upload the first image
+    with open(MOCK_IMAGE_FILE, "rb") as f:
+        files = {"file": ("mock_file.png", f, "image/png")}
+        upload_response_1 = client.post(
+            "/file/upload",
+            data={"username": "testuser", "is_image": "true"},
+            files=files,
+        )
+
+    assert upload_response_1.status_code == 200
+    upload_json_1 = upload_response_1.json()
+    file_id_1 = upload_json_1.get("file_id")
+    assert file_id_1
+    print(f"Uploaded first image file. Received file_id: {file_id_1}")
+
+    # Wait for first image to be processed
+    print(f"Polling for status of first image file_id: {file_id_1}...")
+    start_time = time.time()
+    while time.time() - start_time < 60:
+        status_response = client.get(f"/embeddings/status/{file_id_1}")
+        assert status_response.status_code == 200
+        if status_response.json().get("can_chat"):
+            print(f"Success! First image file {file_id_1} is ready for chat.")
+            break
+        time.sleep(3)
+    else:
+        pytest.fail(f"Timeout waiting for first image file {file_id_1} to process.")
+
+    # Now upload the second image with the existing file ID
+    with open(MOCK_IMAGE_FILE_2, "rb") as f:
+        files = {"files": ("mock_file2.jpg", f, "image/jpeg")}
+        data = {
+            "username": "testuser",
+            "is_image": "true",
+            "existing_file_ids": file_id_1,
+        }
+        upload_response_2 = client.post("/file/upload", data=data, files=files)
+
+    assert upload_response_2.status_code == 200
+    upload_json_2 = upload_response_2.json()
+    file_ids = upload_json_2.get("file_ids")
+    session_id = upload_json_2.get("session_id")
+    assert file_ids and len(file_ids) == 2 and session_id
+    print(f"Uploaded second image file. Received file_ids: {file_ids}")
+
+    # Wait for the new (second) image to be processed
+    new_file_id = next(fid for fid in file_ids if fid != file_id_1)
+    print(f"Polling for status of second image file_id: {new_file_id}...")
+    start_time = time.time()
+    while time.time() - start_time < 60:
+        status_response = client.get(f"/embeddings/status/{new_file_id}")
+        assert status_response.status_code == 200
+        if status_response.json().get("can_chat"):
+            print(f"Success! Second image file {new_file_id} is ready for chat.")
+            break
+        time.sleep(3)
+    else:
+        pytest.fail(f"Timeout waiting for second image file {new_file_id} to process.")
+
+    # Chat with both images
+    chat_data = {
+        "text": [
+            "From the first image, who has highest gdp per capita? "
+            "From the second image, which Model have highest Global Average value?"
+        ],
+        "file_ids": file_ids,
+        "session_id": session_id,
+        "model_choice": "gpt_4o_mini",
+        "user_id": "testuser",
+    }
+    chat_response = client.post("/file/chat", json=chat_data)
+
+    assert chat_response.status_code == 200
+    response_json = chat_response.json()
+    response_text = response_json.get("response", "")
+    print(f"Received chat response for multiple images: '{response_text}'")
+
+    # Assert that the response contains references to both expected answers
+    # For first image: United States or similar for GDP
+    # For second image: some model name for Global Average
+    assert any(
+        country in response_text for country in ["United States", "US", "USA"]
+    ), f"Expected US reference for GDP question in response: {response_text}"
+
+    # Check for any model-related terms that might indicate the answer to the second question
+    assert any(
+        term in response_text.lower() for term in ["o1 High", "o1"]
+    ), f"Expected model/average related terms in response: {response_text}"
