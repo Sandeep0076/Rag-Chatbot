@@ -21,6 +21,6 @@ universal-helm-chart:
       limits:
         cpu: 1000m
         memory: 4Gi
+  gcpProject: "dat-itowe-prd"
 gcp:
   project_id: "dat-itowe-prd"
-gcpProject: "dat-itowe-prd"
