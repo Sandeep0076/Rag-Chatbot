@@ -502,7 +502,6 @@ class TabularDataHandler:
             "table_count": len(table_info),
             "table_names": [t["name"] for t in table_info],
             "tables": [],
-            "file_id": file_id,  # Include file_id for multi-file tracking
         }
         for t in table_info:
             database_summary["tables"].append(
@@ -512,7 +511,6 @@ class TabularDataHandler:
                     "row_count": t["row_count"],
                     "top_rows": [list(row) for row in t["sample_data"]],
                     "column_stats": t["column_stats"],
-                    "file_id": file_id,  # Include file_id for multi-file tracking
                 }
             )
         return database_summary

@@ -221,8 +221,20 @@ class FileHandler:
             database_summary = {
                 "table_count": len(table_info),
                 "table_names": [t["name"] for t in table_info],
-                "tables": table_info,
+                "tables": [],
             }
+            for t in table_info:
+                database_summary["tables"].append(
+                    {
+                        "name": t["name"],
+                        "columns": t["columns"],
+                        "row_count": t["row_count"],
+                        "top_rows": t[
+                            "sample_data"
+                        ],  # Use "top_rows" to match csv_handler format
+                        "column_stats": t["column_stats"],
+                    }
+                )
 
             metadata["database_summary"] = database_summary
             logging.info(
@@ -357,13 +369,25 @@ class FileHandler:
                     database_summary = {
                         "table_count": len(table_info),
                         "table_names": [t["name"] for t in table_info],
-                        "tables": table_info,
+                        "tables": [],
                     }
+                    for t in table_info:
+                        database_summary["tables"].append(
+                            {
+                                "name": t["name"],
+                                "columns": t["columns"],
+                                "row_count": t["row_count"],
+                                "top_rows": t[
+                                    "sample_data"
+                                ],  # Use "top_rows" to match csv_handler format
+                                "column_stats": t["column_stats"],
+                            }
+                        )
 
                     # Update file_info.json with database_summary
-                    self.gcs_handler.update_file_info(
-                        existing_file_id, {"database_summary": database_summary}
-                    )
+                    update_data = {"database_summary": database_summary}
+
+                    self.gcs_handler.update_file_info(existing_file_id, update_data)
                     logging.info(
                         f"Added database_summary to existing file_info.json with {len(table_info)} tables"
                     )
