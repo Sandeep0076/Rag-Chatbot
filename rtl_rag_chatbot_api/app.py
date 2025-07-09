@@ -3343,6 +3343,20 @@ async def _initialize_multi_file_model(
     Returns:
         Tuple of (model, is_tabular_flag)
     """
+    # Ensure local embeddings are available for all files in a multi-file chat
+    for file_id in query.file_ids:
+        # All models use Azure embeddings in the unified approach
+        embedding_type = "azure"
+
+        model_path = os.path.join(
+            f"./chroma_db/{file_id}", embedding_type, "chroma.sqlite3"
+        )
+        if not os.path.exists(model_path):
+            logging.info(
+                f"Local embeddings not found for {file_id} at {model_path}, downloading from GCS."
+            )
+            gcs_handler.download_files_from_folder_by_id(file_id)
+
     # Classify files
     file_classification = await _classify_files_for_model_init(query.file_ids)
     tabular_file_ids = file_classification["tabular"]
