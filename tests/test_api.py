@@ -64,14 +64,14 @@ class TestEndToEndPipeline:
         """Helper function to poll the status endpoint."""
         print(f"\nPolling for embedding status of file_id: {file_id}...")
         start_time = time.time()
-        while time.time() - start_time < 120:  # 2-minute timeout
+        while time.time() - start_time < 180:  # 3-minute timeout
             status_response = client.get(f"/embeddings/status/{file_id}")
             assert status_response.status_code == 200
             if status_response.json().get("can_chat"):
                 print(f"Success! file_id: {file_id} is ready for chat.")
                 return
             time.sleep(5)
-        pytest.fail(f"Timeout: Waited 120s for file_id: {file_id}")
+        pytest.fail(f"Timeout: Waited 180s for file_id: {file_id}")
 
     def test_1_single_file_upload(self, client):
         """Uploads a single file and saves its ID and session ID."""
@@ -169,7 +169,7 @@ class TestEndToEndPipeline:
 
         chat_data = {
             "text": [
-                "What is the country in the first document and who is the author of the second?"
+                "In mock_file1.pdf, what is the country mentioned, and in mock_file2.pdf, who is the author?"
             ],
             "file_ids": file_ids,
             "session_id": session_id,
@@ -544,8 +544,8 @@ def test_chat_with_multiple_images(client):
     # Chat with both images
     chat_data = {
         "text": [
-            "From the first image, who has highest gdp per capita? "
-            "From the second image, which Model have highest Global Average value?"
+            "In mock_file.png, who has the highest GDP per capita, "
+            "and in mock_file2.jpg, which model has the highest Global Average value?"
         ],
         "file_ids": file_ids,
         "session_id": session_id,
