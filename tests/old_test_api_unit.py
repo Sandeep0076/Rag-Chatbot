@@ -60,8 +60,8 @@ def mock_files() -> dict:
 def mock_config():
     mock_config = MagicMock()
     mock_config.gemini = MagicMock()
-    mock_config.gemini.model_pro = "gemini-pro"
-    mock_config.gemini.model_pro_vision = "gemini-pro-vision"
+    mock_config.gemini.model_pro = "gemini-2.5-pro"
+    mock_config.gemini.model_pro_vision = "gemini-2.5-pro"
     mock_config.gemini.api_key = "test-api-key"
 
     # Add chatbot configuration
@@ -222,7 +222,7 @@ def test_chat_with_pdf(
     chat_data_gemini = {
         "text": ["From which country this paper is from ?"],
         "file_id": file_id,
-        "model_choice": "gemini-pro",
+        "model_choice": "gemini-2.5-pro",
         "user_id": "test_user",
     }
     response_gemini = client.post("/file/chat", json=chat_data_gemini)
@@ -271,7 +271,7 @@ def test_chat_with_csv(
     chat_data_gemini = {
         "text": ["Show me the average of pregnancies"],
         "file_id": file_id,
-        "model_choice": "gemini-pro",
+        "model_choice": "gemini-2.5-pro",
         "user_id": "test_user",
     }
     response_gemini = client.post("/file/chat", json=chat_data_gemini)
@@ -329,7 +329,7 @@ def test_chat_with_excel(
     chat_data_gemini = {
         "text": ["Employee Krista Orcutt is from which location?"],
         "file_id": file_id,
-        "model_choice": "gemini-pro",
+        "model_choice": "gemini-2.5-pro",
         "user_id": "test_user",
     }
     response_gemini = client.post("/file/chat", json=chat_data_gemini)
@@ -381,7 +381,7 @@ def test_chat_with_db(
     chat_data_gemini = {
         "text": ["What is the address of customer Maria Anders?"],
         "file_id": file_id,
-        "model_choice": "gemini-pro",
+        "model_choice": "gemini-2.5-pro",
         "user_id": "test_user",
     }
     response_gemini = client.post("/file/chat", json=chat_data_gemini)
@@ -435,7 +435,7 @@ def test_chat_with_image(
         chat_data_gemini = {
             "text": ["Who has highest gdp per capita?"],
             "file_id": file_id,
-            "model_choice": "gemini-pro",
+            "model_choice": "gemini-2.5-pro",
             "user_id": "test_user",
         }
         response_gemini = client.post("/file/chat", json=chat_data_gemini)
@@ -480,7 +480,7 @@ async def test_chat_with_image_visualization(
         query = {
             "text": ["Generate a chart comparing gdp of china and india"],
             "file_id": file_id,
-            "model_choice": "gemini-pro",
+            "model_choice": "gemini-2.5-pro",
             "user_id": "test_user",
         }
 
@@ -601,7 +601,7 @@ async def test_chat_with_csv_visualization(
                 "Generate a chart for Relationship between pregnancies and age for first 10 entries"
             ],
             "file_id": file_id,
-            "model_choice": "gemini-pro",
+            "model_choice": "gemini-2.5-pro",
             "user_id": "test_user",
         }
 
@@ -675,7 +675,7 @@ def test_chat_with_doc(
     chat_data_gemini = {
         "text": ["How many mangoes are there in Garden"],
         "file_id": file_id,
-        "model_choice": "gemini-pro",
+        "model_choice": "gemini-2.5-pro",
         "user_id": "test_user",
     }
     response_gemini = client.post("/file/chat", json=chat_data_gemini)
@@ -803,7 +803,7 @@ def test_file_upload(mock_files: dict, resource_manager: ResourceManager) -> Non
 
 #         async with AsyncClient(app=app, base_url="http://test") as ac:
 #             response = await ac.post(
-#                 "/chat/gemini", json={"model": "gemini-pro", "message": "Test message"}
+#                 "/chat/gemini", json={"model": "gemini-2.5-pro", "message": "Test message"}
 #             )
 
 #         assert response.status_code == 200

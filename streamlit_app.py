@@ -1426,17 +1426,30 @@ def display_chat_interface():
         )
 
         # Display messages first
-        if len(st.session_state.messages) > 0:
+        if False and len(st.session_state.messages) > 0:
             for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    if (
-                        isinstance(message["content"], str)
-                        and "|" in message["content"]
-                        and "\n" in message["content"]
-                    ):
-                        st.markdown(message["content"])
-                    else:
+                # If the assistant returned a chart configuration, render the chart *outside*
+                # of the styled chat container so none of the custom CSS interferes.
+                if "chart" in message:
+                    # Optional explanatory text
+                    if message.get("content"):
                         st.write(message["content"])
+                    try:
+                        fig = plot_chart(message["chart"])
+                        st.plotly_chart(fig, use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Error rendering chart: {str(e)}")
+                        st.write("Raw chart data:", message["chart"])
+                else:
+                    with st.chat_message(message["role"]):
+                        if (
+                            isinstance(message["content"], str)
+                            and "|" in message["content"]
+                            and "\n" in message["content"]
+                        ):
+                            st.markdown(message["content"])
+                        else:
+                            st.write(message["content"])
 
         # Handle user input first (this processes the submission)
         user_input = st.chat_input("Enter your message")
@@ -1445,98 +1458,111 @@ def display_chat_interface():
             st.session_state.messages.append({"role": "user", "content": user_input})
 
             with st.spinner("Processing your request..."):
-                # Get previous messages to include in history
                 previous_messages = [
                     msg["content"]
-                    for msg in st.session_state.messages[-5:]  # Get last 5 messages
-                    if msg["role"] == "user"  # Only including user messages
+                    for msg in st.session_state.messages[-5:]
+                    if msg["role"] == "user"
                 ]
 
-                # Log current state before constructing payload
-                logging.info(
-                    "Preparing chat payload. Current state: "
-                    f"multi_file_mode={st.session_state.get('multi_file_mode')}, "
-                    f"file_id={st.session_state.get('file_id')}, "
-                    f"file_ids={st.session_state.get('file_ids')}"
-                )
-
-                # Prepare chat payload based on mode (single or multi-file)
-                # Ensure we have a valid session_id before making the request
                 if not st.session_state.current_session_id:
                     st.error(
                         "Error: No session ID available. Please upload the file again."
                     )
                     return
 
-                logging.info(
-                    f"Using session_id for chat: {st.session_state.current_session_id}"
-                )
-
-                chat_payload = {
-                    "text": previous_messages,  # This will include history and current message
-                    "model_choice": st.session_state.model_choice,
-                    "user_id": st.session_state.username,
-                    "generate_visualization": st.session_state.generate_visualization,
-                    "session_id": st.session_state.current_session_id,  # Include current session ID for isolation
-                }
-
-                # Add temperature parameter if set
-                if st.session_state.temperature is not None:
-                    chat_payload["temperature"] = st.session_state.temperature
-
-                if st.session_state.multi_file_mode and st.session_state.file_ids:
-                    chat_payload["file_ids"] = st.session_state.file_ids
-                    logging.info(
-                        f"Multi-file mode. Sending all file_ids: {st.session_state.file_ids}"
-                    )
-                elif st.session_state.file_id:
-                    chat_payload["file_id"] = st.session_state.file_id
-                    logging.info(
-                        f"Single-file mode. Sending file_id: {st.session_state.file_id}"
-                    )
-                else:
-                    st.error("Error: No file context available for chat.")
-                    # Potentially skip the API call or handle as an error state
-                    return
+                chat_payload = _get_chat_payload(previous_messages)
+                logging.info(f"Sending chat payload: {chat_payload}")
                 chat_response = requests.post(f"{API_URL}/file/chat", json=chat_payload)
+                _handle_chat_response(chat_response)
 
-                if chat_response.status_code == 200:
-                    chat_result = chat_response.json()
-
-                    # Handle visualization data - automatically detected by backend
-                    if "chart_config" in chat_result:
-                        try:
-                            chart_config = chat_result["chart_config"]
-                            # Create message for chat history
-                            ai_message = {
-                                "role": "assistant",
-                                "content": (
-                                    f"Generated {chart_config['chart_type']} "
-                                    f"visualization: {chart_config['title']}"
-                                ),
-                            }
-                            # Removed unused image size and num_images selectors
-                            # These were likely intended for image generation but not connected to any functionality
-                            st.session_state.messages.append(ai_message)
-
-                            with st.chat_message("assistant"):
-                                fig = plot_chart(chart_config)
-                                st.plotly_chart(fig)
-                        except Exception as e:
-                            st.error(f"Error creating chart: {str(e)}")
-                            st.write("Raw chart data:", chart_config)
-                    # Handle regular text response
-                    else:
-                        ai_message = {
-                            "role": "assistant",
-                            "content": chat_result.get("response", str(chat_result)),
-                        }
-                        st.session_state.messages.append(ai_message)
-                else:
-                    st.error(f"Request failed: {chat_response.text}")
             st.rerun()
+
+        _display_messages()
+
     else:
         st.warning("Please upload and process a file first")
+
+
+def _display_messages():
+    """Display the chat messages and charts."""
+    for message in st.session_state.messages:
+        # Render chart messages outside of the chat container to avoid CSS conflicts
+        if "chart" in message:
+            if message.get("content"):
+                st.write(message["content"])
+            try:
+                fig = plot_chart(message["chart"])
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error rendering chart: {str(e)}")
+                st.write("Raw chart data:", message["chart"])
+        else:
+            with st.chat_message(message["role"]):
+                if (
+                    isinstance(message["content"], str)
+                    and "|" in message["content"]
+                    and "\n" in message["content"]
+                ):
+                    st.markdown(message["content"])
+                else:
+                    st.write(message["content"])
+
+
+def _handle_chat_response(chat_response):
+    """Handle the response from the chat API."""
+    if chat_response.status_code == 200:
+        chat_result = chat_response.json()
+        if "chart_config" in chat_result:
+            try:
+                chart_config = chat_result["chart_config"]
+                ai_message = {
+                    "role": "assistant",
+                    "content": (
+                        f"Generated {chart_config['chart_type']} "
+                        f"visualization: {chart_config['title']}"
+                    ),
+                    "chart": chart_config,
+                }
+                st.session_state.messages.append(ai_message)
+            except Exception as e:
+                st.error(f"Error creating chart: {str(e)}")
+                st.write("Raw chart data:", chat_result.get("chart_config"))
+        else:
+            ai_message = {
+                "role": "assistant",
+                "content": chat_result.get("response", str(chat_result)),
+            }
+            st.session_state.messages.append(ai_message)
+    else:
+        st.error(f"Request failed: {chat_response.text}")
+
+
+def _get_chat_payload(previous_messages):
+    """Construct the payload for the chat API request."""
+    chat_payload = {
+        "text": previous_messages,
+        "model_choice": st.session_state.model_choice,
+        "user_id": st.session_state.username,
+        "generate_visualization": st.session_state.generate_visualization,
+        "session_id": st.session_state.current_session_id,
+    }
+
+    if st.session_state.temperature is not None:
+        chat_payload["temperature"] = st.session_state.temperature
+
+    if st.session_state.multi_file_mode and st.session_state.file_ids:
+        chat_payload["file_ids"] = st.session_state.file_ids
+        logging.info(
+            f"Multi-file mode. Sending all file_ids: {chat_payload['file_ids']}"
+        )
+    elif st.session_state.file_id:
+        chat_payload["file_id"] = st.session_state.file_id
+        logging.info(f"Single-file mode. Sending file_id: {chat_payload['file_id']}")
+    else:
+        st.error("Error: No file context available for chat.")
+        return None
+
+    return chat_payload
 
 
 def initialize_file_state():

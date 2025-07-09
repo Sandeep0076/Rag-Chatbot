@@ -14,7 +14,10 @@ from sqlalchemy.pool import QueuePool
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
-from rtl_rag_chatbot_api.chatbot.gemini_handler import get_gemini_non_rag_response
+from rtl_rag_chatbot_api.chatbot.gemini_handler import (
+    GeminiSafetyFilterError,
+    get_gemini_non_rag_response,
+)
 from rtl_rag_chatbot_api.chatbot.prompt_handler import format_question
 from rtl_rag_chatbot_api.chatbot.utils.prompt_builder import PromptBuilder
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
@@ -702,9 +705,15 @@ class TabularDataHandler:
                     f"Which database would be most appropriate to answer this question: '{question}'?\n"
                     "Respond with just the database ID (like '1fddcdde-c24e-4fef-b656-dc454f701418')."
                 )
-                response = get_gemini_non_rag_response(
-                    self.config, prompt, self.model_choice
-                )
+                try:
+                    response = get_gemini_non_rag_response(
+                        self.config, prompt, self.model_choice
+                    )
+                except GeminiSafetyFilterError as e:
+                    logging.warning(
+                        f"Safety filter blocked database suggestion: {str(e)}"
+                    )
+                    return None  # Return None if safety filter blocks
             else:
                 from rtl_rag_chatbot_api.chatbot.chatbot_creator import (
                     get_azure_non_rag_response,
@@ -916,9 +925,15 @@ class TabularDataHandler:
 
                 # Format the response using the appropriate model
                 if self.model_choice.startswith("gemini"):
-                    return get_gemini_non_rag_response(
-                        self.config, base_prompt, self.model_choice
-                    )
+                    try:
+                        return get_gemini_non_rag_response(
+                            self.config, base_prompt, self.model_choice
+                        )
+                    except GeminiSafetyFilterError as e:
+                        logging.warning(
+                            f"Safety filter blocked response in CSV handler: {str(e)}"
+                        )
+                        return f"I apologize, but I cannot provide a response to this question. {str(e)}"
                 else:
                     return get_azure_non_rag_response(self.config, base_prompt)
             else:

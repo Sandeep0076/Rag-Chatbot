@@ -19,6 +19,103 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class GeminiSafetyFilterError(Exception):
+    """Custom exception for Gemini safety filter blocks."""
+
+    def __init__(
+        self, message: str, safety_ratings: dict = None, finish_reason: str = None
+    ):
+        super().__init__(message)
+        self.safety_ratings = safety_ratings or {}
+        self.finish_reason = finish_reason
+
+
+def _handle_gemini_safety_response(response, context: str = ""):
+    """
+    Handle Gemini responses that might be blocked by safety filters.
+
+    Args:
+        response: The Gemini response object
+        context: Additional context for logging (e.g., "streaming", "non-rag")
+
+    Returns:
+        str: The response text if available
+
+    Raises:
+        GeminiSafetyFilterError: If response is blocked by safety filters
+    """
+    try:
+        # Try to get the text from the response
+        if hasattr(response, "text") and response.text:
+            return response.text
+
+        # If no text, check if it's blocked by safety filters
+        if hasattr(response, "candidates") and response.candidates:
+            candidate = response.candidates[0]
+
+            # Check if candidate has no parts (safety filter block)
+            if not hasattr(candidate, "content") or not candidate.content.parts:
+                safety_info = {}
+                finish_reason = getattr(candidate, "finish_reason", "UNKNOWN")
+
+                # Extract safety ratings if available
+                if hasattr(candidate, "safety_ratings"):
+                    safety_info = {}
+                    for rating in candidate.safety_ratings:
+                        severity = "UNKNOWN"
+                        if hasattr(rating, "severity"):
+                            severity = getattr(rating, "severity", {}).name
+                        safety_info[rating.category.name] = {
+                            "probability": rating.probability.name,
+                            "severity": severity,
+                        }
+
+                # Create a user-friendly error message
+                error_msg = "Response was blocked by Google's safety filters. "
+                if finish_reason == "SAFETY":
+                    error_msg += "The content was flagged as potentially harmful. "
+                elif finish_reason == "MAX_TOKENS":
+                    error_msg += "The response was truncated due to length limits. "
+                else:
+                    error_msg += f"Reason: {finish_reason}. "
+
+                error_msg += (
+                    "Please try rephrasing your question or asking something different."
+                )
+
+                logger.warning(
+                    f"Gemini {context} response blocked by safety filters: {error_msg}"
+                )
+                logger.info(f"Safety ratings: {safety_info}")
+                logger.info(f"Finish reason: {finish_reason}")
+
+                raise GeminiSafetyFilterError(error_msg, safety_info, finish_reason)
+
+        # If we get here, there's some other issue
+        error_msg = "No response content available from Gemini model."
+        logger.warning(f"Gemini {context} response has no content: {error_msg}")
+        raise GeminiSafetyFilterError(error_msg)
+
+    except GeminiSafetyFilterError:
+        # Re-raise our custom exception
+        raise
+    except Exception as e:
+        # Handle other potential errors
+        if (
+            "safety filters" in str(e).lower()
+            or "candidate content has no parts" in str(e).lower()
+        ):
+            error_msg = (
+                "Response was blocked by Google's safety filters. "
+                "Please try rephrasing your question or asking something different."
+            )
+            logger.warning(f"Gemini {context} safety filter error: {str(e)}")
+            raise GeminiSafetyFilterError(error_msg)
+        else:
+            # For other errors, let them bubble up
+            raise
+
+
 class GeminiHandler(BaseRAGHandler):
     """
     Handles interactions with Google's Gemini AI models for RAG applications.
@@ -290,12 +387,40 @@ class GeminiHandler(BaseRAGHandler):
             # Use VertexAI approach for all Gemini models (including 2.5)
             responses = self.generative_model.generate_content(prompt, stream=True)
             full_response = ""
+
             for response in responses:
-                if response and response.text:
-                    full_response += response.text
+                try:
+                    response_text = _handle_gemini_safety_response(
+                        response, "streaming"
+                    )
+                    full_response += response_text
+                except GeminiSafetyFilterError as e:
+                    # For streaming, if any part is blocked, return what we have plus the error
+                    if full_response:
+                        return (
+                            f"{full_response}\n\n[Note: Response was partially blocked "
+                            f"by safety filters: {str(e)}]"
+                        )
+                    else:
+                        # If nothing was generated, re-raise the exception
+                        raise
+
             return full_response
+
+        except GeminiSafetyFilterError:
+            # Re-raise safety filter errors to be handled by the calling code
+            raise
         except Exception as e:
             logging.error(f"Error in Gemini response streaming: {str(e)}")
+            # Check if it's a safety filter error in disguise
+            if (
+                "safety filters" in str(e).lower()
+                or "candidate content has no parts" in str(e).lower()
+            ):
+                raise GeminiSafetyFilterError(
+                    "Response was blocked by Google's safety filters. "
+                    "Please try rephrasing your question or asking something different."
+                )
             return f"Error generating response: {str(e)}"
 
     def get_answer(self, query: str) -> str:
@@ -454,6 +579,9 @@ class GeminiHandler(BaseRAGHandler):
                 f"Error in GeminiHandler get_answer for files {self.active_file_ids}: {str(e)}",
                 exc_info=True,
             )
+            # Check if it's a safety filter error
+            if isinstance(e, GeminiSafetyFilterError):
+                return f"I apologize, but I cannot provide a response to this question. {str(e)}"
             return f"An error occurred while processing your question: {str(e)}"
 
 
@@ -473,6 +601,7 @@ def get_gemini_non_rag_response(
         str: The model's response
 
     Raises:
+        GeminiSafetyFilterError: If response is blocked by safety filters
         ValueError: If model configuration is invalid
     """
     try:
@@ -525,10 +654,22 @@ def get_gemini_non_rag_response(
             safety_settings=safety_settings,
         )
 
-        # Clean up response
-        answer = response.text.strip()
-        return answer
+        # Handle the response with safety filter checking
+        answer = _handle_gemini_safety_response(response, "non-rag")
+        return answer.strip()
 
+    except GeminiSafetyFilterError:
+        # Re-raise safety filter errors to be handled by the calling code
+        raise
     except Exception as e:
         logging.error(f"Error in get_gemini_non_rag_response: {str(e)}", exc_info=True)
+        # Check if it's a safety filter error in disguise
+        if (
+            "safety filters" in str(e).lower()
+            or "candidate content has no parts" in str(e).lower()
+        ):
+            raise GeminiSafetyFilterError(
+                "Response was blocked by Google's safety filters. "
+                "Please try rephrasing your question or asking something different."
+            )
         return f"Error generating response: {str(e)}"
