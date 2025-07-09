@@ -658,6 +658,13 @@ class FileHandler:
                 temp_file_path = None
                 logging.info(f"Found embeddings for: {original_filename}")
 
+                # Download embeddings if they exist remotely but not locally
+                # This ensures embeddings are available for immediate chat use
+                local_exists = await self._check_local_embeddings(existing_file_id)
+                if not local_exists:
+                    logging.info(f"Downloading embeddings for file {existing_file_id}")
+                    self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
+
                 # Update username list using the more comprehensive method
                 self.gcs_handler.update_file_info(
                     existing_file_id, {"username": username}
