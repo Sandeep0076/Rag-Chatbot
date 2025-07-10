@@ -46,6 +46,7 @@ from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
+from rtl_rag_chatbot_api.common.db import FileInfo
 from rtl_rag_chatbot_api.common.models import (
     ChatRequest,
     CleanupRequest,
@@ -987,6 +988,7 @@ async def upload_file(
     urls: str = Form(None),
     existing_file_ids: str = Form(None),  # New parameter for existing file IDs
     current_user=Depends(get_current_user),
+    db=Depends(get_db_session),
 ):
     """
     Handles file upload and automatically creates embeddings for PDFs and images.
@@ -1001,6 +1003,13 @@ async def upload_file(
     All file processing is done asynchronously and in parallel when multiple files are uploaded.
     Embeddings creation and other post-processing happens in background tasks.
     """
+
+    matching_file_ids = (
+        db.query(FileInfo).filter(FileInfo.file_id.in_(existing_file_ids)).fetch_all()
+    )
+    print(matching_file_ids)
+    # TODO process further ..
+
     try:
         # Parse existing file IDs if provided (do this before URL processing)
         parsed_existing_file_ids = []
