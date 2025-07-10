@@ -17,6 +17,15 @@ class Conversation(Base):
     createdAt = Column(DateTime)
 
 
+class FileInfo(Base):
+    __tablename__ = "FileInfo"
+
+    id = Column(String, primary_key=True, unique=True)
+    file_id = Column(String, nullable=False)
+    file_hash = Column(String, nullable=False)
+    createdAt = Column(DateTime, nullable=False)
+
+
 def get_conversations_by_file_ids(session: Session, file_ids: str) -> datetime:
     """"""
 
