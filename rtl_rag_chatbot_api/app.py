@@ -2469,22 +2469,19 @@ async def _detect_visualization_need(
     if should_visualize_filter:
         question_for_detection = CHART_DETECTION_PROMPT + question
         try:
-            vis_detection_response = get_gemini_non_rag_response(
-                configs, question_for_detection, "gemini-2.5-flash", temperature
+            # vis_detection_response = get_gemini_non_rag_response(
+            #     configs, question_for_detection, "gemini-2.5-flash", temperature
+            # )
+            vis_detection_response = get_azure_non_rag_response(
+                configs, question_for_detection, model_choice="gpt_4_1_nano"
             )
             if (
                 vis_detection_response.lower() == "true"
                 or "true" in vis_detection_response.lower()
             ):
                 generate_visualization = True
-        except GeminiSafetyFilterError as e:
-            # If safety filter blocks the visualization detection, default to False
-            logging.warning(
-                f"Visualization detection blocked by safety filter: {str(e)}"
-            )
-            generate_visualization = False
         except Exception as e:
-            # For other errors, also default to False
+            # For any errors with Azure OpenAI, default to False
             logging.error(f"Error in visualization detection: {str(e)}")
             generate_visualization = False
 

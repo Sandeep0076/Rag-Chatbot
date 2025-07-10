@@ -335,7 +335,10 @@ def get_azure_non_rag_response(
         messages = [
             {
                 "role": "system",
-                "content": configs.chatbot.system_prompt_plain_llm,
+                "content": (
+                    "You are a helpful assistant that provides accurate and relevant "
+                    "information based on the given data."
+                ),
             },
             {"role": "user", "content": query},
         ]
