@@ -10,7 +10,7 @@ import os
 import time
 import uuid
 from asyncio import Semaphore
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -21,7 +21,7 @@ from fastapi import Query as QueryParam
 from fastapi import Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
@@ -127,6 +127,46 @@ Additional features:
 
 Note: File storage in GCP has been removed from this version.
 """
+
+
+@contextmanager
+def get_db_session():
+    """
+    Dependency to get a SQLAlchemy session.
+
+    Returns:
+        Session: SQLAlchemy session.
+    """
+    DATABASE_URL = f"postgresql://{os.getenv('DB_USERNAME')}:{os.getenv('DB_PASSWORD')}@127.0.0.1:5432/chatbot_ui"
+    engine = create_engine(DATABASE_URL)
+    Session = sessionmaker(bind=engine)
+
+    attempts = 0
+    max_attempts = 10
+
+    while attempts < max_attempts:
+        # Try to establish a connection to the database
+        try:
+            attempts += 1
+            db_session = Session()
+            # Try to execute a simple query to check the connection
+            db_session.execute(text("SELECT 1"))
+            break
+        except Exception as e:
+            logging.warning(
+                f"Database connection failed. Retrying in 5 seconds... Original error: {e}"
+            )
+            time.sleep(5)
+        finally:
+            db_session.close()
+
+    try:
+        db_session = Session()
+        yield db_session
+    except Exception as e:
+        logging.error(f"Error in session: {e}")
+    finally:
+        db_session.close()
 
 
 @asynccontextmanager
