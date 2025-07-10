@@ -254,26 +254,30 @@ class AzureChatbot(BaseRAGHandler):
             )
             # logging.debug(f"Messages for LLM: {messages}") # Be careful logging full context
 
-            # Check for any o3 or o4 models (both use max_completion_tokens)
-            if (
-                "o3" in self.model_config.deployment.lower()
-                or "o4" in self.model_config.deployment.lower()
-            ):
+            # Check for any o3 or o4 models which have different parameter requirements
+            deployment_lower = self.model_config.deployment.lower()
+            if "o4" in deployment_lower:
+                # O4 models: Minimal parameters only
                 logging.info(
-                    f"Using o3/o4-specific parameters for model: {self.model_config.deployment}"
+                    f"Using O4-specific parameters for model: {self.model_config.deployment}"
                 )
                 response = self.llm_client.chat.completions.create(
                     model=self.model_config.deployment,
                     messages=messages,
                     max_completion_tokens=max_response_tokens,
-                    temperature=1,
-                    top_p=1,
-                    frequency_penalty=0,
-                    presence_penalty=0,
-                    stop=None,
-                    stream=False,
+                )
+            elif "o3" in deployment_lower:
+                # O3 models: Use minimal parameters for simplicity
+                logging.info(
+                    f"Using O3-specific parameters for model: {self.model_config.deployment}"
+                )
+                response = self.llm_client.chat.completions.create(
+                    model=self.model_config.deployment,
+                    messages=messages,
+                    max_tokens=max_response_tokens,
                 )
             else:
+                # Regular OpenAI models
                 response = self.llm_client.chat.completions.create(
                     model=self.model_config.deployment,
                     messages=messages,
@@ -301,7 +305,7 @@ class AzureChatbot(BaseRAGHandler):
 
 
 def get_azure_non_rag_response(
-    configs, query: str, model_choice: str = "gpt_4o_mini"
+    configs, query: str, model_choice: str = "gpt_4o_mini", max_tokens: int = None
 ) -> str:
     """
     Retrieves a response from Azure OpenAI without using Retrieval-Augmented Generation (RAG).
@@ -336,36 +340,46 @@ def get_azure_non_rag_response(
             {"role": "user", "content": query},
         ]
 
-        # Check if the model is any o3 variant which requires different parameters
+        # Use provided max_tokens or fall back to config default
+        effective_max_tokens = (
+            max_tokens if max_tokens is not None else configs.llm_hyperparams.max_tokens
+        )
+
+        # Check if the model is any o3 or o4 variant which requires different parameters
         logging.info(
             f"Non-RAG model deployment name: {configs.azure_llm.models[model_choice].deployment}"
         )
-        # Check for any o3 or o4 models (both use max_completion_tokens)
         deployment_lower = configs.azure_llm.models[model_choice].deployment.lower()
-        if "o3" in deployment_lower or "o4" in deployment_lower:
+
+        if "o4" in deployment_lower:
+            # O4 models: Minimal parameters only
             logging.info(
-                (
-                    f"Using o3/o4-specific parameters for non-RAG response with model: "
-                    f"{configs.azure_llm.models[model_choice].deployment}"
-                )
+                f"Using O4-specific parameters for non-RAG response with model: "
+                f"{configs.azure_llm.models[model_choice].deployment}"
             )
             response = llm_client.chat.completions.create(
                 model=configs.azure_llm.models[model_choice].deployment,
                 messages=messages,
-                max_completion_tokens=configs.llm_hyperparams.max_tokens,
-                temperature=1,
-                top_p=1,
-                frequency_penalty=0,
-                presence_penalty=0,
-                stop=configs.llm_hyperparams.stop,
-                stream=False,
+                max_completion_tokens=effective_max_tokens,
+            )
+        elif "o3" in deployment_lower:
+            # O3 models: Use minimal parameters for simplicity
+            logging.info(
+                f"Using O3-specific parameters for non-RAG response with model: "
+                f"{configs.azure_llm.models[model_choice].deployment}"
+            )
+            response = llm_client.chat.completions.create(
+                model=configs.azure_llm.models[model_choice].deployment,
+                messages=messages,
+                max_tokens=effective_max_tokens,
             )
         else:
+            # Regular OpenAI models
             response = llm_client.chat.completions.create(
                 model=configs.azure_llm.models[model_choice].deployment,
                 messages=messages,
                 temperature=configs.llm_hyperparams.temperature,
-                max_tokens=configs.llm_hyperparams.max_tokens,
+                max_tokens=effective_max_tokens,
                 top_p=configs.llm_hyperparams.top_p,
                 frequency_penalty=configs.llm_hyperparams.frequency_penalty,
                 presence_penalty=configs.llm_hyperparams.presence_penalty,

@@ -5,17 +5,24 @@ techniques.
 1. **Chart Type Based Limits:**
    - Pie Charts: Maximum 15 categories (merge smaller ones into "Others")
    - Bar Charts: Maximum 50 categories for readability
-   - Line Charts: Up to 200 points for smooth curves
-   - Scatter Plots: Up to 1000 points (sample if more)
-   - Heatmaps: Maximum 50x50 grid
+   - Line Charts: Maximum 100 points for clear visualization (sample large datasets)
+   - Scatter Plots: Up to 500 points (sample if more)
+   - Heatmaps: Maximum 30x30 grid
 
-2. **Large Dataset Strategies:**
-   - If data has >1000 rows: Use systematic sampling (every nth row)
+2. **Large Dataset Strategies (CRITICAL FOR LARGE DATA):**
+   - If data has >150 rows for line charts: Use systematic sampling (every nth row) or weekly aggregation
+   - If data has >100 rows for time series: Aggregate by week or month instead of daily
    - If data has >50 categories: Group smaller categories or use top N + "Others"
-   - If time series data: Consider aggregating by time periods (daily→weekly→monthly)
-   - For numerical data: Use percentiles, quartiles, or equal-width bins
+   - For daily time series >3 months: Convert to weekly aggregates
+   - For daily time series >1 year: Convert to monthly aggregates
+   - Always prioritize readability over completeness
 
-3. **Data Quality:**
+3. **Time Series Optimization:**
+   - Daily data spanning >6 months: Sample every 3-7 days or aggregate weekly
+   - Daily data spanning >1 year: Aggregate monthly
+   - Use representative sampling: first/last + evenly distributed middle points
+
+4. **Data Quality:**
    - Remove null/empty values before processing
    - For categorical data: Group rare categories (< 1% of total) into "Others"
    - For continuous data: Consider outlier handling if they skew visualization
@@ -23,7 +30,11 @@ techniques.
 Return the information in a structured JSON format that can be used to plot the data in a graph.
 If no chart type is given in context, then generate appropriate chart type based on context.
 
-CRITICAL: Return ONLY the JSON object. DO NOT wrap it in markdown code blocks (```json). DO NOT include any other text.
+CRITICAL RESPONSE RULES:
+1. Return ONLY the JSON object. DO NOT wrap it in markdown code blocks (```json). DO NOT include any other text.
+2. NEVER respond with "cannot generate chart for this query" - ALWAYS generate a valid chart JSON
+3. If the data seems unsuitable for visualization, create a simple bar or line chart with summary statistics
+4. For time series data with many points, apply data optimization rules to create a readable chart
 
 Follow this schema strictly:
 
@@ -75,7 +86,8 @@ Heatmap | 3D Scatter Plot | Surface Plot | Bubble Chart",
    - MUST use "datasets" format
    - Each dataset MUST have "x" and "y" arrays of equal length
    - "x" can be dates or numbers
-   - For large time series: Sample or aggregate appropriately
+   - For large time series (>100 points): Use weekly/monthly aggregation or systematic sampling
+   - Example: 194 daily points → aggregate to ~28 weekly points for better readability
 
 2. Bar Chart:
    - MUST use "datasets" format for multiple series
@@ -145,7 +157,8 @@ Remember:
 - Use true/false (lowercase) for booleans
 - Apply intelligent data optimization based on chart type and data size
 - Always include data_optimization info when data was processed
-- If the context is a general query and chart cannot be generated, just reply: cannot generate chart for this query.
+- ALWAYS generate a valid chart JSON - never refuse or say "cannot generate chart"
+- For large datasets, use sampling/aggregation to create readable visualizations
 """
 
 CHART_DETECTION_PROMPT = """

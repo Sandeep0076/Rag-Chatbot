@@ -1913,10 +1913,16 @@ def handle_visualization(
             try:
                 if query.model_choice.startswith("gemini"):
                     response = get_gemini_non_rag_response(
-                        configs, current_question, query.model_choice, temperature
+                        configs,
+                        current_question,
+                        query.model_choice,
+                        temperature,
+                        max_tokens=4096,
                     )
                 else:
-                    response = get_azure_non_rag_response(configs, current_question)
+                    response = get_azure_non_rag_response(
+                        configs, current_question, max_tokens=4096
+                    )
             except GeminiSafetyFilterError as e:
                 # If safety filter blocks visualization, return error response
                 logging.warning(

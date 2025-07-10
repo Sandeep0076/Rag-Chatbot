@@ -89,6 +89,9 @@ class TabularDataHandler:
         else:
             self.temperature = 0.5  # Lower temperature for OpenAI models
 
+        # Initialize LLM for all database operations before initializing databases
+        self.llm = self._initialize_llm()
+
         # Initialize database_summaries with pre-loaded data if provided
         self.database_summaries = {}
         if database_summaries_param:
@@ -138,9 +141,6 @@ class TabularDataHandler:
                 )
                 self.sessions["default"] = sessionmaker(bind=self.engines["default"])
                 self.dbs["default"] = SQLDatabase(engine=self.engines["default"])
-
-        # Initialize LLM for all database operations
-        self.llm = self._initialize_llm()
 
         # For backward compatibility, set these attributes for the primary file
         if self.file_id:
@@ -343,6 +343,14 @@ class TabularDataHandler:
         Returns:
             str: Cleaned SQL query without markdown formatting.
         """
+        # Remove single backticks that wrap the entire query (common LLM output format)
+        if (
+            query.startswith("`")
+            and query.endswith("`")
+            and not query.startswith("```")
+        ):
+            query = query[1:-1].strip()
+
         # Remove markdown code block delimiters
         if query.startswith("```") and query.endswith("```"):
             # Remove starting and ending backticks
@@ -379,19 +387,15 @@ class TabularDataHandler:
         """Initializes the SQL agent for the primary file (backward compatibility)."""
         if self.file_id:
             self._initialize_agent_for_file(self.file_id)
+
         # Ensure self.db is available for the primary file_id context
         if hasattr(self, "db") and self.db:
             original_run_method = self.db.run
 
-            # Define the wrapper function with **kwargs to handle additional parameters
             def wrapped_run(command: str, fetch: str = "all", **kwargs) -> str:
-                # 'self' of TabularDataHandler is captured from the outer scope
                 logging.debug(f"Executing SQL via wrapped_run: {command}")
                 try:
-                    # Clean the SQL query to remove markdown formatting and other artifacts
                     cleaned_command = self._clean_sql_query(command)
-                    # Pass only the parameters that the original method accepts
-                    # Ignore any additional kwargs like 'parameters' that might be passed by newer LangChain
                     result = original_run_method(cleaned_command, fetch)
                     logging.debug(f"SQL result (first 100 chars): {str(result)[:100]}")
                     return result
@@ -401,7 +405,6 @@ class TabularDataHandler:
                     )
                     raise
 
-            # Replace the run method with our wrapped version
             self.db.run = wrapped_run
             logging.info(
                 f"Patched db.run method for file_id: {self.file_id or 'default'}"
@@ -866,42 +869,12 @@ class TabularDataHandler:
             self._initialize_agent()
 
         try:
-            # Import GCSHandler to access file_info.json
-            from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
-
-            gcs_handler = GCSHandler(self.config)
-
-            # Get database_summary from file_info.json instead of regenerating it
-            file_info = gcs_handler.get_file_info(self.file_id)
-
-            # Use database_summary from file_info if available, otherwise fall back to table_info
-            if file_info and "database_summary" in file_info:
-                db_summary = file_info["database_summary"]
-                logging.info(
-                    "Using database_summary from file_info.json for file_id: %s",
-                    self.file_id,
-                )
-            else:
-                logging.info(
-                    "No database_summary found in file_info.json, generating from table_info"
-                )
-                # Create database_summary from table_info
-                db_summary = {
-                    "table_count": len(self.table_info),
-                    "table_names": [t["name"] for t in self.table_info],
-                    "tables": self.table_info,
-                }
-
             # Add file context to the question before processing
             file_context = self._get_file_context_for_prompt()
-            enhanced_question = (
-                f"{file_context}{question}" if file_context else question
-            )
 
-            # Use the format_question function from prompt_handler with database summary
-            formatted_question = format_question(db_summary, enhanced_question)
+            # Note: question is necessary as second argument to format_question.
+            formatted_question = format_question(file_context, question)
             logging.info(f"Formatted question: {formatted_question}")
-
             # Check if the formatted question contains specific keywords
             keywords = ["SELECT", "FIND", "LIST", "SHOW", "CALCULATE"]
             if formatted_question and any(
