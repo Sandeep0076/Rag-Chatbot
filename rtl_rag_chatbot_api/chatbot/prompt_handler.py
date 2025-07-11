@@ -299,11 +299,22 @@ def classify_question_intent(user_question: str, database_context: dict) -> dict
 
     try:
         response = get_azure_non_rag_response(configs, classification_prompt)
+
+        # Clean the response - remove markdown code blocks if present
+        cleaned_response = response.strip()
+        if cleaned_response.startswith("```json"):
+            cleaned_response = cleaned_response[7:]  # Remove ```json
+        if cleaned_response.startswith("```"):
+            cleaned_response = cleaned_response[3:]  # Remove ```
+        if cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[:-3]  # Remove trailing ```
+        cleaned_response = cleaned_response.strip()
+
         # Try to parse JSON response
-        if response.strip().startswith("{"):
-            return json.loads(response.strip())
+        if cleaned_response.startswith("{"):
+            return json.loads(cleaned_response)
         else:
-            # Fallback parsing if LLM doesn't return pure JSON
+            # Fallback parsing if LLM doesn't return valid JSON
             logging.warning(f"Non-JSON classification response: {response}")
             return {
                 "category": "SIMPLE_AGGREGATION",
