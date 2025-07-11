@@ -857,7 +857,7 @@ class TabularDataHandler:
 
     def ask_question(self, question: str) -> Optional[str]:
         """
-        Processes a question using natural language processing and database querying.
+        Enhanced question processing with intelligent optimization and SQL filtering.
 
         Args:
             question (str): The user's input question.
@@ -872,48 +872,86 @@ class TabularDataHandler:
             # Add file context to the question before processing
             file_context = self._get_file_context_for_prompt()
 
-            # Note: question is necessary as second argument to format_question.
+            # Use enhanced format_question with intelligent context analysis
             formatted_question = format_question(file_context, question)
             logging.info(f"Formatted question: {formatted_question}")
-            # Check if the formatted question contains specific keywords
+
+            # Check if this is a direct answer (no SQL needed)
             keywords = ["SELECT", "FIND", "LIST", "SHOW", "CALCULATE"]
-            if formatted_question and any(
+            needs_sql_execution = formatted_question and any(
                 keyword in formatted_question.upper() for keyword in keywords
-            ):
-                # Enhance the query with case-insensitive comparisons
-                response = self.agent.invoke({"input": formatted_question})
+            )
 
-                # Extract the final answer and intermediate steps
-                final_answer = response.get("output", "No final answer found")
-                intermediate_steps = response.get("intermediate_steps", [])
+            if not needs_sql_execution:
+                # Direct answer from database summary - return as-is
+                logging.info("Direct answer provided from database summary")
+                return formatted_question
 
-                # Use intelligent truncation to prevent token overflow
+            # Get query classification for appropriate response formatting
+            from rtl_rag_chatbot_api.chatbot.prompt_handler import (
+                analyze_database_context,
+                classify_question_intent,
+            )
+
+            database_context = analyze_database_context(file_context)
+            classification = classify_question_intent(question, database_context)
+            query_type = classification.get("category", "unknown")
+            logging.info(f"Query type for response formatting: {query_type}")
+
+            # Execute SQL query through agent
+            logging.info("Executing query through SQL agent")
+            response = self.agent.invoke({"input": formatted_question})
+
+            # Extract the final answer and intermediate steps
+            final_answer = response.get("output", "No final answer found")
+            intermediate_steps = response.get("intermediate_steps", [])
+
+            # Check if response contains SQL content that needs filtering
+            if PromptBuilder.contains_sql_content(final_answer):
+                logging.warning(
+                    "SQL content detected in response, applying enhanced cleaning"
+                )
+
+                # Estimate result size for appropriate handling
+                result_size = PromptBuilder.estimate_result_size(
+                    str(intermediate_steps) + str(final_answer)
+                )
+                logging.info(f"Estimated result size: {result_size}")
+
+                # Use enhanced truncation with reduced token limit for safety
+                truncated_context = self._truncate_intermediate_steps(
+                    intermediate_steps, final_answer, max_context_tokens=25000
+                )
+
+                # Apply SQL filtering and business formatting with query type
+                base_prompt = PromptBuilder.build_forced_answer_prompt(
+                    question, truncated_context, query_type
+                )
+            else:
+                # Response is already clean, use standard formatting
+                logging.info("Clean response detected, using standard formatting")
                 truncated_context = self._truncate_intermediate_steps(
                     intermediate_steps, final_answer
                 )
 
                 base_prompt = PromptBuilder.build_forced_answer_prompt(
-                    formatted_question, truncated_context
+                    question, truncated_context, query_type
                 )
 
-                # Format the response using the appropriate model
-                if self.model_choice.startswith("gemini"):
-                    try:
-                        return get_gemini_non_rag_response(
-                            self.config, base_prompt, self.model_choice
-                        )
-                    except GeminiSafetyFilterError as e:
-                        logging.warning(
-                            f"Safety filter blocked response in CSV handler: {str(e)}"
-                        )
-                        return f"I apologize, but I cannot provide a response to this question. {str(e)}"
-                else:
-                    return get_azure_non_rag_response(self.config, base_prompt)
+            # Format the response using the appropriate model
+            if self.model_choice.startswith("gemini"):
+                try:
+                    return get_gemini_non_rag_response(
+                        self.config, base_prompt, self.model_choice
+                    )
+                except GeminiSafetyFilterError as e:
+                    logging.warning(
+                        f"Safety filter blocked response in CSV handler: {str(e)}"
+                    )
+                    return f"I apologize, but I cannot provide a response to this question. {str(e)}"
             else:
-                # If no keywords are found, return the formatted question as is
-                return formatted_question
+                return get_azure_non_rag_response(self.config, base_prompt)
 
-            return None
         except Exception as e:
             logging.error(f"An error occurred while processing the question: {str(e)}")
             raise
