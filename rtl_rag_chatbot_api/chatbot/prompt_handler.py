@@ -84,7 +84,7 @@ User Question: {user_question}
 
 **DECISION TREE:**
 
-1. **DIRECT_SUMMARY Questions** (Answer from database_info only):
+1. **DIRECT_SUMMARY Questions** (Answer from database_info only, NO SQL needed):
    - "What's this file about?" → Summarize database structure and content
    - "Key insights" → Extract key statistics from database_info
    - "How many records/tables?" → Use counts from database_info
@@ -128,7 +128,7 @@ Examples:
 {examples}
 
 **OUTPUT FORMAT:**
-- If DIRECT_SUMMARY: Provide direct answer from database_info
+- If DIRECT_SUMMARY: Provide direct answer from database_info, NO SQL needed
 - If SQL needed: Single optimized natural language query with context-aware aggregation
 - No explanations or multiple options
 - Focus on actionable, properly-sized results
@@ -288,12 +288,15 @@ def classify_question_intent(user_question: str, database_context: dict) -> dict
     CRITICAL: For DIRECT_SUMMARY, always set needs_sql to false since these can be
     answered from database metadata alone.
 
+    IMPORTANT: Also detect the language of the user's question and include it in the response.
+    Common languages: English (en) and German (de)
     Based on the ACTUAL database characteristics, return ONLY this JSON:
     {{
         "category": "DIRECT_SUMMARY|TIME_SERIES|CATEGORICAL_LISTING|FILTERED_SEARCH|SIMPLE_AGGREGATION",
         "needs_sql": true/false,
         "optimization_strategy": "none|temporal_aggregation|top_n_summary|preserve_detail",
-        "reasoning": "brief explanation based on actual data characteristics"
+        "reasoning": "brief explanation based on actual data characteristics",
+        "language": "language_code (e.g., en, de)"
     }}
     """
 
@@ -321,6 +324,7 @@ def classify_question_intent(user_question: str, database_context: dict) -> dict
                 "needs_sql": True,
                 "optimization_strategy": "none",
                 "reasoning": "Fallback classification due to parsing error",
+                "language": "en",
             }
     except Exception as e:
         logging.error(f"Error in question classification: {str(e)}")
@@ -329,16 +333,20 @@ def classify_question_intent(user_question: str, database_context: dict) -> dict
             "needs_sql": True,
             "optimization_strategy": "none",
             "reasoning": "Default classification due to error",
+            "language": "en",
         }
 
 
-def answer_from_database_summary(user_question: str, database_info: dict) -> str:
+def answer_from_database_summary(
+    user_question: str, database_info: dict, language: str = "en"
+) -> str:
     """
     Answer questions directly from database summary without SQL execution.
 
     Args:
         user_question: The user's question
         database_info: Database structure information
+        language: The language to respond in (default: "en")
 
     Returns:
         str: Direct answer from database summary
@@ -353,13 +361,14 @@ def answer_from_database_summary(user_question: str, database_info: dict) -> str
 
     Provide a clear, informative answer based ONLY on the database structure and statistics shown above.
     Focus on:
+    - Actual answers to the question
     - Table structures and relationships
     - Record counts and data volumes
-    - Column types and characteristics
-    - Key insights from the data summary
 
     Write in a business-friendly tone as if explaining to a stakeholder.
     Do not mention SQL, databases, or technical terms.
+
+    IMPORTANT: Respond in {language.upper()} language to match the user's question language.
     """
 
     try:
@@ -445,7 +454,7 @@ def enhance_query_with_context(
         return user_question  # Fallback to original question
 
 
-def format_question(database_info: dict, user_question: str) -> str:
+def format_question(database_info: dict, user_question: str) -> dict:
     """
     Enhanced question formatting with intelligent context awareness and optimization.
 
@@ -454,7 +463,7 @@ def format_question(database_info: dict, user_question: str) -> str:
         user_question: The original user question
 
     Returns:
-        str: Optimized response - either direct answer or enhanced query
+        dict: Contains 'formatted_question' and 'needs_sql' flag
     """
 
     try:
@@ -467,16 +476,20 @@ def format_question(database_info: dict, user_question: str) -> str:
         logging.info(f"Question classification: {classification}")
 
         # Step 3: Route based on classification
-        if not classification.get("needs_sql", True):
-            # Answer directly from database summary
+        needs_sql = classification.get("needs_sql", True)
+
+        if not needs_sql:
+            # Answer directly from database summary (includes DIRECT_SUMMARY category)
             logging.info("Answering directly from database summary")
-            return answer_from_database_summary(user_question, database_info)
-
-        elif classification.get("category") == "DIRECT_SUMMARY":
-            # Answer from database structure
-            logging.info("Providing direct summary answer")
-            return answer_from_database_summary(user_question, database_info)
-
+            language = classification.get("language", "en")
+            formatted_question = answer_from_database_summary(
+                user_question, database_info, language
+            )
+            return {
+                "formatted_question": formatted_question,
+                "needs_sql": False,
+                "classification": classification,
+            }
         else:
             # Need SQL execution with potential optimization
             optimization_strategy = classification.get("optimization_strategy")
@@ -486,7 +499,7 @@ def format_question(database_info: dict, user_question: str) -> str:
 
             if classification.get("optimization_strategy") != "none":
                 # Apply intelligent optimization
-                return enhance_query_with_context(
+                formatted_question = enhance_query_with_context(
                     user_question, classification, database_context
                 )
             else:
@@ -496,9 +509,15 @@ def format_question(database_info: dict, user_question: str) -> str:
                     user_question=user_question,
                     examples=examples,
                 )
-                return get_azure_non_rag_response(
-                    configs=configs, model_choice="gpt_4_1_nano", query=formatted_prompt
+                formatted_question = get_azure_non_rag_response(
+                    configs=configs, query=formatted_prompt
                 )
+
+            return {
+                "formatted_question": formatted_question,
+                "needs_sql": True,
+                "classification": classification,
+            }
 
     except Exception as e:
         logging.error(f"Error in enhanced format_question: {str(e)}")
@@ -508,4 +527,9 @@ def format_question(database_info: dict, user_question: str) -> str:
             user_question=user_question,
             examples=examples,
         )
-        return get_azure_non_rag_response(configs, formatted_prompt)
+        formatted_question = get_azure_non_rag_response(configs, formatted_prompt)
+        return {
+            "formatted_question": formatted_question,
+            "needs_sql": True,
+            "classification": {"category": "FALLBACK", "language": "en"},
+        }

@@ -14,7 +14,7 @@ class PromptBuilder:
 
     @staticmethod
     def build_forced_answer_prompt(
-        question: str, answer: str, query_type: str = "unknown"
+        question: str, answer: str, query_type: str = "unknown", language: str = "en"
     ) -> str:
         """Build prompt for forced answer generation with appropriate verbosity based on query type."""
         # Safety check: if context is extremely large, truncate it
@@ -71,7 +71,6 @@ class PromptBuilder:
                 "3. ALWAYS provide:\n"
                 "   - Clean, formatted actual data/results only\n"
                 "   - Business-friendly language and explanations\n"
-                "   - Actionable insights and key findings for complex answers only\n"
                 "   - Proper formatting using markdown tables when appropriate\n"
                 "4. For large result sets (>50 rows):\n"
                 "   - Provide summary with key insights first\n"
@@ -82,12 +81,22 @@ class PromptBuilder:
                 "   - Use markdown tables for structured data: | Column | Column |\n"
                 "   - Use bullet points for simple lists\n"
                 "   - Include percentages, totals, and context where relevant\n"
+                "   - For rows: 'Include headers and Use markdown tables for structured data: | Column | Column |\n"
+                "   |--------|--------|\n"
+                "   | Data   | Data   |\n"
                 "Provide a clean, professional response with actual data that directly answers the question."
             )
+
+        # Add language instruction
+        language_instruction = (
+            f"IMPORTANT: Respond in {language.upper()} "
+            "language to match the user's question language."
+        )
 
         return (
             f"User Question: {question}\n\n"
             f"Query Results and Context: {truncated_answer}\n\n"
+            f"{language_instruction}\n\n"
             f"{instructions}"
         )
 

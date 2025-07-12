@@ -635,7 +635,7 @@ class FileHandler:
                 existing_file_id,
                 azure_result,
             ) = await self._check_for_existing_file(
-                file_hash, original_filename, file_id
+                file_hash, original_filename, file_id, is_tabular, is_database
             )
             # For compatibility with downstream code expecting google_result
             google_result = {
@@ -800,7 +800,12 @@ class FileHandler:
         return file_content, file_hash, file_types
 
     async def _check_for_existing_file(
-        self, file_hash: str, original_filename: str, file_id: str
+        self,
+        file_hash: str,
+        original_filename: str,
+        file_id: str,
+        is_tabular: bool = False,
+        is_database: bool = False,
     ):
         """Check if a file with the same hash already exists and verify it's not a hash collision"""
         azure_result = {"embeddings_exist": False}
@@ -809,31 +814,36 @@ class FileHandler:
         if not existing_file_id:
             return None, azure_result
 
-        # Verify this isn't a case of hash collision by checking filename
-        gcs_file_path = (
-            f"file-embeddings/{existing_file_id}/{original_filename}.encrypted"
-        )
+        # Determine the expected encrypted file path based on file type
+        if is_tabular or is_database:
+            # Tabular files are always saved as tabular_data.db.encrypted
+            expected_encrypted_file = "tabular_data.db.encrypted"
+        else:
+            # Non-tabular files are saved as {original_filename}.encrypted
+            expected_encrypted_file = f"{original_filename}.encrypted"
+
+        gcs_file_path = f"file-embeddings/{existing_file_id}/{expected_encrypted_file}"
         file_exists = await asyncio.to_thread(
             self.gcs_handler.check_file_exists, gcs_file_path
         )
 
         if not file_exists:
-            # Check if there are other PDFs in this directory
+            # Check if there are other files in this directory
             prefix = f"file-embeddings/{existing_file_id}/"
             blobs = list(self.gcs_handler.bucket.list_blobs(prefix=prefix))
 
             for blob in blobs:
-                if blob.name.endswith(".encrypted") and not blob.name.endswith(
-                    f"{original_filename}.encrypted"
-                ):
-                    logging.warning(
-                        f"Found hash match but with different filename: {blob.name}"
-                    )
-                    # Use the new file_id instead to avoid conflicts
-                    logging.info(
-                        f"Treating as new file with ID: {file_id} to avoid conflicts"
-                    )
-                    return None, azure_result
+                if blob.name.endswith(".encrypted"):
+                    # Check if this blob matches the expected encrypted file name
+                    if not blob.name.endswith(expected_encrypted_file):
+                        logging.warning(
+                            f"Found hash match but with different filename: {blob.name}"
+                        )
+                        # Use the new file_id instead to avoid conflicts
+                        logging.info(
+                            f"Treating as new file with ID: {file_id} to avoid conflicts"
+                        )
+                        return None, azure_result
 
         # If we're still using the existing_file_id, get embedding status
         embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
@@ -914,10 +924,11 @@ class FileHandler:
         metadata: dict,
     ):
         """Check for and handle potential file conflicts"""
+        # Tabular files don't use this conflict detection since they're always saved as tabular_data.db.encrypted
         if is_tabular or not encrypted_file_path:
             return actual_file_id, encrypted_file_path, metadata
 
-        # Check if there's already a different PDF in this directory
+        # For non-tabular files, check if there's already a different file in this directory
         prefix = f"file-embeddings/{actual_file_id}/"
         has_conflict = False
 

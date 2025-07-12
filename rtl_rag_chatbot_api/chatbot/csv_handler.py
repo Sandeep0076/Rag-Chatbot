@@ -869,34 +869,38 @@ class TabularDataHandler:
             self._initialize_agent()
 
         try:
-            # Add file context to the question before processing
-            file_context = self._get_file_context_for_prompt()
+            # Get database_info from file_info for format_question
+            database_info = {}
+            if (
+                self.all_file_infos
+                and self.file_id
+                and self.file_id in self.all_file_infos
+            ):
+                file_info = self.all_file_infos.get(self.file_id, {})
+                database_info = file_info.get("database_summary", {})
 
             # Use enhanced format_question with intelligent context analysis
-            formatted_question = format_question(file_context, question)
+            format_result = format_question(database_info, question)
+            formatted_question = format_result["formatted_question"]
+            needs_sql = format_result["needs_sql"]
+            classification = format_result.get("classification", {})
+
             logging.info(f"Formatted question: {formatted_question}")
+            logging.info(f"Needs SQL: {needs_sql}")
 
-            # Check if this is a direct answer (no SQL needed)
-            keywords = ["SELECT", "FIND", "LIST", "SHOW", "CALCULATE"]
-            needs_sql_execution = formatted_question and any(
-                keyword in formatted_question.upper() for keyword in keywords
-            )
-
-            if not needs_sql_execution:
+            if not needs_sql:
                 # Direct answer from database summary - return as-is
                 logging.info("Direct answer provided from database summary")
                 return formatted_question
 
             # Get query classification for appropriate response formatting
-            from rtl_rag_chatbot_api.chatbot.prompt_handler import (
-                analyze_database_context,
-                classify_question_intent,
+            logging.info(
+                "No direct answer provided from database summary. Using langchain agent.."
             )
-
-            database_context = analyze_database_context(file_context)
-            classification = classify_question_intent(question, database_context)
             query_type = classification.get("category", "unknown")
+            language = classification.get("language", "en")
             logging.info(f"Query type for response formatting: {query_type}")
+            logging.info(f"Detected language: {language}")
 
             # Execute SQL query through agent
             logging.info("Executing query through SQL agent")
@@ -923,9 +927,9 @@ class TabularDataHandler:
                     intermediate_steps, final_answer, max_context_tokens=25000
                 )
 
-                # Apply SQL filtering and business formatting with query type
+                # Apply SQL filtering and business formatting with query type and language
                 base_prompt = PromptBuilder.build_forced_answer_prompt(
-                    question, truncated_context, query_type
+                    question, truncated_context, query_type, language
                 )
             else:
                 # Response is already clean, use standard formatting
@@ -935,7 +939,7 @@ class TabularDataHandler:
                 )
 
                 base_prompt = PromptBuilder.build_forced_answer_prompt(
-                    question, truncated_context, query_type
+                    question, truncated_context, query_type, language
                 )
 
             # Format the response using the appropriate model
@@ -956,19 +960,24 @@ class TabularDataHandler:
             logging.error(f"An error occurred while processing the question: {str(e)}")
             raise
 
-    def get_forced_answer(self, question: str, answer: str) -> str:
+    def get_forced_answer(
+        self, question: str, answer: str, language: str = "en"
+    ) -> str:
         """
         Attempts to extract an answer from a given text when a direct answer is not available.
 
         Args:
             question (str): The original question asked by the user.
             answer (str): The text to search for an answer.
+            language (str): The language of the user's question.
 
         Returns:
             str: An extracted answer or "Cannot find answer" if no suitable answer is found.
         """
         try:
-            base_prompt = PromptBuilder.build_forced_answer_prompt(question, answer)
+            base_prompt = PromptBuilder.build_forced_answer_prompt(
+                question, answer, "unknown", language
+            )
             return get_azure_non_rag_response(self.config, base_prompt)
         except Exception as e:
             logging.error(f"Error in get_forced_answer: {str(e)}")
