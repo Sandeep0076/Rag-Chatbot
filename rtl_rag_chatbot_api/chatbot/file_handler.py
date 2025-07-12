@@ -182,7 +182,7 @@ class FileHandler:
                         text(f'SELECT COUNT(*) FROM "{table_name}"')
                     ).scalar()
                     sample_data = connection.execute(
-                        text(f'SELECT * FROM "{table_name}" LIMIT 3')
+                        text(f'SELECT * FROM "{table_name}" LIMIT 2')
                     ).fetchall()
 
                     column_stats = {}
@@ -329,7 +329,7 @@ class FileHandler:
                                 text(f'SELECT COUNT(*) FROM "{table_name}"')
                             ).scalar()
                             sample_data = connection.execute(
-                                text(f'SELECT * FROM "{table_name}" LIMIT 3')
+                                text(f'SELECT * FROM "{table_name}" LIMIT 2')
                             ).fetchall()
 
                             column_stats = {}

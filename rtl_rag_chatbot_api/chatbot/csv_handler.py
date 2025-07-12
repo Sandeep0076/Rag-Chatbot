@@ -440,10 +440,10 @@ class TabularDataHandler:
             if self.table_name:
                 with self.engine.connect() as connection:
                     result = connection.execute(
-                        text(f"SELECT * FROM `{self.table_name}` LIMIT 5")
+                        text(f"SELECT * FROM `{self.table_name}` LIMIT 2")
                     )
                     rows = result.fetchall()
-                    logging.info(f"First 5 rows of '{self.table_name}' table: {rows}")
+                    logging.info(f"First 2 rows of '{self.table_name}' table: {rows}")
             else:
                 logging.info("No tables found in the database.")
         except Exception as e:
@@ -471,7 +471,7 @@ class TabularDataHandler:
                     text(f'SELECT COUNT(*) FROM "{table_name}"')
                 ).scalar()
                 sample_data = session.execute(
-                    text(f'SELECT * FROM "{table_name}" LIMIT 3')
+                    text(f'SELECT * FROM "{table_name}" LIMIT 2')
                 ).fetchall()
 
                 column_stats = {}

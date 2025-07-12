@@ -78,7 +78,8 @@ Before generating any response, analyze:
 1. Can this be answered from database_info summary directly?
 2. What's the actual data span/size in the database?
 3. What type of query structure would this naturally produce?
-4. use accurate table name from database_info to make sql query
+4. **CRITICAL**: Extract and use the actual table names from database_info -
+   NEVER use generic placeholders like "your_table_name"
 
 Database Info: {database_info}
 User Question: {user_question}
@@ -116,6 +117,7 @@ User Question: {user_question}
 - Extract actual date ranges from database_info temporal columns
 - Extract actual category counts from database_info statistics
 - Extract table sizes and column information
+- **CRITICAL**: Identify the actual table names from database_info.tables or database_info.table_names
 - Make decisions based on REAL data characteristics, not assumptions
 
 **RESPONSE RULES:**
@@ -124,7 +126,14 @@ User Question: {user_question}
 - Always use case-insensitive comparisons for text searches
 - Include aggregation strategy in the query when needed
 - Never include disclaimers or technical explanations
-- use accurate table name from database_info to make sql query
+- **CRITICAL**: Use the actual table names from database_info - NEVER use "your_table_name" or similar placeholders
+- If multiple tables exist, choose the most appropriate one based on the question context
+
+**TABLE NAME EXTRACTION:**
+- Look for "table_names" array in database_info
+- Look for "tables" array with "name" fields in database_info
+- Use the actual table name(s) in your response
+- If unsure which table to use, default to the first table in the list
 
 Examples:
 {examples}
@@ -134,6 +143,7 @@ Examples:
 - If SQL needed: Single optimized natural language query with context-aware aggregation
 - No explanations or multiple options
 - Focus on actionable, properly-sized results
+- **MUST use actual table names from database_info**
 """
 
 
@@ -430,6 +440,17 @@ def enhance_query_with_context(
     category = classification.get("category", "SIMPLE_AGGREGATION")
     optimization = classification.get("optimization_strategy", "none")
 
+    # Extract table information from database context
+    table_summaries = database_context.get("table_summaries", [])
+    table_names = [
+        table.get("name", "") for table in table_summaries if table.get("name")
+    ]
+    table_info_str = (
+        f"Available tables: {', '.join(table_names)}"
+        if table_names
+        else "No table information available"
+    )
+
     if category == "TIME_SERIES" and optimization == "temporal_aggregation":
         # Check actual temporal context
         temporal_info = database_context.get("temporal_context", {})
@@ -437,6 +458,7 @@ def enhance_query_with_context(
         enhancement_prompt = f"""
         Original question: "{user_question}"
 
+        {table_info_str}
         Temporal context: {temporal_info}
 
         This is a time-series query that may return too many rows. Based on the actual date span in the data,
@@ -446,6 +468,7 @@ def enhance_query_with_context(
         - If asking for daily data over >1 year: Aggregate by month
         - If asking for hourly data over >7 days: Aggregate by day
         IMPORTANT: Start your response with "SELECT", "FIND", "LIST", "SHOW", "CALCULATE" to ensure SQL execution.
+        Use the actual table names from the available tables above.
         Return an enhanced natural language query that includes the appropriate aggregation level.
         """
 
@@ -456,6 +479,7 @@ def enhance_query_with_context(
         enhancement_prompt = f"""
         Original question: "{user_question}"
 
+        {table_info_str}
         Categorical context: {categorical_info}
 
         This query may return many categories. Based on the actual category counts in the data,
@@ -463,6 +487,7 @@ def enhance_query_with_context(
         - Top 20-30 most relevant items (by sales, count, or other meaningful metric)
         - Summary statistics for the remaining items
         IMPORTANT: Start your response with "SELECT", "FIND", "LIST", "SHOW", "CALCULATE" to ensure SQL execution.
+        Use the actual table names from the available tables above.
         Return an enhanced natural language query with the top-N approach.
         """
 
@@ -470,11 +495,14 @@ def enhance_query_with_context(
         # No enhancement needed or preserve detail
         enhancement_prompt = f"""
         Original question: "{user_question}"
-        ^
+
+        {table_info_str}
+
         IMPORTANT: Start your response with "SELECT", "FIND", "LIST", "SHOW", "CALCULATE" to ensure SQL execution.
         Convert this to a clear, natural language database query.
         Use case-insensitive comparisons for text searches.
         Preserve full detail as requested.
+        Use the actual table names from the available tables above.
 """
 
     try:
