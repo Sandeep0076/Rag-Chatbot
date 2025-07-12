@@ -226,7 +226,7 @@ class GeminiHandler(BaseRAGHandler):
             temperature=temperature,
             top_p=1,
             top_k=40,
-            max_output_tokens=2048,
+            max_output_tokens=4096,
         )
 
         safety_settings = {
@@ -590,7 +590,7 @@ def get_gemini_non_rag_response(
     prompt: str,
     model_choice: str,
     temperature: float = 0.8,
-    max_tokens: int = 1024,
+    max_tokens: int = 4096,
 ) -> str:
     """
     Get a response from Gemini model without using RAG context.

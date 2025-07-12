@@ -252,7 +252,7 @@ class TabularDataHandler:
                 project=model_config.project,
                 location=model_config.location,
                 temperature=self.temperature,
-                max_output_tokens=2048,
+                max_output_tokens=4096,
                 top_p=1,
                 top_k=40,
             )
@@ -880,14 +880,13 @@ class TabularDataHandler:
                 database_info = file_info.get("database_summary", {})
 
             # Use enhanced format_question with intelligent context analysis
-            format_result = format_question(database_info, question)
+            format_result = format_question(database_info, question, self.model_choice)
             formatted_question = format_result["formatted_question"]
             needs_sql = format_result["needs_sql"]
             classification = format_result.get("classification", {})
 
             logging.info(f"Formatted question: {formatted_question}")
             logging.info(f"Needs SQL: {needs_sql}")
-
             if not needs_sql:
                 # Direct answer from database summary - return as-is
                 logging.info("Direct answer provided from database summary")
@@ -910,37 +909,14 @@ class TabularDataHandler:
             final_answer = response.get("output", "No final answer found")
             intermediate_steps = response.get("intermediate_steps", [])
 
-            # Check if response contains SQL content that needs filtering
-            if PromptBuilder.contains_sql_content(final_answer):
-                logging.warning(
-                    "SQL content detected in response, applying enhanced cleaning"
-                )
+            logging.info("Formatting result from intermediate steps and final answer")
+            truncated_context = self._truncate_intermediate_steps(
+                intermediate_steps, final_answer
+            )
 
-                # Estimate result size for appropriate handling
-                result_size = PromptBuilder.estimate_result_size(
-                    str(intermediate_steps) + str(final_answer)
-                )
-                logging.info(f"Estimated result size: {result_size}")
-
-                # Use enhanced truncation with reduced token limit for safety
-                truncated_context = self._truncate_intermediate_steps(
-                    intermediate_steps, final_answer, max_context_tokens=25000
-                )
-
-                # Apply SQL filtering and business formatting with query type and language
-                base_prompt = PromptBuilder.build_forced_answer_prompt(
-                    question, truncated_context, query_type, language
-                )
-            else:
-                # Response is already clean, use standard formatting
-                logging.info("Clean response detected, using standard formatting")
-                truncated_context = self._truncate_intermediate_steps(
-                    intermediate_steps, final_answer
-                )
-
-                base_prompt = PromptBuilder.build_forced_answer_prompt(
-                    question, truncated_context, query_type, language
-                )
+            base_prompt = PromptBuilder.build_forced_answer_prompt(
+                question, truncated_context, query_type, language
+            )
 
             # Format the response using the appropriate model
             if self.model_choice.startswith("gemini"):
@@ -982,31 +958,6 @@ class TabularDataHandler:
         except Exception as e:
             logging.error(f"Error in get_forced_answer: {str(e)}")
             return f"An error occurred while processing your question: {str(e)}"
-
-    def interactive_session(self):
-        """
-        Starts an interactive session for querying the database.
-        Allows users to input questions and receive answers based on the database content.
-        """
-        print("Welcome to the interactive SQL query session.")
-        print("Type 'exit' to end the session.")
-
-        while True:
-            question = input("\nEnter your question: ").strip()
-
-            if question.lower() == "exit":
-                print("Exiting the session. Goodbye!")
-                break
-
-            answer = self.get_answer(question)
-
-            if answer:
-                print(f"\nAnswer: {answer}")
-            else:
-                print(
-                    "Sorry, I couldn't find an answer to that question. Let me try again"
-                )
-                return self.get_forced_answer(question, answer)
 
     def _truncate_intermediate_steps(
         self,
@@ -1114,15 +1065,3 @@ class TabularDataHandler:
             return context + "\n\n" + final_answer_str
         else:
             return final_answer_str
-
-
-# def main(data_dir: str):
-#     handler = TabularDataHandler(data_dir)
-#     handler.prepare_database()
-#     table_info = handler.get_table_info()
-#     handler.interactive_session()
-
-
-# if __name__ == "__main__":
-#     data_dir = "rtl_rag_chatbot_api/tabularData/csv_dir"
-#     main(data_dir)

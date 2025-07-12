@@ -616,6 +616,22 @@ class FileHandler:
             "metadata": file_metadata,  # Include file-specific metadata
         }
 
+    async def _cleanup_empty_directory(self, file_id: str):
+        """Clean up empty directory that was created in error for existing files."""
+        try:
+            chroma_dir = f"./chroma_db/{file_id}"
+            if os.path.exists(chroma_dir):
+                # Check if directory is empty
+                if not os.listdir(chroma_dir):
+                    os.rmdir(chroma_dir)
+                    logging.info(f"Cleaned up empty directory: {chroma_dir}")
+                else:
+                    logging.info(
+                        f"Directory {chroma_dir} is not empty, skipping cleanup"
+                    )
+        except Exception as e:
+            logging.warning(f"Error cleaning up directory {file_id}: {str(e)}")
+
     async def process_file(
         self, file: UploadFile, file_id: str, is_image: bool, username: str
     ) -> dict:
@@ -642,21 +658,17 @@ class FileHandler:
                 "embeddings_exist": False
             }  # Always false with unified Azure approach
 
-            # Only create directories and save file if embeddings don't exist or we need to process the file
+            # Check if we have an existing file with embeddings
             embeddings_exist = existing_file_id and azure_result.get(
                 "embeddings_exist", False
             )
-            # or tabular data
-            if not embeddings_exist:
-                # Create directories and save file
-                temp_file_path = await self._save_file_locally(
-                    file_id, original_filename, file_content
-                )
-            else:
-                # If embeddings exist, we don't need to save the file
-                # Just set the path but don't actually create the file
-                temp_file_path = None
+
+            # If we have an existing file with embeddings, handle it immediately without creating new directories
+            if embeddings_exist:
                 logging.info(f"Found embeddings for: {original_filename}")
+
+                # Clean up any empty directory that might have been created for the new file_id
+                await self._cleanup_empty_directory(file_id)
 
                 # Download embeddings if they exist remotely but not locally
                 # This ensures embeddings are available for immediate chat use
@@ -681,6 +693,15 @@ class FileHandler:
                     "embeddings_exist": True,
                     "temp_file_path": None,
                 }
+
+            # Only create directories and save file if we don't have existing embeddings
+            # Create directories and save file
+            if not existing_file_id:
+                temp_file_path = await self._save_file_locally(
+                    file_id, original_filename, file_content
+                )
+            else:
+                temp_file_path = None
 
             del file_content  # Free memory
 

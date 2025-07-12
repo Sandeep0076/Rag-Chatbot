@@ -78,6 +78,7 @@ Before generating any response, analyze:
 1. Can this be answered from database_info summary directly?
 2. What's the actual data span/size in the database?
 3. What type of query structure would this naturally produce?
+4. use accurate table name from database_info to make sql query
 
 Database Info: {database_info}
 User Question: {user_question}
@@ -123,6 +124,7 @@ User Question: {user_question}
 - Always use case-insensitive comparisons for text searches
 - Include aggregation strategy in the query when needed
 - Never include disclaimers or technical explanations
+- use accurate table name from database_info to make sql query
 
 Examples:
 {examples}
@@ -237,13 +239,16 @@ def analyze_database_context(database_info: dict) -> dict:
     return context
 
 
-def classify_question_intent(user_question: str, database_context: dict) -> dict:
+def classify_question_intent(
+    user_question: str, database_context: dict, model_choice: str = "gpt_4o_mini"
+) -> dict:
     """
     Use LLM to classify question intent with database context awareness.
 
     Args:
         user_question: The user's original question
         database_context: Processed database context information
+        model_choice: The model choice to use for processing (default: "gpt_4o_mini")
 
     Returns:
         dict: Classification result with category, optimization strategy, and reasoning
@@ -289,9 +294,10 @@ def classify_question_intent(user_question: str, database_context: dict) -> dict
     answered from database metadata alone.
 
     IMPORTANT: Also detect the language of the user's question and include it in the response.
-    Common languages: English (en) and German (de)
+    Common languages: English (en) and German (de).  also use accurate table name
+    from database_info to make sql query
     Based on the ACTUAL database characteristics, return ONLY this JSON:
-    {{
+
         "category": "DIRECT_SUMMARY|TIME_SERIES|CATEGORICAL_LISTING|FILTERED_SEARCH|SIMPLE_AGGREGATION",
         "needs_sql": true/false,
         "optimization_strategy": "none|temporal_aggregation|top_n_summary|preserve_detail",
@@ -301,7 +307,16 @@ def classify_question_intent(user_question: str, database_context: dict) -> dict
     """
 
     try:
-        response = get_azure_non_rag_response(configs, classification_prompt)
+        if model_choice.startswith("gemini"):
+            from rtl_rag_chatbot_api.chatbot.gemini_handler import (
+                get_gemini_non_rag_response,
+            )
+
+            response = get_gemini_non_rag_response(
+                configs, classification_prompt, model_choice
+            )
+        else:
+            response = get_azure_non_rag_response(configs, classification_prompt)
 
         # Clean the response - remove markdown code blocks if present
         cleaned_response = response.strip()
@@ -338,7 +353,10 @@ def classify_question_intent(user_question: str, database_context: dict) -> dict
 
 
 def answer_from_database_summary(
-    user_question: str, database_info: dict, language: str = "en"
+    user_question: str,
+    database_info: dict,
+    language: str = "en",
+    model_choice: str = "gpt_4o_mini",
 ) -> str:
     """
     Answer questions directly from database summary without SQL execution.
@@ -347,6 +365,7 @@ def answer_from_database_summary(
         user_question: The user's question
         database_info: Database structure information
         language: The language to respond in (default: "en")
+        model_choice: The model choice to use for processing (default: "gpt_4o_mini")
 
     Returns:
         str: Direct answer from database summary
@@ -372,7 +391,14 @@ def answer_from_database_summary(
     """
 
     try:
-        return get_azure_non_rag_response(configs, summary_prompt)
+        if model_choice.startswith("gemini"):
+            from rtl_rag_chatbot_api.chatbot.gemini_handler import (
+                get_gemini_non_rag_response,
+            )
+
+            return get_gemini_non_rag_response(configs, summary_prompt, model_choice)
+        else:
+            return get_azure_non_rag_response(configs, summary_prompt)
     except Exception as e:
         logging.error(f"Error generating summary answer: {str(e)}")
         table_names = database_info.get("table_names", ["various topics"])
@@ -383,7 +409,10 @@ def answer_from_database_summary(
 
 
 def enhance_query_with_context(
-    user_question: str, classification: dict, database_context: dict
+    user_question: str,
+    classification: dict,
+    database_context: dict,
+    model_choice: str = "gpt_4o_mini",
 ) -> str:
     """
     Enhance query based on classification and actual data context.
@@ -392,6 +421,7 @@ def enhance_query_with_context(
         user_question: Original user question
         classification: Question classification result
         database_context: Database context analysis
+        model_choice: The model choice to use for processing (default: "gpt_4o_mini")
 
     Returns:
         str: Enhanced query with appropriate optimization
@@ -448,19 +478,34 @@ def enhance_query_with_context(
 """
 
     try:
-        return get_azure_non_rag_response(configs, enhancement_prompt)
+        # Ensure prompt is within 120 characters per line for lint compliance
+        prompt = (
+            enhancement_prompt
+            + " - use accurate table name from context to make sql query"
+        )
+        if model_choice.startswith("gemini"):
+            from rtl_rag_chatbot_api.chatbot.gemini_handler import (
+                get_gemini_non_rag_response,
+            )
+
+            return get_gemini_non_rag_response(configs, prompt, model_choice)
+        else:
+            return get_azure_non_rag_response(configs, prompt)
     except Exception as e:
         logging.error(f"Error enhancing query: {str(e)}")
         return user_question  # Fallback to original question
 
 
-def format_question(database_info: dict, user_question: str) -> dict:
+def format_question(
+    database_info: dict, user_question: str, model_choice: str = "gpt_4o_mini"
+) -> dict:
     """
     Enhanced question formatting with intelligent context awareness and optimization.
 
     Args:
         database_info: Information about the database structure (full database_summary)
         user_question: The original user question
+        model_choice: The model choice to use for processing (default: "gpt_4o_mini")
 
     Returns:
         dict: Contains 'formatted_question' and 'needs_sql' flag
@@ -472,7 +517,9 @@ def format_question(database_info: dict, user_question: str) -> dict:
         logging.info(f"Database context analysis: {database_context}")
 
         # Step 2: Classify question intent
-        classification = classify_question_intent(user_question, database_context)
+        classification = classify_question_intent(
+            user_question, database_context, model_choice
+        )
         logging.info(f"Question classification: {classification}")
 
         # Step 3: Route based on classification
@@ -483,7 +530,7 @@ def format_question(database_info: dict, user_question: str) -> dict:
             logging.info("Answering directly from database summary")
             language = classification.get("language", "en")
             formatted_question = answer_from_database_summary(
-                user_question, database_info, language
+                user_question, database_info, language, model_choice
             )
             return {
                 "formatted_question": formatted_question,
@@ -500,7 +547,7 @@ def format_question(database_info: dict, user_question: str) -> dict:
             if classification.get("optimization_strategy") != "none":
                 # Apply intelligent optimization
                 formatted_question = enhance_query_with_context(
-                    user_question, classification, database_context
+                    user_question, classification, database_context, model_choice
                 )
             else:
                 # Standard query formatting
@@ -509,9 +556,19 @@ def format_question(database_info: dict, user_question: str) -> dict:
                     user_question=user_question,
                     examples=examples,
                 )
-                formatted_question = get_azure_non_rag_response(
-                    configs=configs, query=formatted_prompt
-                )
+                # Use the appropriate model based on model_choice
+                if model_choice.startswith("gemini"):
+                    from rtl_rag_chatbot_api.chatbot.gemini_handler import (
+                        get_gemini_non_rag_response,
+                    )
+
+                    formatted_question = get_gemini_non_rag_response(
+                        configs, formatted_prompt, model_choice
+                    )
+                else:
+                    formatted_question = get_azure_non_rag_response(
+                        configs=configs, query=formatted_prompt
+                    )
 
             return {
                 "formatted_question": formatted_question,
@@ -527,7 +584,16 @@ def format_question(database_info: dict, user_question: str) -> dict:
             user_question=user_question,
             examples=examples,
         )
-        formatted_question = get_azure_non_rag_response(configs, formatted_prompt)
+        if model_choice.startswith("gemini"):
+            from rtl_rag_chatbot_api.chatbot.gemini_handler import (
+                get_gemini_non_rag_response,
+            )
+
+            formatted_question = get_gemini_non_rag_response(
+                configs, formatted_prompt, model_choice
+            )
+        else:
+            formatted_question = get_azure_non_rag_response(configs, formatted_prompt)
         return {
             "formatted_question": formatted_question,
             "needs_sql": True,
