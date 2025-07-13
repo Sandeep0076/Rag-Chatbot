@@ -107,6 +107,7 @@ User Question: {user_question}
 4. **FILTERED_SEARCH Questions** (Always preserve detail):
    - "employees named X" → Full details regardless of table size
    - "orders from customer Y" → Complete results for specific filters
+   - "top n records" → Complete results for specific filters
    - Use case-insensitive comparisons
 
 5. **SIMPLE_AGGREGATION Questions** (No optimization needed):
