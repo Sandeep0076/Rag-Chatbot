@@ -128,34 +128,68 @@ Upload files to create embeddings for subsequent chat queries. The API automatic
 
 Check if embeddings exist for a specific file and model.
 
+### Check if Embeddings Exist
+
 - **Endpoint URL**: `/embeddings/check`
 - **HTTP Method**: POST
 - **Request Headers**:
   - `Authorization`: Your auth token
   - `Content-Type`: `application/json`
-- **Request Body**:
-  ```json
-  {
-    "file_id": "uuid-string",
+
+#### Request Body
+```json
+{
+  "file_ids": ["uuid-string-1", "uuid-string-2", "uuid-string-3"],
+  "model_choice": "gpt_4o_mini"
+}
+```
+
+**Note**: For a single file, use a list with one item: `["uuid-string"]`
+
+#### Response Format
+```json
+{
+  "results": [
+    {
+      "embeddings_exist": true,
+      "model_type": "azure",
+      "file_id": "uuid-string-1",
+      "status": "ready_for_chat"
+    },
+    {
+      "embeddings_exist": false,
+      "model_type": "azure",
+      "file_id": "uuid-string-2",
+      "status": "not_started"
+    },
+    {
+      "embeddings_exist": true,
+      "model_type": "azure",
+      "file_id": "uuid-string-3",
+      "status": "completed"
+    }
+  ],
+  "summary": {
+    "total_files": 3,
+    "files_with_embeddings": 2,
+    "files_missing_embeddings": 1,
+    "all_files_ready": false,
     "model_choice": "gpt_4o_mini"
   }
-  ```
-- **Response Format**:
-  ```json
-  {
-    "embeddings_exist": true,
-    "model_type": "azure",
-    "file_id": "uuid-string",
-    "status": "ready_for_chat"
-  }
-  ```
-- **Usage Example**:
-  1. Create a new request in Postman
-  2. Set the request method to POST
-  3. Enter the URL: `http://your-api-domain/embeddings/check`
-  4. Go to the "Body" tab and select "raw" and "JSON"
-  5. Enter the JSON request body with the file_id and model_choice
-  6. Click "Send" to check if embeddings exist
+}
+```
+
+#### Usage Example
+1. Create a new request in Postman
+2. Set the request method to POST
+3. Enter the URL: `http://your-api-domain/embeddings/check`
+4. Go to the "Body" tab and select "raw" and "JSON"
+5. Enter the JSON request body with `file_ids` (list) and `model_choice`
+6. Click "Send" to check if embeddings exist for your files
+
+**Examples:**
+- Single file: `{"file_ids": ["uuid1"], "model_choice": "gpt_4o_mini"}`
+- Multiple files: `{"file_ids": ["uuid1", "uuid2", "uuid3"], "model_choice": "gpt_4o_mini"}`
 
 ### Check Embedding Status
 

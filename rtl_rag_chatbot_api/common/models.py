@@ -63,8 +63,16 @@ class EmbeddingCreationRequest(BaseModel):
 
 
 class EmbeddingsCheckRequest(BaseModel):
-    file_id: str
+    file_ids: List[str] = Field(
+        ..., description="List of file IDs to check (can be single item for one file)"
+    )
     model_choice: str = Field(..., description="The chosen language model")
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Ensure file_ids is not empty
+        if not self.file_ids:
+            raise ValueError("file_ids must contain at least one file ID")
 
 
 class ChatRequest(BaseModel):
