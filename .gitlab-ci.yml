@@ -38,6 +38,10 @@ helm:tags:dryrun:
   allow_failure: true #TODO remove after https://rtldata.atlassian.net/browse/DAINFRA-1387 has been resolved to make chart version bumping optional (again)
 
 .helm_push_manifests_job:
+  rules:
+  - if: $MG_RENDERED_MANIFESTS_PUSH == "false"
+    when: never
+  - !reference [.custom_helm_deployment_rules]
   parallel:
     matrix:
       - MG_ENV:
