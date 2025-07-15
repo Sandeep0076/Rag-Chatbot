@@ -1,3 +1,6 @@
+# see also:
+# - https://gitlab.com/dataalliance/infra/common/ci-templates/-/blob/main/infra/snippets/internal/helm/jobs.yml
+# - https://gitlab.com/dataalliance/infra/common/ci-templates/-/blob/main/infra/snippets/internal/helm/rules.yml
 .custom_helm_deployment_rules:
   # auto-deploy dev from default branch
   - if: |
@@ -9,7 +12,8 @@
   # auto-deploy preprod from rc-* or release-* branches
   - if: |
       $CI_COMMIT_BRANCH =~ /^rc-.*|^release-.*/ && $MG_ENV == "preprod"
-    when: on_success
+    when: manual
+    allow_failure: false
     exists:
       - helm/chart/Chart.yaml
 
