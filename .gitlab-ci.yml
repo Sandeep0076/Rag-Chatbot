@@ -13,6 +13,9 @@ include:
   - local: /ci/helm.yml
   # add dev specific env variables.
   - local: /ci/test_env_variables.yml
+  # custom gitlab workflow rules for helm deployments
+  - local: /ci/custom_helm_deployment_rules.yaml
+
 
 poetry:test:
   parallel:
