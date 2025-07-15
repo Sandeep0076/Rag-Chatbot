@@ -1663,6 +1663,12 @@ async def check_embeddings(
         total_files = len(results)
         existing_files = sum(1 for r in results if r["embeddings_exist"])
 
+        # AIP-923: this is a hotfix, so that the client can process the return
+        # Currently the client accepts status 400 and a list of all embeddings with status
+        if existing_files != total_files:
+            # looks like at least one is missing
+            return JSONResponse(status_code=400, content=results)
+
         return {
             "results": results,
             "summary": {
@@ -1674,9 +1680,6 @@ async def check_embeddings(
             },
         }
 
-    except JSONResponse:
-        # Re-raise JSONResponse (including those from _check_file_embeddings)
-        raise
     except HTTPException:
         # Re-raise HTTPExceptions (including those from _check_file_embeddings)
         raise
@@ -2147,13 +2150,6 @@ async def _check_file_embeddings(
             processed_results.append(result)
             if not result["embeddings_exist"]:
                 errors.append(f"Embeddings not found for file {file_id}")
-
-    # If any errors occurred, raise HTTPException with detailed information
-    if errors:
-        raise JSONResponse(
-            status_code=400,
-            content=processed_results,
-        )
 
     return processed_results
 
