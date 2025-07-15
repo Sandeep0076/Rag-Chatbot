@@ -1154,6 +1154,7 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
             else "tabular",
             "processing_status": "success",
         }
+
         gcs_handler.upload_to_gcs(
             configs.gcp_resource.bucket_name,
             {
