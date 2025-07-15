@@ -1674,6 +1674,9 @@ async def check_embeddings(
             },
         }
 
+    except JSONResponse:
+        # Re-raise JSONResponse (including those from _check_file_embeddings)
+        raise
     except HTTPException:
         # Re-raise HTTPExceptions (including those from _check_file_embeddings)
         raise
@@ -2147,10 +2150,9 @@ async def _check_file_embeddings(
 
     # If any errors occurred, raise HTTPException with detailed information
     if errors:
-        error_message = "; ".join(errors)
-        raise HTTPException(
+        raise JSONResponse(
             status_code=400,
-            detail=f"Embedding check failed: {error_message}",
+            content=processed_results,
         )
 
     return processed_results
