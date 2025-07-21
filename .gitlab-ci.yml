@@ -13,6 +13,9 @@ include:
   - local: /ci/helm.yml
   # add dev specific env variables.
   - local: /ci/test_env_variables.yml
+  # custom gitlab workflow rules for helm deployments
+  - local: /ci/custom_helm_deployment_rules.yaml
+
 
 poetry:test:
   parallel:
@@ -35,6 +38,10 @@ helm:tags:dryrun:
   allow_failure: true #TODO remove after https://rtldata.atlassian.net/browse/DAINFRA-1387 has been resolved to make chart version bumping optional (again)
 
 .helm_push_manifests_job:
+  rules:
+  - if: $MG_RENDERED_MANIFESTS_PUSH == "false"
+    when: never
+  - !reference [.custom_helm_deployment_rules]
   parallel:
     matrix:
       - MG_ENV:
