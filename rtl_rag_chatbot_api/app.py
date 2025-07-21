@@ -1154,6 +1154,7 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
             else "tabular",
             "processing_status": "success",
         }
+
         gcs_handler.upload_to_gcs(
             configs.gcp_resource.bucket_name,
             {
@@ -1213,9 +1214,10 @@ async def process_existing_file_ids_in_parallel(
         """Process a single existing file ID"""
         try:
             # Check if embeddings exist using existing endpoint logic
-            result = await _check_file_embeddings_safe(
-                file_id, "gpt_4o_mini"
+            results = await _check_file_embeddings_safe(
+                [file_id], "gpt_4o_mini"
             )  # Default model for checking
+            result = results[0]  # Get the first (and only) result
 
             if not result.get("embeddings_exist", False):
                 logging.warning(f"Embeddings not found for file ID: {file_id}")
@@ -1639,28 +1641,48 @@ async def check_embeddings(
     request: EmbeddingsCheckRequest, current_user=Depends(get_current_user)
 ):
     """
-    Check if embeddings exist for the specified file and model choice.
+    Check if embeddings exist for the specified files and model choice.
 
     Args:
-        request (EmbeddingsCheckRequest): Request containing file_id and model_choice
+        request (EmbeddingsCheckRequest): Request containing file_ids (list) and model_choice
         current_user: Authenticated user information
 
     Returns:
         Dict containing:
-            - embeddings_exist (bool): Whether embeddings exist
-            - model_type (str): Type of model (azure/google)
-            - file_id (str): The checked file ID
+            - results (List[Dict]): List of results for each file
+            - summary (Dict): Summary statistics
     """
     try:
-        # Initialize the embedding handler
-        embedding_handler = EmbeddingHandler(configs=configs, gcs_handler=gcs_handler)
-
-        # Check if embeddings exist
-        result = await embedding_handler.check_embeddings_exist(
-            file_id=request.file_id, model_choice=request.model_choice
+        # Check if embeddings exist for all files
+        results = await _check_file_embeddings(
+            file_ids=request.file_ids, model_choice=request.model_choice
         )
-        return result
 
+        # Create summary statistics
+        all_exist = all(r["embeddings_exist"] for r in results)
+        total_files = len(results)
+        existing_files = sum(1 for r in results if r["embeddings_exist"])
+
+        # AIP-923: this is a hotfix, so that the client can process the return
+        # Currently the client accepts status 400 and a list of all embeddings with status
+        if existing_files != total_files:
+            # looks like at least one is missing
+            return JSONResponse(status_code=400, content=results)
+
+        return {
+            "results": results,
+            "summary": {
+                "total_files": total_files,
+                "files_with_embeddings": existing_files,
+                "files_missing_embeddings": total_files - existing_files,
+                "all_files_ready": all_exist,
+                "model_choice": request.model_choice,
+            },
+        }
+
+    except HTTPException:
+        # Re-raise HTTPExceptions (including those from _check_file_embeddings)
+        raise
     except Exception as e:
         logging.error(f"Error checking embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2082,45 +2104,116 @@ async def _process_single_file(query: Query, gcs_handler: GCSHandler) -> Dict[st
     }
 
 
-async def _check_file_embeddings(file_id: str, model_choice: str) -> Dict[str, Any]:
-    """Check if embeddings exist for a specific file and model choice.
+async def _check_file_embeddings(
+    file_ids: List[str], model_choice: str
+) -> List[Dict[str, Any]]:
+    """Check if embeddings exist for multiple files and model choice.
 
     Args:
-        file_id: The ID of the file to check
+        file_ids: List of file IDs to check
         model_choice: The model choice to check embeddings for
 
     Returns:
-        Dictionary containing embeddings check result
+        List of dictionaries containing embeddings check results
     """
-    result = await embedding_handler.check_embeddings_exist(file_id, model_choice)
-    if not result["embeddings_exist"]:
+    if not file_ids:
         raise HTTPException(
             status_code=400,
-            detail=f"Embeddings not found for file {file_id}. Please create embeddings first.",
+            detail="No file IDs provided for embedding check.",
         )
-    return result
+
+    # Check embeddings for all files in parallel
+    tasks = [
+        embedding_handler.check_embeddings_exist(file_id, model_choice)
+        for file_id in file_ids
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Process results and collect any errors
+    processed_results = []
+    errors = []
+
+    for i, result in enumerate(results):
+        file_id = file_ids[i]
+        if isinstance(result, Exception):
+            errors.append(f"Error checking file {file_id}: {str(result)}")
+            processed_results.append(
+                {
+                    "file_id": file_id,
+                    "embeddings_exist": False,
+                    "error": str(result),
+                    "model_type": "azure",
+                    "status": "error",
+                }
+            )
+        else:
+            processed_results.append(result)
+            if not result["embeddings_exist"]:
+                errors.append(f"Embeddings not found for file {file_id}")
+
+    return processed_results
 
 
 async def _check_file_embeddings_safe(
-    file_id: str, model_choice: str
-) -> Dict[str, Any]:
-    """Check if embeddings exist for a specific file and model choice without raising exceptions.
+    file_ids: List[str], model_choice: str
+) -> List[Dict[str, Any]]:
+    """Check if embeddings exist for multiple files and model choice without raising exceptions.
 
     This is a safe version of _check_file_embeddings that returns the result without raising HTTPException.
 
     Args:
-        file_id: The ID of the file to check
+        file_ids: List of file IDs to check
         model_choice: The model choice to check embeddings for
 
     Returns:
-        Dictionary containing embeddings check result (including embeddings_exist: False if not found)
+        List of dictionaries containing embeddings check results
     """
     try:
-        result = await embedding_handler.check_embeddings_exist(file_id, model_choice)
-        return result
+        if not file_ids:
+            return []
+
+        # Check embeddings for all files in parallel
+        tasks = [
+            embedding_handler.check_embeddings_exist(file_id, model_choice)
+            for file_id in file_ids
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results and handle exceptions gracefully
+        processed_results = []
+        for i, result in enumerate(results):
+            file_id = file_ids[i]
+            if isinstance(result, Exception):
+                logging.error(
+                    f"Error checking embeddings for file {file_id}: {str(result)}"
+                )
+                processed_results.append(
+                    {
+                        "file_id": file_id,
+                        "embeddings_exist": False,
+                        "error": str(result),
+                        "model_type": "azure",
+                        "status": "error",
+                    }
+                )
+            else:
+                processed_results.append(result)
+
+        return processed_results
+
     except Exception as e:
-        logging.error(f"Error checking embeddings for file {file_id}: {str(e)}")
-        return {"embeddings_exist": False, "error": str(e)}
+        logging.error(f"Error in _check_file_embeddings_safe: {str(e)}")
+        # Return list with error for each file
+        return [
+            {
+                "file_id": file_id,
+                "embeddings_exist": False,
+                "error": str(e),
+                "model_type": "azure",
+                "status": "error",
+            }
+            for file_id in file_ids
+        ]
 
 
 async def _classify_file_types(file_ids: List[str]) -> Tuple[List[str], List[str]]:
@@ -2239,9 +2332,8 @@ async def _process_multi_files(query: Query, gcs_handler: GCSHandler) -> Dict[st
             detail="No files specified for this chat session. Please upload files first.",
         )
 
-    # Check if embeddings exist for all files
-    for file_id in query.file_ids:
-        await _check_file_embeddings(file_id, query.model_choice)
+    # Check if embeddings exist for all files (batch check)
+    await _check_file_embeddings(query.file_ids, query.model_choice)
 
     # Check each file to see if it's tabular
     tabular_files, non_tabular_files = await _classify_file_types(query.file_ids)
