@@ -2527,6 +2527,9 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             current_actual_question, configs, temperature
         )
 
+        # TEMPORARILY DISABLE CHART GENERATION - HARDCODED TO FALSE
+        generate_visualization = False
+
         # Process file information and build the model key
         file_data = await _process_file_info(query, gcs_handler, generate_visualization)
 
