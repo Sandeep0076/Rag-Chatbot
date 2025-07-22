@@ -107,7 +107,7 @@ User Question: {user_question}
 4. **FILTERED_SEARCH Questions** (Always preserve detail):
    - "employees named X" → Full details regardless of table size
    - "orders from customer Y" → Complete results for specific filters
-   - "top n records" → Complete results for specific filters
+   - "top n records", "first 3 rows" → Complete results for specific filters with headers
    - Use case-insensitive comparisons
 
 5. **SIMPLE_AGGREGATION Questions** (No optimization needed):
@@ -293,7 +293,8 @@ def classify_question_intent(
 
     4. **FILTERED_SEARCH**: Searching for specific items
        - Always preserve full detail regardless of table size
-       - Examples: "named John", "customer X", "where Y"
+       - Examples: "named John", "customer X", "where Y", "first 3 rows"
+       - "top n records", "first 3 rows" → Complete results for specific filters
        - SET needs_sql: true (requires SQL execution)
 
     5. **SIMPLE_AGGREGATION**: Basic statistics
