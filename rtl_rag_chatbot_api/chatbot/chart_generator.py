@@ -222,33 +222,3 @@ class UniversalChartGenerator:
     def get_html(self) -> str:
         """Return raw HTML string for embedding"""
         return self.fig.to_html(full_html=False)
-
-
-# Example Usage for Both Versions
-if __name__ == "__main__":
-    # Original 2D Format (v1.0 compatible)
-    v1_config = {
-        "chart_type": "Line Chart",
-        "title": "Average Mercury Levels in Fish Consistent with Tolerable Dose Levels",
-        "data": {
-            "datasets": [
-                {
-                    "label": "Mercury Level (ppm)",
-                    "x": ["100g", "200g", "300g", "400g", "500g", "1kg"],
-                    "y": [0.1, 0.05, 0.033, 0.025, 0.02, 0.01],
-                }
-            ]
-        },
-        "labels": {
-            "x": "Fish Consumption (grams per week)",
-            "y": "Average Mercury Level (ppm)",
-        },
-        "options": {"color_palette": "Viridis", "stacked": False},
-    }
-
-    # Generate both charts
-    v1_chart = UniversalChartGenerator(v1_config)
-    v1_chart.save_plot("local_data/v1_chart.html")
-
-    # v2_chart = UniversalChartGenerator(v2_config)
-    # v2_chart.save_plot("local_data/v2_chart.jpg")

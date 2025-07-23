@@ -226,7 +226,7 @@ class GeminiHandler(BaseRAGHandler):
             temperature=temperature,
             top_p=1,
             top_k=40,
-            max_output_tokens=2048,
+            max_output_tokens=4096,
         )
 
         safety_settings = {
@@ -586,7 +586,11 @@ class GeminiHandler(BaseRAGHandler):
 
 
 def get_gemini_non_rag_response(
-    config, prompt: str, model_choice: str, temperature: float = 0.8
+    config,
+    prompt: str,
+    model_choice: str,
+    temperature: float = 0.8,
+    max_tokens: int = 4096,
 ) -> str:
     """
     Get a response from Gemini model without using RAG context.
@@ -628,7 +632,7 @@ def get_gemini_non_rag_response(
         # Configure generation parameters for more focused responses
         generation_config = GenerationConfig(
             temperature=temperature,  # Configurable temperature
-            max_output_tokens=1024,  # Reduced token limit to discourage verbosity
+            max_output_tokens=max_tokens,  # Configurable token limit for different use cases
             top_p=0.8,  # More focused sampling
             top_k=20,  # More focused token selection
             candidate_count=1,  # Single response only

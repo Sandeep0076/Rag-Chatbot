@@ -1,21 +1,35 @@
 VISUALISATION_PROMPT = """For the given context, generate a visualization of the data using smart data optimization
 techniques.
 
+**CRITICAL TITLE ACCURACY RULE:**
+The chart title MUST accurately reflect the actual data granularity and optimization applied:
+- If the query was optimized from "daily" to "weekly" aggregation, the title should say "Weekly" not "Daily"
+- If the query was optimized from "daily" to "monthly" aggregation, the title should say "Monthly" not "Daily"
+- If categories were limited to top N, the title should reflect this (e.g., "Top 10 Categories")
+- The title should match the actual data structure being visualized, not the original user request
+
 **DATA OPTIMIZATION RULES:**
 1. **Chart Type Based Limits:**
    - Pie Charts: Maximum 15 categories (merge smaller ones into "Others")
    - Bar Charts: Maximum 50 categories for readability
-   - Line Charts: Up to 200 points for smooth curves
-   - Scatter Plots: Up to 1000 points (sample if more)
-   - Heatmaps: Maximum 50x50 grid
+   - Line Charts: Maximum 100 points for clear visualization (sample large datasets)
+   - Scatter Plots: Up to 500 points (sample if more)
+   - Heatmaps: Maximum 30x30 grid
 
-2. **Large Dataset Strategies:**
-   - If data has >1000 rows: Use systematic sampling (every nth row)
+2. **Large Dataset Strategies (CRITICAL FOR LARGE DATA):**
+   - If data has >150 rows for line charts: Use systematic sampling (every nth row) or weekly aggregation
+   - If data has >100 rows for time series: Aggregate by week or month instead of daily
    - If data has >50 categories: Group smaller categories or use top N + "Others"
-   - If time series data: Consider aggregating by time periods (daily→weekly→monthly)
-   - For numerical data: Use percentiles, quartiles, or equal-width bins
+   - For daily time series >3 months: Convert to weekly aggregates
+   - For daily time series >1 year: Convert to monthly aggregates
+   - Always prioritize readability over completeness
 
-3. **Data Quality:**
+3. **Time Series Optimization:**
+   - Daily data spanning >6 months: Sample every 3-7 days or aggregate weekly
+   - Daily data spanning >1 year: Aggregate monthly
+   - Use representative sampling: first/last + evenly distributed middle points
+
+4. **Data Quality:**
    - Remove null/empty values before processing
    - For categorical data: Group rare categories (< 1% of total) into "Others"
    - For continuous data: Consider outlier handling if they skew visualization
@@ -23,14 +37,19 @@ techniques.
 Return the information in a structured JSON format that can be used to plot the data in a graph.
 If no chart type is given in context, then generate appropriate chart type based on context.
 
-CRITICAL: Return ONLY the JSON object. DO NOT wrap it in markdown code blocks (```json). DO NOT include any other text.
+CRITICAL RESPONSE RULES:
+1. Return ONLY the JSON object. DO NOT wrap it in markdown code blocks (```json). DO NOT include any other text.
+2. NEVER respond with "cannot generate chart for this query" - ALWAYS generate a valid chart JSON
+3. If the data seems unsuitable for visualization, create a simple bar or line chart with summary statistics
+4. For time series data with many points, apply data optimization rules to create a readable chart
+5. **TITLE ACCURACY**: The title must reflect the actual data granularity, not the original request
 
 Follow this schema strictly:
 
 {
   "chart_type": "Line Chart | Bar Chart | Pie Chart | Scatter Plot | Histogram | Box Plot |
 Heatmap | 3D Scatter Plot | Surface Plot | Bubble Chart",
-  "title": "Descriptive chart title",
+  "title": "Descriptive chart title that matches actual data granularity",
   "data": {
     // For Line/Bar/Scatter/Box/Bubble Charts:
     "datasets": [
@@ -75,7 +94,9 @@ Heatmap | 3D Scatter Plot | Surface Plot | Bubble Chart",
    - MUST use "datasets" format
    - Each dataset MUST have "x" and "y" arrays of equal length
    - "x" can be dates or numbers
-   - For large time series: Sample or aggregate appropriately
+   - For large time series (>100 points): Use weekly/monthly aggregation or systematic sampling
+   - Example: 194 daily points → aggregate to ~28 weekly points for better readability
+   - **TITLE**: If weekly aggregation was applied, title should say "Weekly" not "Daily"
 
 2. Bar Chart:
    - MUST use "datasets" format for multiple series
@@ -83,33 +104,45 @@ Heatmap | 3D Scatter Plot | Surface Plot | Bubble Chart",
      a) datasets: [{"label": "Data", "x": ["cat1", "cat2"], "y": [val1, val2]}]
      b) simplified: {"values": [val1, val2], "categories": ["cat1", "cat2"]}
    - For >50 categories: Show top categories + "Others"
+   - **TITLE**: If limited to top N categories, title should reflect this
 
 3. Pie Chart:
    - MUST use "values" and "categories" format
    - MUST NOT use "datasets"
    - Arrays must be of equal length
    - Maximum 15 slices (merge small ones into "Others")
+   - **TITLE**: Should reflect the actual categories shown
 
 4. Scatter/Bubble:
    - MUST use "datasets" format
    - Each dataset MUST have "x" and "y"
    - Bubble charts MUST include "size"
    - For >1000 points: Use systematic sampling
+   - **TITLE**: Should reflect the actual data granularity
 
 5. Heatmap:
    - MUST use "matrix" format
    - MUST include "x_categories" and "y_categories"
    - Limit to reasonable grid size (50x50 max)
+   - **TITLE**: Should reflect the actual dimensions
 
 6. Box Plot:
    - MUST use "datasets" format
    - Each dataset MUST have "y" values
    - "x" is optional for categories
+   - **TITLE**: Should reflect the actual data structure
 
 7. Histogram:
    - MUST use "values" array
    - Categories are auto-generated
    - Use appropriate binning for large datasets
+   - **TITLE**: Should reflect the binning strategy if significant
+
+**TITLE EXAMPLES:**
+- Original request: "orders per day" → If optimized to weekly: "Weekly Orders Shipped"
+- Original request: "sales by region" → If limited to top 10: "Sales by Region (Top 10)"
+- Original request: "daily temperature" → If monthly aggregation: "Monthly Temperature Trends"
+- Original request: "all customers" → If limited to top 20: "Top 20 Customers by Sales"
 
 Example Bar Chart Response with Optimization:
 {
@@ -145,7 +178,9 @@ Remember:
 - Use true/false (lowercase) for booleans
 - Apply intelligent data optimization based on chart type and data size
 - Always include data_optimization info when data was processed
-- If the context is a general query and chart cannot be generated, just reply: cannot generate chart for this query.
+- ALWAYS generate a valid chart JSON - never refuse or say "cannot generate chart"
+- For large datasets, use sampling/aggregation to create readable visualizations
+- **CRITICAL**: Chart title must accurately reflect the actual data granularity and optimization applied
 """
 
 CHART_DETECTION_PROMPT = """

@@ -85,9 +85,12 @@ class TabularDataHandler:
         if temperature is not None:
             self.temperature = temperature
         elif model_choice.lower() in ["gemini-2.5-flash", "gemini-2.5-pro"]:
-            self.temperature = 0.8  # Higher temperature for Gemini models
+            self.temperature = 0.6  # Higher temperature for Gemini models
         else:
-            self.temperature = 0.5  # Lower temperature for OpenAI models
+            self.temperature = 0.4  # Lower temperature for OpenAI models
+
+        # Initialize LLM for all database operations before initializing databases
+        self.llm = self._initialize_llm()
 
         # Initialize database_summaries with pre-loaded data if provided
         self.database_summaries = {}
@@ -138,9 +141,6 @@ class TabularDataHandler:
                 )
                 self.sessions["default"] = sessionmaker(bind=self.engines["default"])
                 self.dbs["default"] = SQLDatabase(engine=self.engines["default"])
-
-        # Initialize LLM for all database operations
-        self.llm = self._initialize_llm()
 
         # For backward compatibility, set these attributes for the primary file
         if self.file_id:
@@ -252,7 +252,7 @@ class TabularDataHandler:
                 project=model_config.project,
                 location=model_config.location,
                 temperature=self.temperature,
-                max_output_tokens=2048,
+                max_output_tokens=4096,
                 top_p=1,
                 top_k=40,
             )
@@ -343,6 +343,14 @@ class TabularDataHandler:
         Returns:
             str: Cleaned SQL query without markdown formatting.
         """
+        # Remove single backticks that wrap the entire query (common LLM output format)
+        if (
+            query.startswith("`")
+            and query.endswith("`")
+            and not query.startswith("```")
+        ):
+            query = query[1:-1].strip()
+
         # Remove markdown code block delimiters
         if query.startswith("```") and query.endswith("```"):
             # Remove starting and ending backticks
@@ -368,7 +376,14 @@ class TabularDataHandler:
 
         toolkit = SQLDatabaseToolkit(db=self.dbs[file_id], llm=self.llm)
         self.agents[file_id] = create_sql_agent(
-            llm=self.llm, toolkit=toolkit, verbose=True, handle_parsing_errors=True
+            llm=self.llm,
+            toolkit=toolkit,
+            verbose=True,
+            handle_parsing_errors=True,
+            agent_executor_kwargs={
+                "handle_parsing_errors": True,
+                "return_intermediate_steps": True,
+            },
         )
 
         # For backward compatibility with the primary file_id
@@ -379,19 +394,15 @@ class TabularDataHandler:
         """Initializes the SQL agent for the primary file (backward compatibility)."""
         if self.file_id:
             self._initialize_agent_for_file(self.file_id)
+
         # Ensure self.db is available for the primary file_id context
         if hasattr(self, "db") and self.db:
             original_run_method = self.db.run
 
-            # Define the wrapper function with **kwargs to handle additional parameters
             def wrapped_run(command: str, fetch: str = "all", **kwargs) -> str:
-                # 'self' of TabularDataHandler is captured from the outer scope
                 logging.debug(f"Executing SQL via wrapped_run: {command}")
                 try:
-                    # Clean the SQL query to remove markdown formatting and other artifacts
                     cleaned_command = self._clean_sql_query(command)
-                    # Pass only the parameters that the original method accepts
-                    # Ignore any additional kwargs like 'parameters' that might be passed by newer LangChain
                     result = original_run_method(cleaned_command, fetch)
                     logging.debug(f"SQL result (first 100 chars): {str(result)[:100]}")
                     return result
@@ -401,7 +412,6 @@ class TabularDataHandler:
                     )
                     raise
 
-            # Replace the run method with our wrapped version
             self.db.run = wrapped_run
             logging.info(
                 f"Patched db.run method for file_id: {self.file_id or 'default'}"
@@ -422,6 +432,8 @@ class TabularDataHandler:
             agent_executor_kwargs={
                 "handle_parsing_errors": True,
                 "return_intermediate_steps": True,
+                "max_iterations": 10,
+                "early_stopping_method": "generate",
             },
         )
 
@@ -437,10 +449,10 @@ class TabularDataHandler:
             if self.table_name:
                 with self.engine.connect() as connection:
                     result = connection.execute(
-                        text(f"SELECT * FROM `{self.table_name}` LIMIT 5")
+                        text(f"SELECT * FROM `{self.table_name}` LIMIT 2")
                     )
                     rows = result.fetchall()
-                    logging.info(f"First 5 rows of '{self.table_name}' table: {rows}")
+                    logging.info(f"First 2 rows of '{self.table_name}' table: {rows}")
             else:
                 logging.info("No tables found in the database.")
         except Exception as e:
@@ -468,7 +480,7 @@ class TabularDataHandler:
                     text(f'SELECT COUNT(*) FROM "{table_name}"')
                 ).scalar()
                 sample_data = session.execute(
-                    text(f'SELECT * FROM "{table_name}" LIMIT 3')
+                    text(f'SELECT * FROM "{table_name}" LIMIT 2')
                 ).fetchall()
 
                 column_stats = {}
@@ -854,7 +866,7 @@ class TabularDataHandler:
 
     def ask_question(self, question: str) -> Optional[str]:
         """
-        Processes a question using natural language processing and database querying.
+        Enhanced question processing with intelligent optimization and SQL filtering.
 
         Args:
             question (str): The user's input question.
@@ -866,127 +878,204 @@ class TabularDataHandler:
             self._initialize_agent()
 
         try:
-            # Import GCSHandler to access file_info.json
-            from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
-
-            gcs_handler = GCSHandler(self.config)
-
-            # Get database_summary from file_info.json instead of regenerating it
-            file_info = gcs_handler.get_file_info(self.file_id)
-
-            # Use database_summary from file_info if available, otherwise fall back to table_info
-            if file_info and "database_summary" in file_info:
-                db_summary = file_info["database_summary"]
-                logging.info(
-                    "Using database_summary from file_info.json for file_id: %s",
-                    self.file_id,
-                )
-            else:
-                logging.info(
-                    "No database_summary found in file_info.json, generating from table_info"
-                )
-                # Create database_summary from table_info
-                db_summary = {
-                    "table_count": len(self.table_info),
-                    "table_names": [t["name"] for t in self.table_info],
-                    "tables": self.table_info,
-                }
-
-            # Add file context to the question before processing
-            file_context = self._get_file_context_for_prompt()
-            enhanced_question = (
-                f"{file_context}{question}" if file_context else question
-            )
-
-            # Use the format_question function from prompt_handler with database summary
-            formatted_question = format_question(db_summary, enhanced_question)
-            logging.info(f"Formatted question: {formatted_question}")
-
-            # Check if the formatted question contains specific keywords
-            keywords = ["SELECT", "FIND", "LIST", "SHOW", "CALCULATE"]
-            if formatted_question and any(
-                keyword in formatted_question.upper() for keyword in keywords
+            # Get database_info from file_info for format_question
+            database_info = {}
+            if (
+                self.all_file_infos
+                and self.file_id
+                and self.file_id in self.all_file_infos
             ):
-                # Enhance the query with case-insensitive comparisons
-                response = self.agent.invoke({"input": formatted_question})
+                file_info = self.all_file_infos.get(self.file_id, {})
+                database_info = file_info.get("database_summary", {})
 
-                # Extract the final answer and intermediate steps
-                final_answer = response.get("output", "No final answer found")
-                intermediate_steps = response.get("intermediate_steps", [])
+            # Use enhanced format_question with intelligent context analysis
+            format_result = format_question(database_info, question, self.model_choice)
+            formatted_question = format_result["formatted_question"]
+            needs_sql = format_result["needs_sql"]
+            classification = format_result.get("classification", {})
 
-                # Use intelligent truncation to prevent token overflow
-                truncated_context = self._truncate_intermediate_steps(
-                    intermediate_steps, final_answer
-                )
-
-                base_prompt = PromptBuilder.build_forced_answer_prompt(
-                    formatted_question, truncated_context
-                )
-
-                # Format the response using the appropriate model
-                if self.model_choice.startswith("gemini"):
-                    try:
-                        return get_gemini_non_rag_response(
-                            self.config, base_prompt, self.model_choice
-                        )
-                    except GeminiSafetyFilterError as e:
-                        logging.warning(
-                            f"Safety filter blocked response in CSV handler: {str(e)}"
-                        )
-                        return f"I apologize, but I cannot provide a response to this question. {str(e)}"
-                else:
-                    return get_azure_non_rag_response(self.config, base_prompt)
-            else:
-                # If no keywords are found, return the formatted question as is
+            logging.info(f"Formatted question: {formatted_question}")
+            logging.info(f"Needs SQL: {needs_sql}")
+            if not needs_sql:
+                # Direct answer from database summary - return as-is
+                logging.info("Direct answer provided from database summary")
                 return formatted_question
 
-            return None
+            # Get query classification for appropriate response formatting
+            logging.info(
+                "No direct answer provided from database summary. Using langchain agent.."
+            )
+            query_type = classification.get("category", "unknown")
+            language = classification.get("language", "en")
+            logging.info(f"Query type for response formatting: {query_type}")
+            logging.info(f"Detected language: {language}")
+
+            # Execute SQL query through agent
+            logging.info("Executing query through SQL agent")
+            try:
+                response = self.agent.invoke({"input": formatted_question})
+                return self._process_agent_response(
+                    response, question, query_type, language
+                )
+
+            except Exception as agent_error:
+                return self._handle_agent_error(
+                    agent_error, formatted_question, question, query_type, language
+                )
+
         except Exception as e:
             logging.error(f"An error occurred while processing the question: {str(e)}")
             raise
 
-    def get_forced_answer(self, question: str, answer: str) -> str:
+    def _process_agent_response(
+        self, response: dict, question: str, query_type: str, language: str
+    ) -> str:
+        """
+        Process the agent response and format it appropriately.
+
+        Args:
+            response: The agent response dictionary
+            question: Original user question
+            query_type: Type of query for formatting
+            language: Language for response
+
+        Returns:
+            str: Formatted response
+        """
+        # Extract the final answer and intermediate steps
+        final_answer = response.get("output", "No final answer found")
+        intermediate_steps = response.get("intermediate_steps", [])
+
+        logging.info("Formatting result from intermediate steps and final answer")
+        truncated_context = self._truncate_intermediate_steps(
+            intermediate_steps, final_answer
+        )
+
+        base_prompt = PromptBuilder.build_forced_answer_prompt(
+            question, truncated_context, query_type, language
+        )
+
+        # Format the response using the appropriate model
+        if self.model_choice.startswith("gemini"):
+            try:
+                return get_gemini_non_rag_response(
+                    self.config, base_prompt, self.model_choice
+                )
+            except GeminiSafetyFilterError as e:
+                logging.warning(
+                    f"Safety filter blocked response in CSV handler: {str(e)}"
+                )
+                return f"I apologize, but I cannot provide a response to this question. {str(e)}"
+        else:
+            return get_azure_non_rag_response(self.config, base_prompt)
+
+    def _handle_agent_error(
+        self,
+        agent_error: Exception,
+        formatted_question: str,
+        question: str,
+        query_type: str,
+        language: str,
+    ) -> str:
+        """
+        Handle agent execution errors with fallback strategies.
+
+        Args:
+            agent_error: The exception from agent execution
+            formatted_question: The formatted question that was sent to agent
+            question: Original user question
+            query_type: Type of query for formatting
+            language: Language for response
+
+        Returns:
+            str: Response from fallback strategy or raises the error
+        """
+        error_msg = str(agent_error)
+        logging.warning(f"Agent execution error: {error_msg}")
+
+        # Check if this is a parsing error with actual data
+        if (
+            "Could not parse LLM output" in error_msg
+            and "These are the details" in error_msg
+        ):
+            # Extract the actual response from the error message
+            start_idx = error_msg.find("I have successfully retrieved")
+            if start_idx != -1:
+                # Extract the formatted response from the error message
+                actual_response = error_msg[start_idx:]
+                # Clean up the response by removing the error prefix
+                if "Could not parse LLM output" in actual_response:
+                    # Find where the actual response starts
+                    response_start = actual_response.find(
+                        "I have successfully retrieved"
+                    )
+                    if response_start != -1:
+                        actual_response = actual_response[response_start:]
+
+                logging.info("Extracted response from parsing error")
+                return actual_response
+
+        # If we can't extract the response, try to get it from intermediate steps
+        try:
+            # Try to execute the query directly to get the raw data
+            logging.info("Attempting direct SQL execution as fallback")
+            if hasattr(self, "db") and self.db:
+                # Execute the SQL query directly
+                sql_query = self._extract_sql_from_formatted_question(
+                    formatted_question
+                )
+                if sql_query:
+                    raw_result = self.db.run(sql_query)
+                    logging.info(f"Direct SQL result: {raw_result[:500]}...")
+
+                    # Format the raw result
+                    base_prompt = PromptBuilder.build_forced_answer_prompt(
+                        question,
+                        f"SQL Query: {sql_query}\nResult: {raw_result}",
+                        query_type,
+                        language,
+                    )
+
+                    if self.model_choice.startswith("gemini"):
+                        try:
+                            return get_gemini_non_rag_response(
+                                self.config, base_prompt, self.model_choice
+                            )
+                        except GeminiSafetyFilterError as e:
+                            logging.warning(
+                                f"Safety filter blocked fallback response: {str(e)}"
+                            )
+                            return f"I apologize, but I cannot provide a response to this question. {str(e)}"
+                    else:
+                        return get_azure_non_rag_response(self.config, base_prompt)
+        except Exception as fallback_error:
+            logging.error(f"Fallback execution also failed: {str(fallback_error)}")
+
+        # If all else fails, raise the original error
+        raise agent_error
+
+    def get_forced_answer(
+        self, question: str, answer: str, language: str = "en"
+    ) -> str:
         """
         Attempts to extract an answer from a given text when a direct answer is not available.
 
         Args:
             question (str): The original question asked by the user.
             answer (str): The text to search for an answer.
+            language (str): The language of the user's question.
 
         Returns:
             str: An extracted answer or "Cannot find answer" if no suitable answer is found.
         """
         try:
-            base_prompt = PromptBuilder.build_forced_answer_prompt(question, answer)
+            base_prompt = PromptBuilder.build_forced_answer_prompt(
+                question, answer, "unknown", language
+            )
             return get_azure_non_rag_response(self.config, base_prompt)
         except Exception as e:
             logging.error(f"Error in get_forced_answer: {str(e)}")
             return f"An error occurred while processing your question: {str(e)}"
-
-    def interactive_session(self):
-        """
-        Starts an interactive session for querying the database.
-        Allows users to input questions and receive answers based on the database content.
-        """
-        print("Welcome to the interactive SQL query session.")
-        print("Type 'exit' to end the session.")
-
-        while True:
-            question = input("\nEnter your question: ").strip()
-
-            if question.lower() == "exit":
-                print("Exiting the session. Goodbye!")
-                break
-
-            answer = self.get_answer(question)
-
-            if answer:
-                print(f"\nAnswer: {answer}")
-            else:
-                print(
-                    "Sorry, I couldn't find an answer to that question. Let me try again"
-                )
-                return self.get_forced_answer(question, answer)
 
     def _truncate_intermediate_steps(
         self,
@@ -1095,14 +1184,43 @@ class TabularDataHandler:
         else:
             return final_answer_str
 
+    def _extract_sql_from_formatted_question(
+        self, formatted_question: str
+    ) -> Optional[str]:
+        """
+        Extract SQL query from formatted question if it's a simple SQL statement.
 
-# def main(data_dir: str):
-#     handler = TabularDataHandler(data_dir)
-#     handler.prepare_database()
-#     table_info = handler.get_table_info()
-#     handler.interactive_session()
+        Args:
+            formatted_question: The formatted question that may contain SQL
 
+        Returns:
+            Optional[str]: The extracted SQL query or None if not found
+        """
+        # Check if the formatted question is already a SQL query
+        if (
+            formatted_question.strip()
+            .upper()
+            .startswith(("SELECT", "SHOW", "LIST", "FIND"))
+        ):
+            # Clean up the query
+            query = formatted_question.strip()
+            if query.endswith(";"):
+                query = query[:-1]
+            return query
 
-# if __name__ == "__main__":
-#     data_dir = "rtl_rag_chatbot_api/tabularData/csv_dir"
-#     main(data_dir)
+        # Try to extract SQL from common patterns
+        import re
+
+        # Look for SQL patterns in the text
+        sql_patterns = [
+            r"SELECT\s+.*?FROM\s+.*?(?:LIMIT\s+\d+)?",
+            r"SHOW\s+.*?FROM\s+.*?",
+            r"LIST\s+.*?FROM\s+.*?",
+        ]
+
+        for pattern in sql_patterns:
+            match = re.search(pattern, formatted_question, re.IGNORECASE)
+            if match:
+                return match.group(0)
+
+        return None
