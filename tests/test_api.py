@@ -102,13 +102,16 @@ class TestEndToEndPipeline:
         file_id = self.shared_data.get("single_file_id")
         assert file_id is not None
 
-        check_data = {"file_id": file_id, "model_choice": "gpt_4o_mini"}
+        check_data = {"file_ids": [file_id], "model_choice": "gpt_4o_mini"}
         response = client.post("/embeddings/check", json=check_data)
 
         assert response.status_code == 200
         response_json = response.json()
-        assert response_json.get("embeddings_exist") is True
-        assert response_json.get("file_id") == file_id
+        assert "results" in response_json
+        assert len(response_json["results"]) == 1
+        result = response_json["results"][0]
+        assert result.get("embeddings_exist") is True
+        assert result.get("file_id") == file_id
         print(f"Successfully confirmed embeddings exist for file_id: {file_id}")
 
     def test_3_single_file_chat(self, client):
