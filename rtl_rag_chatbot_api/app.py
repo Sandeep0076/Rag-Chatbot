@@ -46,7 +46,6 @@ from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
-from rtl_rag_chatbot_api.common.db import FileInfo
 from rtl_rag_chatbot_api.common.models import (
     ChatRequest,
     CleanupRequest,
@@ -1003,12 +1002,6 @@ async def upload_file(
     All file processing is done asynchronously and in parallel when multiple files are uploaded.
     Embeddings creation and other post-processing happens in background tasks.
     """
-
-    matching_file_ids = (
-        db.query(FileInfo).filter(FileInfo.file_id.in_(existing_file_ids)).fetch_all()
-    )
-    print(matching_file_ids)
-    # TODO process further ..
 
     try:
         # Parse existing file IDs if provided (do this before URL processing)
@@ -3661,50 +3654,13 @@ async def insert_file_info(
     current_user=Depends(get_current_user),
 ):
     """Insert a new record into the FileInfo table."""
-    try:
-        # Generate a unique ID for the record
-        import uuid
-        from datetime import datetime
+    from rtl_rag_chatbot_api.common.db import insert_file_info_record
 
-        from rtl_rag_chatbot_api.common.db import FileInfo
+    # Use the context manager properly
+    with get_db_session() as db:
+        result = insert_file_info_record(db, file_id, file_hash)
 
-        record_id = str(uuid.uuid4())
-        logging.warning(f"ENTERED insert_file_info for file_id={file_id}")
-
-        # Use the context manager properly
-        with get_db_session() as db:
-            # Create new FileInfo record
-            new_file_info = FileInfo(
-                id=record_id,
-                file_id=file_id,
-                file_hash=file_hash,
-                createdAt=datetime.now(),
-            )
-
-            # Add to database
-            db.add(new_file_info)
-            db.commit()
-            logging.info(f"Successfully inserted FileInfo with ID: {record_id}")
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "message": "FileInfo record inserted successfully",
-                    "data": {
-                        "id": new_file_info.id,
-                        "file_id": new_file_info.file_id,
-                        "file_hash": new_file_info.file_hash,
-                        "createdAt": new_file_info.createdAt.isoformat(),
-                    },
-                },
-            )
-    except Exception as e:
-        logging.error(f"Error inserting FileInfo record: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "error",
-                "message": str(e),
-                "details": "Database operation failed",
-            },
-        )
+        if result["status"] == "success":
+            return JSONResponse(status_code=200, content=result)
+        else:
+            return JSONResponse(status_code=500, content=result)
