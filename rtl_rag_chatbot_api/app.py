@@ -285,20 +285,6 @@ async def info():
     }
 
 
-@app.get("/test-db-connection")
-async def test_db_connection():
-    """Test the database connection by executing a simple query and return JSON."""
-    try:
-        with get_db_session() as db:
-            # Execute a simple query to check the connection
-            result = db.execute(text("SELECT 1"))
-            value = result.scalar()
-            return {"status": "success", "result": int(value)}
-    except Exception as e:
-        logging.error(f"Database connection test failed: {e}")
-        return {"status": "error", "message": str(e)}
-
-
 # Asynchronous file processing function that runs concurrently with a semaphore limit
 async def process_file_with_semaphore(file_handler, file, file_id, is_image, username):
     async with file_processing_semaphore:
@@ -3651,3 +3637,74 @@ async def _initialize_single_file_model(
         query, configs, gcs_handler, single_file_info_for_init, temperature
     )
     return model, is_tabular
+
+
+@app.get("/test-db-connection")
+async def test_db_connection():
+    """Test the database connection by executing a simple query and return JSON."""
+    try:
+        with get_db_session() as db:
+            # Execute a simple query to check the connection
+            result = db.execute(text("SELECT 1"))
+            value = result.scalar()
+            return {"status": "success", "result": int(value)}
+    except Exception as e:
+        logging.error(f"Database connection test failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/insert-file-info")
+async def insert_file_info(
+    request: Request,
+    file_id: str = Form(...),
+    file_hash: str = Form(...),
+    current_user=Depends(get_current_user),
+):
+    """Insert a new record into the FileInfo table."""
+    try:
+        # Generate a unique ID for the record
+        import uuid
+        from datetime import datetime
+
+        from rtl_rag_chatbot_api.common.db import FileInfo
+
+        record_id = str(uuid.uuid4())
+        logging.warning(f"ENTERED insert_file_info for file_id={file_id}")
+
+        # Use the context manager properly
+        with get_db_session() as db:
+            # Create new FileInfo record
+            new_file_info = FileInfo(
+                id=record_id,
+                file_id=file_id,
+                file_hash=file_hash,
+                createdAt=datetime.now(),
+            )
+
+            # Add to database
+            db.add(new_file_info)
+            db.commit()
+            logging.info(f"Successfully inserted FileInfo with ID: {record_id}")
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "message": "FileInfo record inserted successfully",
+                    "data": {
+                        "id": new_file_info.id,
+                        "file_id": new_file_info.file_id,
+                        "file_hash": new_file_info.file_hash,
+                        "createdAt": new_file_info.createdAt.isoformat(),
+                    },
+                },
+            )
+    except Exception as e:
+        logging.error(f"Error inserting FileInfo record: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": str(e),
+                "details": "Database operation failed",
+            },
+        )
