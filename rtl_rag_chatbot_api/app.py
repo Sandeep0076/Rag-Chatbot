@@ -285,6 +285,20 @@ async def info():
     }
 
 
+@app.get("/test-db-connection")
+async def test_db_connection():
+    """Test the database connection by executing a simple query and return JSON."""
+    try:
+        with get_db_session() as db:
+            # Execute a simple query to check the connection
+            result = db.execute(text("SELECT 1"))
+            value = result.scalar()
+            return {"status": "success", "result": int(value)}
+    except Exception as e:
+        logging.error(f"Database connection test failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 # Asynchronous file processing function that runs concurrently with a semaphore limit
 async def process_file_with_semaphore(file_handler, file, file_id, is_image, username):
     async with file_processing_semaphore:
