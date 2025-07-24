@@ -210,3 +210,64 @@ def delete_file_info_by_file_id(session: Session, file_id: str) -> Dict[str, Any
             "message": str(e),
             "details": "Database operation failed",
         }
+
+
+def delete_all_file_info_records(session: Session) -> Dict[str, Any]:
+    """
+    Delete all records from the FileInfo table.
+
+    Args:
+        session: Database session
+
+    Returns:
+        Dict containing the result of the deletion operation
+    """
+    try:
+        # Get count of all records before deletion
+        total_records = session.query(FileInfo).count()
+
+        if total_records == 0:
+            logging.info("No FileInfo records found in database")
+            return {
+                "status": "success",
+                "deleted": False,
+                "message": "No records found in FileInfo table",
+                "deleted_count": 0,
+            }
+
+        # Get all records for logging purposes (optional - can be removed for performance)
+        all_records = session.query(FileInfo).all()
+        deleted_records_info = []
+        for record in all_records:
+            deleted_records_info.append(
+                {
+                    "id": record.id,
+                    "file_id": record.file_id,
+                    "file_hash": record.file_hash,
+                    "createdAt": record.createdAt.isoformat(),
+                }
+            )
+
+        # Delete all records from FileInfo table
+        deleted_count = session.query(FileInfo).delete()
+        session.commit()
+
+        logging.warning(
+            f"Successfully deleted ALL {deleted_count} FileInfo records from database"
+        )
+        return {
+            "status": "success",
+            "deleted": True,
+            "message": f"Successfully deleted all {deleted_count} record(s) from FileInfo table",
+            "deleted_count": deleted_count,
+            "deleted_records": deleted_records_info,
+        }
+    except Exception as e:
+        logging.error(f"Error deleting all FileInfo records: {e}")
+        session.rollback()
+        return {
+            "status": "error",
+            "deleted": False,
+            "message": str(e),
+            "details": "Database operation failed",
+        }
