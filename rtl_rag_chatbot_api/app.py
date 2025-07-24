@@ -1985,10 +1985,16 @@ def handle_visualization(
             try:
                 if query.model_choice.startswith("gemini"):
                     response = get_gemini_non_rag_response(
-                        configs, current_question, query.model_choice, temperature
+                        configs,
+                        current_question,
+                        query.model_choice,
+                        temperature,
+                        max_tokens=4096,
                     )
                 else:
-                    response = get_azure_non_rag_response(configs, current_question)
+                    response = get_azure_non_rag_response(
+                        configs, current_question, max_tokens=4096
+                    )
             except GeminiSafetyFilterError as e:
                 # If safety filter blocks visualization, return error response
                 logging.warning(
@@ -2605,22 +2611,19 @@ async def _detect_visualization_need(
     if should_visualize_filter:
         question_for_detection = CHART_DETECTION_PROMPT + question
         try:
-            vis_detection_response = get_gemini_non_rag_response(
-                configs, question_for_detection, "gemini-2.5-flash", temperature
+            # vis_detection_response = get_gemini_non_rag_response(
+            #     configs, question_for_detection, "gemini-2.5-flash", temperature
+            # )
+            vis_detection_response = get_azure_non_rag_response(
+                configs, question_for_detection, model_choice="gpt_4_1_nano"
             )
             if (
                 vis_detection_response.lower() == "true"
                 or "true" in vis_detection_response.lower()
             ):
                 generate_visualization = True
-        except GeminiSafetyFilterError as e:
-            # If safety filter blocks the visualization detection, default to False
-            logging.warning(
-                f"Visualization detection blocked by safety filter: {str(e)}"
-            )
-            generate_visualization = False
         except Exception as e:
-            # For other errors, also default to False
+            # For any errors with Azure OpenAI, default to False
             logging.error(f"Error in visualization detection: {str(e)}")
             generate_visualization = False
 
@@ -2671,6 +2674,9 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             generate_visualization = await _detect_visualization_need(
                 current_actual_question, configs, temperature
             )
+
+        # TEMPORARILY DISABLE CHART GENERATION - HARDCODED TO FALSE
+        generate_visualization = False
 
         # Process file information and build the model key
         file_data = await _process_file_info(query, gcs_handler, generate_visualization)

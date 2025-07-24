@@ -1626,8 +1626,11 @@ def initialize_models_state():
 
     if "model_choice" not in st.session_state:
         st.session_state.model_choice = "gpt_4o_mini"
+
+    # Always ensure temp_model_choice is properly initialized
     if "temp_model_choice" not in st.session_state:
         st.session_state.temp_model_choice = st.session_state.model_choice
+
     if "model_initialized" not in st.session_state:
         st.session_state.model_initialized = False
 
@@ -1696,7 +1699,15 @@ def initialize_session_state():
 
 
 def on_model_change():
-    st.session_state.model_choice = st.session_state.temp_model_choice
+    # Safely handle temp_model_choice in case it doesn't exist
+    if (
+        hasattr(st.session_state, "temp_model_choice")
+        and st.session_state.temp_model_choice
+    ):
+        st.session_state.model_choice = st.session_state.temp_model_choice
+    else:
+        # Fallback to current model choice if temp_model_choice is missing
+        st.session_state.temp_model_choice = st.session_state.model_choice
 
 
 def initialize_model(model_choice):
@@ -2521,10 +2532,26 @@ def _render_model_selection():
     st.markdown(
         '<div class="sidebar-header">Model Selection</div>', unsafe_allow_html=True
     )
+
+    # Ensure temp_model_choice is properly synchronized
+    if "temp_model_choice" not in st.session_state:
+        st.session_state.temp_model_choice = st.session_state.model_choice
+
+    # Get the current index safely
+    try:
+        current_index = st.session_state.available_models.index(
+            st.session_state.model_choice
+        )
+    except ValueError:
+        # If current model choice is not in available models, default to first one
+        current_index = 0
+        st.session_state.model_choice = st.session_state.available_models[0]
+        st.session_state.temp_model_choice = st.session_state.model_choice
+
     st.selectbox(
         "Select Model",
         options=st.session_state.available_models,
-        index=st.session_state.available_models.index(st.session_state.model_choice),
+        index=current_index,
         key="temp_model_choice",
         on_change=on_model_change,
         label_visibility="collapsed",
