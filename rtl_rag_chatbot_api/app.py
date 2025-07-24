@@ -1003,6 +1003,14 @@ async def upload_file(
     Embeddings creation and other post-processing happens in background tasks.
     """
 
+    # Update FileHandler with database session for file hash lookup
+    if configs.use_file_hash_db:
+        # The db parameter is a context manager, we need to get the actual session
+        # For now, we'll create a new session when needed in the FileHandler
+        file_handler.update_db_session(
+            None
+        )  # We'll handle session creation in FileHandler
+
     try:
         # Parse existing file IDs if provided (do this before URL processing)
         parsed_existing_file_ids = []
@@ -2654,9 +2662,15 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             temperature = _get_default_temperature(query.model_choice)
         logging.info(f"Using temperature {temperature} for model {query.model_choice}")
 
-        generate_visualization = await _detect_visualization_need(
-            current_actual_question, configs, temperature
-        )
+        # Use config flag for chart generation
+        if not configs.generate_visualization:
+            # If flag is explicitly set to False, disable visualization
+            generate_visualization = False
+        else:
+            # Otherwise, use the existing detection logic
+            generate_visualization = await _detect_visualization_need(
+                current_actual_question, configs, temperature
+            )
 
         # Process file information and build the model key
         file_data = await _process_file_info(query, gcs_handler, generate_visualization)

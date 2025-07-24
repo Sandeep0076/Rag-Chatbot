@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from sqlalchemy import Column, DateTime, ForeignKey, String
 from sqlalchemy.orm import Session, declarative_base
@@ -43,6 +43,27 @@ def get_conversations_by_file_ids(session: Session, file_ids: str) -> datetime:
     )
 
     return conversations
+
+
+def find_file_by_hash_db(session: Session, file_hash: str) -> Optional[str]:
+    """
+    Find file_id by file_hash from database.
+
+    Args:
+        session: Database session
+        file_hash: The file hash to search for
+
+    Returns:
+        file_id if found, None otherwise
+    """
+    try:
+        result = check_file_hash_exists(session, file_hash)
+        if result["status"] == "success" and result["exists"]:
+            return result["data"]["file_id"]
+        return None
+    except Exception as e:
+        logging.error(f"Error finding file by hash in database: {e}")
+        return None
 
 
 def insert_file_info_record(

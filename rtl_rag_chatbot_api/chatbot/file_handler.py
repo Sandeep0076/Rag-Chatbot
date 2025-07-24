@@ -22,30 +22,61 @@ from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
 
 class FileHandler:
     """
-    Handles file processing, encryption, and storage operations.
-
-    This class manages file uploads, calculates file hashes, checks for existing files,
-    encrypts new files, and interacts with Google Cloud Storage for file storage and retrieval.
-
-    Attributes:
-        configs: Configuration object containing necessary settings.
-        gcs_handler: Google Cloud Storage handler for cloud operations.
-        gemini_handler: Gemini model handler for image analysis.
+    Handles file processing operations including upload, download, and metadata management.
+    Supports both local and cloud storage operations.
     """
 
-    def __init__(self, configs, gcs_handler, gemini_handler=None):
+    def __init__(self, configs, gcs_handler, gemini_handler=None, db_session=None):
         """
-        Initializes the FileHandler with configurations and handlers.
+        Initialize FileHandler with configuration and handlers.
 
         Args:
-            configs: Configuration object containing necessary settings.
-            gcs_handler: Google Cloud Storage handler for cloud operations.
-            gemini_handler: Optional Gemini handler for image analysis.
+            configs: Application configuration
+            gcs_handler: GCS handler for cloud operations
+            gemini_handler: Optional Gemini handler for AI operations
+            db_session: Optional database session for database operations
         """
         self.configs = configs
         self.gcs_handler = gcs_handler
         self.gemini_handler = gemini_handler
+        self.db_session = db_session
+        self.use_file_hash_db = getattr(configs, "use_file_hash_db", False)
         self.encryption_manager = FileEncryptionManager(gcs_handler)
+
+    def update_db_session(self, db_session):
+        """
+        Update the database session for this FileHandler instance.
+
+        Args:
+            db_session: New database session
+        """
+        self.db_session = db_session
+
+    async def store_file_hash_in_db(self, file_id: str, file_hash: str):
+        """
+        Store file hash in the database if the feature is enabled.
+
+        Args:
+            file_id: The file ID
+            file_hash: The file hash to store
+        """
+        if self.use_file_hash_db:
+            try:
+                from rtl_rag_chatbot_api.app import get_db_session
+                from rtl_rag_chatbot_api.common.db import insert_file_info_record
+
+                with get_db_session() as db_session:
+                    result = insert_file_info_record(db_session, file_id, file_hash)
+                    if result["status"] == "success":
+                        logging.info(
+                            f"Successfully stored file hash in database for file_id: {file_id}"
+                        )
+                    else:
+                        logging.error(
+                            f"Failed to store file hash in database: {result['message']}"
+                        )
+            except Exception as e:
+                logging.error(f"Error storing file hash in database: {str(e)}")
 
     def calculate_file_hash(self, file_content):
         """
@@ -270,6 +301,9 @@ class FileHandler:
         except Exception as e:
             logging.error(f"Error uploading metadata: {str(e)}")
             raise
+
+        # Store file hash in database if enabled
+        await self.store_file_hash_in_db(file_id, file_hash)
 
         return {
             "file_id": file_id,
@@ -762,6 +796,9 @@ class FileHandler:
                 metadata,
             )
 
+            # Store file hash in database if enabled
+            await self.store_file_hash_in_db(actual_file_id, file_hash)
+
             # Return final response
             return self._prepare_file_success_response(
                 actual_file_id,
@@ -802,40 +839,14 @@ class FileHandler:
     async def _check_for_existing_file(
         self, file_hash: str, original_filename: str, file_id: str
     ):
-        """Check if a file with the same hash already exists and verify it's not a hash collision"""
+        """Check if a file with the same hash already exists"""
         azure_result = {"embeddings_exist": False}
 
         existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
         if not existing_file_id:
             return None, azure_result
 
-        # Verify this isn't a case of hash collision by checking filename
-        gcs_file_path = (
-            f"file-embeddings/{existing_file_id}/{original_filename}.encrypted"
-        )
-        file_exists = await asyncio.to_thread(
-            self.gcs_handler.check_file_exists, gcs_file_path
-        )
-
-        if not file_exists:
-            # Check if there are other PDFs in this directory
-            prefix = f"file-embeddings/{existing_file_id}/"
-            blobs = list(self.gcs_handler.bucket.list_blobs(prefix=prefix))
-
-            for blob in blobs:
-                if blob.name.endswith(".encrypted") and not blob.name.endswith(
-                    f"{original_filename}.encrypted"
-                ):
-                    logging.warning(
-                        f"Found hash match but with different filename: {blob.name}"
-                    )
-                    # Use the new file_id instead to avoid conflicts
-                    logging.info(
-                        f"Treating as new file with ID: {file_id} to avoid conflicts"
-                    )
-                    return None, azure_result
-
-        # If we're still using the existing_file_id, get embedding status
+        # Get embedding status for existing file
         embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
         # Use only Azure embeddings for unified approach
         azure_result = await embedding_handler.check_embeddings_exist(
@@ -1026,9 +1037,33 @@ class FileHandler:
 
     async def find_existing_file_by_hash_async(self, file_hash: str):
         """Asynchronous version of finding existing file by hash."""
-        return await asyncio.to_thread(
-            self.gcs_handler.find_existing_file_by_hash, file_hash
-        )
+        if self.use_file_hash_db:
+            try:
+                # Use the database lookup function
+                from rtl_rag_chatbot_api.app import get_db_session
+                from rtl_rag_chatbot_api.common.db import find_file_by_hash_db
+
+                with get_db_session() as db_session:
+                    file_id = find_file_by_hash_db(db_session, file_hash)
+                    if file_id:
+                        logging.info(f"File found in database with ID: {file_id}")
+                        return file_id
+                    else:
+                        logging.info(
+                            f"No file found in database with hash: {file_hash}"
+                        )
+                        return None
+
+            except Exception as db_e:
+                logging.error(
+                    f"Error during file_hash_db lookup: {str(db_e)}", exc_info=True
+                )
+                return None
+        else:
+            # Fallback to GCS lookup if not using file_hash_db
+            return await asyncio.to_thread(
+                self.gcs_handler.find_existing_file_by_hash, file_hash
+            )
 
     async def process_single_url(
         self,
@@ -1191,6 +1226,9 @@ class FileHandler:
                 logging.info(
                     f"Completed embedding creation for URL {url} with file_id {url_file_id}"
                 )
+
+                # Store file hash in database if enabled
+                await self.store_file_hash_in_db(url_file_id, content_hash)
 
                 return {
                     "file_id": url_file_id,
