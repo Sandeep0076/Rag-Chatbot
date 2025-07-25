@@ -172,7 +172,7 @@ class TestEndToEndPipeline:
 
         chat_data = {
             "text": [
-                "In mock_file1.pdf, what is the country mentioned, and in mock_file2.pdf, who is the author?"
+                "In mock_file1.pdf, From which country this paper is from, and in mock_file2.pdf, who is the author?"
             ],
             "file_ids": file_ids,
             "session_id": session_id,

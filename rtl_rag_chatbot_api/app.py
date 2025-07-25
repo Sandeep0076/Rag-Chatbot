@@ -2611,6 +2611,7 @@ async def _detect_visualization_need(
     if should_visualize_filter:
         question_for_detection = CHART_DETECTION_PROMPT + question
         try:
+            logging.info("Detecting if visualization is needed..")
             # vis_detection_response = get_gemini_non_rag_response(
             #     configs, question_for_detection, "gemini-2.5-flash", temperature
             # )
@@ -2674,9 +2675,6 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             generate_visualization = await _detect_visualization_need(
                 current_actual_question, configs, temperature
             )
-
-        # TEMPORARILY DISABLE CHART GENERATION - HARDCODED TO FALSE
-        generate_visualization = False
 
         # Process file information and build the model key
         file_data = await _process_file_info(query, gcs_handler, generate_visualization)
