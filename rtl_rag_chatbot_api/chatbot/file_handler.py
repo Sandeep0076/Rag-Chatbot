@@ -728,15 +728,9 @@ class FileHandler:
                     "temp_file_path": None,
                 }
 
-            # Only create directories and save file if we don't have existing embeddings
-            # Create directories and save file
-            if not existing_file_id:
-                temp_file_path = await self._save_file_locally(
-                    file_id, original_filename, file_content
-                )
-            else:
-                temp_file_path = None
-
+            temp_file_path = await self._save_file_locally(
+                file_id, original_filename, file_content
+            )
             del file_content  # Free memory
 
             # Handle file encryption

@@ -908,37 +908,47 @@ async def handle_existing_file(
 ):
     """Handle an existing file, checking if embeddings need to be recreated."""
 
-    logging.info(f"File {file_id} already exists, checking if it needs new embeddings")
-
-    # Check if embeddings exist
-    azure_result = await embedding_handler.check_embeddings_exist(
-        file_id, "gpt_4o_mini"
-    )
-
-    # Get existing username list to ensure we preserve all users
-    gcs_handler = GCSHandler(configs)
-    current_file_info = gcs_handler.get_file_info(file_id)
-    current_username_list = current_file_info.get("username", [])
-
-    # Ensure current_username_list is a list
-    if not isinstance(current_username_list, list):
-        current_username_list = [current_username_list]
-
-    # If embeddings already exist, just update the username list directly
-    if azure_result["embeddings_exist"]:
-        await update_username_for_existing_file(
-            file_id, username, current_username_list
+    try:
+        logging.info(
+            f"File {file_id} already exists, checking if it needs new embeddings"
         )
-    # If any embeddings are missing, recreate them
-    else:
-        await recreate_embeddings_for_existing_file(
-            background_tasks,
-            file_id,
-            temp_file_path,
-            username,
-            result,
-            current_username_list,
+
+        # Check if embeddings exist
+        azure_result = await embedding_handler.check_embeddings_exist(
+            file_id, "gpt_4o_mini"
         )
+
+        # Get existing username list to ensure we preserve all users
+        gcs_handler = GCSHandler(configs)
+        current_file_info = gcs_handler.get_file_info(file_id)
+        current_username_list = current_file_info.get("username", [])
+
+        # Ensure current_username_list is a list
+        if not isinstance(current_username_list, list):
+            current_username_list = [current_username_list]
+
+        # If embeddings already exist, just update the username list directly
+        if azure_result["embeddings_exist"]:
+            await update_username_for_existing_file(
+                file_id, username, current_username_list
+            )
+        # If any embeddings are missing, recreate them
+        else:
+            await recreate_embeddings_for_existing_file(
+                background_tasks,
+                file_id,
+                temp_file_path,
+                username,
+                result,
+                current_username_list,
+            )
+    finally:
+        # Clean up empty directory if it exists
+        import os
+
+        os.rmdir(temp_file_path) if os.path.isdir(temp_file_path) and not os.listdir(
+            temp_file_path
+        ) else None
 
 
 async def update_username_for_existing_file(file_id, username, current_username_list):
@@ -1137,21 +1147,8 @@ async def upload_file(
         raise http_ex
     except Exception as e:
         logging.exception(f"Unexpected error in upload_file: {str(e)}")
-        # Return a more detailed error response with stack trace in dev mode
-        if configs.app.dev:
-            import traceback
-
-            stack_trace = traceback.format_exc()
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": str(e),
-                    "stack_trace": stack_trace,
-                    "message": "File upload failed. See error details.",
-                },
-            )
-        else:
-            raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+        # Return error response
+        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
 
 
 async def prepare_sqlite_db(file_id: str, temp_file_path: str):
@@ -2831,16 +2828,8 @@ async def get_neighbors(query: NeighborsQuery, current_user=Depends(get_current_
         return {"neighbors": neighbors}
     except Exception as e:
         logging.exception(f"Error in get_neighbors: {str(e)}")
-        # Return a more detailed error response with stack trace in dev mode
-        if configs.app.dev:
-            import traceback
-
-            stack_trace = traceback.format_exc()
-            raise HTTPException(
-                status_code=500, detail={"error": str(e), "stack_trace": stack_trace}
-            )
-        else:
-            raise HTTPException(status_code=500, detail=str(e))
+        # Return error response
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/analyze-image", response_model=Dict[str, Any])
