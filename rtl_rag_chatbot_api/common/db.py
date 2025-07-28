@@ -26,6 +26,9 @@ class FileInfo(Base):
     id = Column(String, primary_key=True, unique=True)
     file_id = Column(String, nullable=False)
     file_hash = Column(String, nullable=False)
+    file_name = Column(
+        String, nullable=True
+    )  # Using the correct column name from database
     createdAt = Column(DateTime, nullable=False)
 
 
@@ -67,7 +70,7 @@ def find_file_by_hash_db(session: Session, file_hash: str) -> Optional[str]:
 
 
 def insert_file_info_record(
-    session: Session, file_id: str, file_hash: str
+    session: Session, file_id: str, file_hash: str, filename: str = None
 ) -> Dict[str, Any]:
     """
     Insert a new record into the FileInfo table.
@@ -76,6 +79,7 @@ def insert_file_info_record(
         session: Database session
         file_id: The file ID
         file_hash: The file hash
+        filename: The original filename (optional)
 
     Returns:
         Dict containing the result of the operation
@@ -83,13 +87,16 @@ def insert_file_info_record(
     try:
         # Generate a unique ID for the record
         record_id = str(uuid.uuid4())
-        logging.warning(f"ENTERED insert_file_info_record for file_id={file_id}")
+        logging.warning(
+            f"ENTERED insert_file_info_record for file_id={file_id}, filename={filename}"
+        )
 
         # Create new FileInfo record
         new_file_info = FileInfo(
             id=record_id,
             file_id=file_id,
             file_hash=file_hash,
+            file_name=filename,  # Using the correct column name
             createdAt=datetime.now(),
         )
 
@@ -105,6 +112,7 @@ def insert_file_info_record(
                 "id": new_file_info.id,
                 "file_id": new_file_info.file_id,
                 "file_hash": new_file_info.file_hash,
+                "filename": new_file_info.file_name,
                 "createdAt": new_file_info.createdAt.isoformat(),
             },
         }
@@ -130,15 +138,24 @@ def check_file_hash_exists(session: Session, file_hash: str) -> Dict[str, Any]:
         Dict containing the result of the check
     """
     try:
-        # Query for existing file hash
+        # Query only the essential fields to avoid column issues
         existing_record = (
-            session.query(FileInfo).filter(FileInfo.file_hash == file_hash).first()
+            session.query(
+                FileInfo.id,
+                FileInfo.file_id,
+                FileInfo.file_hash,
+                FileInfo.file_name,
+                FileInfo.createdAt,
+            )
+            .filter(FileInfo.file_hash == file_hash)
+            .first()
         )
 
         if existing_record:
             logging.info(
                 f"File hash {file_hash} found in database with file_id: {existing_record.file_id}"
             )
+
             return {
                 "status": "success",
                 "exists": True,
@@ -147,6 +164,7 @@ def check_file_hash_exists(session: Session, file_hash: str) -> Dict[str, Any]:
                     "id": existing_record.id,
                     "file_id": existing_record.file_id,
                     "file_hash": existing_record.file_hash,
+                    "filename": existing_record.file_name,
                     "createdAt": existing_record.createdAt.isoformat(),
                 },
             }
@@ -202,6 +220,7 @@ def delete_file_info_by_file_id(session: Session, file_id: str) -> Dict[str, Any
                     "id": record.id,
                     "file_id": record.file_id,
                     "file_hash": record.file_hash,
+                    "filename": record.file_name,
                     "createdAt": record.createdAt.isoformat(),
                 }
             )
@@ -265,6 +284,7 @@ def delete_all_file_info_records(session: Session) -> Dict[str, Any]:
                     "id": record.id,
                     "file_id": record.file_id,
                     "file_hash": record.file_hash,
+                    "filename": record.file_name,
                     "createdAt": record.createdAt.isoformat(),
                 }
             )

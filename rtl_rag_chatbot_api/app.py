@@ -3658,6 +3658,7 @@ async def insert_file_info(
     request: Request,
     file_id: str = Form(...),
     file_hash: str = Form(...),
+    filename: str = Form(None),
     current_user=Depends(get_current_user),
 ):
     """Insert a new record into the FileInfo table."""
@@ -3665,9 +3666,64 @@ async def insert_file_info(
 
     # Use the context manager properly
     with get_db_session() as db:
-        result = insert_file_info_record(db, file_id, file_hash)
+        result = insert_file_info_record(db, file_id, file_hash, filename)
 
         if result["status"] == "success":
             return JSONResponse(status_code=200, content=result)
         else:
             return JSONResponse(status_code=500, content=result)
+
+
+@app.delete("/delete-all-file-info")
+async def delete_all_file_info(current_user=Depends(get_current_user)):
+    """
+    Delete all records from the FileInfo table.
+
+    This endpoint will permanently remove all file information records from the database.
+    Use with caution as this action cannot be undone.
+
+    Args:
+        current_user: Authenticated user information
+
+    Returns:
+        dict: Response containing the deletion result
+    """
+    from rtl_rag_chatbot_api.common.db import delete_all_file_info_records
+
+    try:
+        with get_db_session() as db:
+            result = delete_all_file_info_records(db)
+
+            if result["status"] == "success":
+                if result["deleted"]:
+                    return JSONResponse(
+                        status_code=200,
+                        content={
+                            "message": f"Successfully deleted all {result['deleted_count']} FileInfo records",
+                            "deleted_count": result["deleted_count"],
+                            "deleted_records": result.get("deleted_records", []),
+                        },
+                    )
+                else:
+                    return JSONResponse(
+                        status_code=200,
+                        content={"message": result["message"], "deleted_count": 0},
+                    )
+            else:
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "error": "Failed to delete FileInfo records",
+                        "message": result["message"],
+                    },
+                )
+
+    except Exception as e:
+        logging.error(f"Error deleting all FileInfo records: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Internal server error",
+                "message": f"An error occurred while deleting FileInfo records: {str(e)}",
+            },
+        )

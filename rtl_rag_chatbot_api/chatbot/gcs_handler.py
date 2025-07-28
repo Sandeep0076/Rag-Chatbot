@@ -498,7 +498,7 @@ class GCSHandler:
 
     def delete_embeddings(self, file_id: str):
         """
-        Deletes all embeddings associated with a file_id from GCS.
+        Deletes all embeddings associated with a file_id from GCS and database.
 
         Args:
             file_id (str): The ID of the file whose embeddings should be deleted
@@ -517,11 +517,49 @@ class GCSHandler:
                 except Exception as e:
                     logging.error(f"Error deleting blob {blob.name}: {str(e)}")
 
+            # Clean up database records if database usage is enabled
+            if (
+                hasattr(self.configs, "use_file_hash_db")
+                and self.configs.use_file_hash_db
+            ):
+                self._cleanup_database_records(file_id)
+
             logging.info(f"Successfully deleted all embeddings for file_id: {file_id}")
 
         except Exception as e:
             logging.error(f"Error in delete_embeddings: {str(e)}", exc_info=True)
             raise
+
+    def _cleanup_database_records(self, file_id: str):
+        """
+        Clean up database records for a given file_id.
+
+        Args:
+            file_id (str): The ID of the file to clean up from database
+        """
+        try:
+            from rtl_rag_chatbot_api.app import get_db_session
+            from rtl_rag_chatbot_api.common.db import delete_file_info_by_file_id
+
+            with get_db_session() as db_session:
+                result = delete_file_info_by_file_id(db_session, file_id)
+
+                if result["status"] == "success" and result["deleted"]:
+                    logging.info(
+                        f"Successfully deleted {result['deleted_count']} database records for file_id: {file_id}"
+                    )
+                elif result["status"] == "success" and not result["deleted"]:
+                    logging.info(f"No database records found for file_id: {file_id}")
+                else:
+                    logging.error(
+                        f"Error deleting database records for file_id {file_id}: {result['message']}"
+                    )
+
+        except Exception as e:
+            logging.error(
+                f"Error cleaning up database records for file_id {file_id}: {str(e)}"
+            )
+            # Don't raise exception here as database cleanup shouldn't block GCS cleanup
 
     # Removed delete_google_embeddings method as part of unified Azure embeddings approach
 
