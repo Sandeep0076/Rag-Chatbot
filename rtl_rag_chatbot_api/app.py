@@ -10,7 +10,7 @@ import os
 import time
 import uuid
 from asyncio import Semaphore
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -21,7 +21,7 @@ from fastapi import Query as QueryParam
 from fastapi import Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
@@ -242,6 +242,46 @@ async def info():
         "description": configs.chatbot.description,
         "info_text": configs.chatbot.info_text,
     }
+
+
+@contextmanager
+def get_db_session():
+    """
+    Dependency to get a SQLAlchemy session.
+
+    Returns:
+        Session: SQLAlchemy session.
+    """
+    DATABASE_URL = f"postgresql://{os.getenv('DB_USERNAME')}:{os.getenv('DB_PASSWORD')}@127.0.0.1:5432/chatbot_ui"
+    engine = create_engine(DATABASE_URL)
+    Session = sessionmaker(bind=engine)
+
+    attempts = 0
+    max_attempts = 10
+
+    while attempts < max_attempts:
+        # Try to establish a connection to the database
+        try:
+            attempts += 1
+            db_session = Session()
+            # Try to execute a simple query to check the connection
+            db_session.execute(text("SELECT 1"))
+            break
+        except Exception as e:
+            logging.warning(
+                f"Database connection failed. Retrying in 5 seconds... Original error: {e}"
+            )
+            time.sleep(5)
+        finally:
+            db_session.close()
+
+    try:
+        db_session = Session()
+        yield db_session
+    except Exception as e:
+        logging.error(f"Error in session: {e}")
+    finally:
+        db_session.close()
 
 
 # Asynchronous file processing function that runs concurrently with a semaphore limit
@@ -3691,3 +3731,93 @@ async def _initialize_single_file_model(
         query, configs, gcs_handler, single_file_info_for_init, temperature
     )
     return model, is_tabular
+
+
+@app.get("/test-db-connection")
+async def test_db_connection():
+    """Test the database connection by executing a simple query and return JSON."""
+    try:
+        with get_db_session() as db:
+            # Execute a simple query to check the connection
+            result = db.execute(text("SELECT 1"))
+            value = result.scalar()
+            return {"status": "success", "result": int(value)}
+    except Exception as e:
+        logging.error(f"Database connection test failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/insert-file-info")
+async def insert_file_info(
+    request: Request,
+    file_id: str = Form(...),
+    file_hash: str = Form(...),
+    filename: str = Form(None),
+    current_user=Depends(get_current_user),
+):
+    """Insert a new record into the FileInfo table."""
+    from rtl_rag_chatbot_api.common.db import insert_file_info_record
+
+    # Use the context manager properly
+    with get_db_session() as db:
+        result = insert_file_info_record(db, file_id, file_hash, filename)
+
+        if result["status"] == "success":
+            return JSONResponse(status_code=200, content=result)
+        else:
+            return JSONResponse(status_code=500, content=result)
+
+
+@app.delete("/delete-all-file-info")
+async def delete_all_file_info(current_user=Depends(get_current_user)):
+    """
+    Delete all records from the FileInfo table.
+
+    This endpoint will permanently remove all file information records from the database.
+    Use with caution as this action cannot be undone.
+
+    Args:
+        current_user: Authenticated user information
+
+    Returns:
+        dict: Response containing the deletion result
+    """
+    from rtl_rag_chatbot_api.common.db import delete_all_file_info_records
+
+    try:
+        with get_db_session() as db:
+            result = delete_all_file_info_records(db)
+
+            if result["status"] == "success":
+                if result["deleted"]:
+                    return JSONResponse(
+                        status_code=200,
+                        content={
+                            "message": f"Successfully deleted all {result['deleted_count']} FileInfo records",
+                            "deleted_count": result["deleted_count"],
+                            "deleted_records": result.get("deleted_records", []),
+                        },
+                    )
+                else:
+                    return JSONResponse(
+                        status_code=200,
+                        content={"message": result["message"], "deleted_count": 0},
+                    )
+            else:
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "error": "Failed to delete FileInfo records",
+                        "message": result["message"],
+                    },
+                )
+
+    except Exception as e:
+        logging.error(f"Error deleting all FileInfo records: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Internal server error",
+                "message": f"An error occurred while deleting FileInfo records: {str(e)}",
+            },
+        )

@@ -48,6 +48,46 @@ class FileHandler:
         self.gemini_handler = gemini_handler
         self.encryption_manager = FileEncryptionManager(gcs_handler)
 
+    def update_db_session(self, db_session):
+        """
+        Update the database session for this FileHandler instance.
+
+        Args:
+            db_session: New database session
+        """
+        self.db_session = db_session
+
+    async def store_file_hash_in_db(
+        self, file_id: str, file_hash: str, filename: str = None
+    ):
+        """
+        Store file hash and filename in the database if the feature is enabled.
+
+        Args:
+            file_id: The file ID
+            file_hash: The file hash to store
+            filename: The original filename to store (optional)
+        """
+        if self.use_file_hash_db:
+            try:
+                from rtl_rag_chatbot_api.app import get_db_session
+                from rtl_rag_chatbot_api.common.db import insert_file_info_record
+
+                with get_db_session() as db_session:
+                    result = insert_file_info_record(
+                        db_session, file_id, file_hash, filename
+                    )
+                    if result["status"] == "success":
+                        logging.info(
+                            f"Successfully stored file hash and filename in database for file_id: {file_id}"
+                        )
+                    else:
+                        logging.error(
+                            f"Failed to store file hash in database: {result['message']}"
+                        )
+            except Exception as e:
+                logging.error(f"Error storing file hash in database: {str(e)}")
+
     def calculate_file_hash(self, file_content):
         """
         Calculates the MD5 hash of the given file content.
@@ -271,6 +311,9 @@ class FileHandler:
         except Exception as e:
             logging.error(f"Error uploading metadata: {str(e)}")
             raise
+
+        # Store file hash and filename in database if enabled
+        await self.store_file_hash_in_db(file_id, file_hash, original_filename)
 
         return {
             "file_id": file_id,
@@ -885,6 +928,11 @@ class FileHandler:
                 metadata,
             )
 
+            # Store file hash and filename in database if enabled
+            await self.store_file_hash_in_db(
+                actual_file_id, file_hash, original_filename
+            )
+
             # Return final response
             return self._prepare_file_success_response(
                 actual_file_id,
@@ -1324,6 +1372,12 @@ class FileHandler:
                 )
                 logging.info(
                     f"Completed embedding creation for URL {url} with file_id {url_file_id}"
+                )
+
+                # Store file hash and filename in database if enabled
+                url_filename = title if title else "url_content.txt"
+                await self.store_file_hash_in_db(
+                    url_file_id, content_hash, url_filename
                 )
 
                 return {

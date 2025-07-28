@@ -32,6 +32,20 @@ All endpoints require authentication. The API uses OAuth authentication, which i
 
 In Postman, you need to add an Authorization header to your requests. The specific authentication method depends on your deployment configuration.
 
+## Configuration
+
+### Database Integration
+The API supports optional database integration for efficient file hash lookup and metadata tracking:
+
+- **Environment Variable**: `USE_FILE_HASH_DB=true`
+- **Purpose**: Enables database storage of file hashes for duplicate detection and faster lookups
+- **Benefits**:
+  - Prevents duplicate file processing
+  - Faster file existence checks
+  - Automatic database cleanup when files are deleted
+- **Database Table**: `FileInfo` table tracks file_id, file_hash, and creation timestamps
+- **Cleanup Behavior**: When enabled, file deletions automatically remove corresponding database records
+
 ## Basic Workflow
 
 **Unified Embedding Strategy:** The API now employs a unified embedding strategy. All embeddings are generated using Azure OpenAI models, regardless of the chat model chosen (e.g., GPT series or Gemini). This ensures consistency and efficiency.
@@ -515,7 +529,7 @@ Generate images using both DALL-E and Imagen models concurrently with the same p
 
 ### Delete Resources
 
-Delete ChromaDB embeddings and associated resources for one or multiple files based on username.
+Delete ChromaDB embeddings and associated resources for one or multiple files based on username. When `use_file_hash_db` is enabled, also removes corresponding database records.
 
 - **Endpoint URL**: `/delete`
 - **HTTP Method**: DELETE
@@ -564,7 +578,7 @@ Delete ChromaDB embeddings and associated resources for one or multiple files ba
 
 ### Delete All Resources
 
-Delete ChromaDB embeddings and associated resources for one or multiple files (General method).
+Delete ChromaDB embeddings and associated resources for one or multiple files (General method). When `use_file_hash_db` is enabled, also removes corresponding database records automatically.
 
 - **Endpoint URL**: `/delete_all_embeddings`
 - **HTTP Method**: DELETE
