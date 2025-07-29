@@ -4,11 +4,16 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 
 from docx import Document
 
 
 class TextExtractor:
+    def __init__(self, configs=None):
+        """Initialize TextExtractor with optional config."""
+        self.configs = configs
+
     def extract_text_from_doc(self, file_path: str) -> str:
         """Main function to extract text from DOC/DOCX files."""
         logging.info(f"Extracting text from DOC/DOCX file: {file_path}")
@@ -17,17 +22,88 @@ class TextExtractor:
 
         try:
             if file_extension == ".docx":
-                return self._process_docx(file_path)
+                text = self._process_docx(file_path)
             elif file_extension == ".doc":
-                return self._process_doc(file_path)
+                text = self._process_doc(file_path)
             else:
                 error_msg = f"Unsupported document extension: {file_extension}"
                 logging.error(error_msg)
                 return f"ERROR: {error_msg}"
+
+            # Save extracted text for diagnosis
+            self._save_extracted_text_for_diagnosis(file_path, text)
+
+            # Check if extracted text is too short
+            if len(text.strip()) < 100:
+                return (
+                    "ERROR: Unable to extract sufficient text from this file "
+                    "(less than 100 characters). Please try using the 'Chat with Image' feature instead."
+                )
+
+            return text
+
         except Exception as e:
             error_msg = f"Failed to extract text from {file_extension} file: {str(e)}"
             logging.error(error_msg)
             return f"ERROR: {error_msg}"
+
+    def _save_extracted_text_for_diagnosis(self, file_path: str, extracted_text: str):
+        """Save extracted text to a diagnostic file for testing purposes."""
+        # Check if diagnostic saving is enabled
+        if not self.configs or not getattr(
+            self.configs, "save_extracted_text_diagnostic", False
+        ):
+            return
+
+        try:
+            # Create diagnostic directory if it doesn't exist
+            diagnostic_dir = "diagnostic_extracted_texts"
+            os.makedirs(diagnostic_dir, exist_ok=True)
+
+            # Generate filename based on original file
+            original_filename = os.path.basename(file_path)
+            base_name = os.path.splitext(original_filename)[0]
+            timestamp = int(time.time())
+            diagnostic_filename = f"{base_name}_extracted_text_{timestamp}.txt"
+            diagnostic_path = os.path.join(diagnostic_dir, diagnostic_filename)
+
+            # Save the extracted text
+            with open(diagnostic_path, "w", encoding="utf-8") as f:
+                f.write("=== EXTRACTED TEXT DIAGNOSTIC FILE ===\n")
+                f.write(f"Original file: {file_path}\n")
+                f.write(f"Extraction timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Text length: {len(extracted_text)} characters\n")
+                f.write(f"Word count: {len(extracted_text.split())} words\n")
+                f.write(f"Line count: {len(extracted_text.splitlines())} lines\n")
+                f.write(f"Contains markdown headers: {'#' in extracted_text}\n")
+                f.write(
+                    f"Contains markdown lists: {'* ' in extracted_text or '- ' in extracted_text}\n"
+                )
+                f.write(f"Contains markdown bold: {'**' in extracted_text}\n")
+                f.write(f"Contains markdown italic: {'*' in extracted_text}\n")
+                f.write(f"Contains markdown code blocks: {'```' in extracted_text}\n")
+                f.write(
+                    f"Contains markdown links: {'[' in extracted_text and '](' in extracted_text}\n"
+                )
+                f.write(f"Contains tables: {'|' in extracted_text}\n")
+                newline_check = "\\n" in repr(extracted_text)
+                tab_check = "\\t" in repr(extracted_text)
+                f.write(f"Contains newlines: {newline_check}\n")
+                f.write(f"Contains tabs: {tab_check}\n")
+                f.write(f"First 200 characters: {repr(extracted_text[:200])}\n")
+                f.write(f"Last 200 characters: {repr(extracted_text[-200:])}\n")
+                f.write(f"\n{'=' * 50}\n")
+                f.write("FULL EXTRACTED TEXT:\n")
+                f.write(f"{'=' * 50}\n\n")
+                f.write(extracted_text)
+                f.write(f"\n\n{'=' * 50}\n")
+                f.write("END OF EXTRACTED TEXT\n")
+                f.write(f"{'=' * 50}\n")
+
+            logging.info(f"Saved extracted text diagnostic file: {diagnostic_path}")
+
+        except Exception as e:
+            logging.warning(f"Failed to save extracted text diagnostic file: {str(e)}")
 
     def _process_docx(self, file_path: str) -> str:
         """Process .docx files using python-docx."""

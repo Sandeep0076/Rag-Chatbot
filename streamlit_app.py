@@ -1250,10 +1250,11 @@ def _get_existing_file_ids_input():
     )
 
 
-def _calculate_process_items(uploaded_files, existing_file_ids_input):
+def _calculate_process_items(uploaded_files, existing_file_ids_input, urls_input=None):
     """Calculate what items need to be processed."""
     has_new_files = uploaded_files and len(uploaded_files) > 0
     has_existing_file_ids = existing_file_ids_input and existing_file_ids_input.strip()
+    has_urls = bool(urls_input and urls_input.strip())
 
     process_items = []
     if has_new_files:
@@ -1266,8 +1267,17 @@ def _calculate_process_items(uploaded_files, existing_file_ids_input):
         process_items.append(
             f"{existing_count} existing file ID{'s' if existing_count > 1 else ''}"
         )
+    if has_urls:
+        url_count = len(
+            [
+                url.strip()
+                for url in urls_input.replace("\n", ",").split(",")
+                if url.strip()
+            ]
+        )
+        process_items.append(f"{url_count} URL{'s' if url_count > 1 else ''}")
 
-    return has_new_files, has_existing_file_ids, process_items
+    return has_new_files, has_existing_file_ids, has_urls, process_items
 
 
 def _update_session_state_with_files(file_ids, filenames):
@@ -1338,19 +1348,24 @@ def _process_upload_response(upload_response):
             st.error(f"Error processing server response: {str(e)}")
             return False
     else:
-        error_msg = "Unknown error" if not upload_response else upload_response.text
+        error_msg = _parse_error_response(upload_response)
         logging.error(f"Enhanced upload failed: {error_msg}")
-        st.error(f"Failed to process files: {error_msg}")
+        st.error(f"Failed to process: {error_msg}")
         return False
 
 
-def _handle_file_processing(uploaded_files, existing_file_ids_input, is_image):
+def _handle_file_processing(
+    uploaded_files, existing_file_ids_input, is_image, urls_input=None
+):
     """Handle the file processing logic."""
-    has_new_files, has_existing_file_ids, process_items = _calculate_process_items(
-        uploaded_files, existing_file_ids_input
-    )
+    (
+        has_new_files,
+        has_existing_file_ids,
+        has_urls,
+        process_items,
+    ) = _calculate_process_items(uploaded_files, existing_file_ids_input, urls_input)
 
-    if has_new_files or has_existing_file_ids:
+    if has_new_files or has_existing_file_ids or has_urls:
         button_label = "Process " + " and ".join(process_items)
 
         if st.button(button_label):
@@ -1359,7 +1374,7 @@ def _handle_file_processing(uploaded_files, existing_file_ids_input, is_image):
             )
             with st.spinner("Processing files and file IDs..."):
                 upload_response = enhanced_batch_upload(
-                    uploaded_files, existing_file_ids_input, is_image
+                    uploaded_files, existing_file_ids_input, is_image, urls_input
                 )
                 _process_upload_response(upload_response)
 
@@ -1389,7 +1404,9 @@ def handle_file_upload():
     _display_file_type_info()
 
     if st.session_state.file_type == "URL":
-        _handle_url_input()
+        urls_input = _handle_url_input()
+        existing_file_ids_input = _get_existing_file_ids_input()
+        _handle_file_processing(None, existing_file_ids_input, False, urls_input)
     else:
         uploaded_files = _setup_file_uploader(file_types)
         existing_file_ids_input = _get_existing_file_ids_input()
@@ -2170,30 +2187,105 @@ def main():
         st.markdown("### Welcome to the RAG Chatbot Reference Page")
 
 
-def enhanced_batch_upload(files_list, existing_file_ids_input, is_image=False):
-    """Enhanced upload function that supports both new files and existing file IDs."""
+def _parse_error_response(upload_response):
+    """Parse error response from API and extract meaningful error message."""
+    if not upload_response:
+        logging.error("_parse_error_response: No upload_response provided")
+        return "Unknown error - no response from server"
+
+    logging.info(f"_parse_error_response: Status code: {upload_response.status_code}")
+    logging.info(f"_parse_error_response: Response text: {upload_response.text[:500]}")
+
+    try:
+        # Try to parse JSON error response from API
+        error_data = upload_response.json()
+        logging.info(f"_parse_error_response: Parsed JSON: {error_data}")
+
+        if isinstance(error_data, dict):
+            # Extract the most meaningful error message
+            if "error" in error_data:
+                error_msg = error_data["error"]
+                logging.info(f"_parse_error_response: Using 'error' field: {error_msg}")
+                return error_msg
+            elif "message" in error_data:
+                error_msg = error_data["message"]
+                logging.info(
+                    f"_parse_error_response: Using 'message' field: {error_msg}"
+                )
+                return error_msg
+            elif "detail" in error_data and isinstance(error_data["detail"], dict):
+                # Handle HTTPException detail format
+                detail = error_data["detail"]
+                if "error" in detail:
+                    error_msg = detail["error"]
+                    logging.info(
+                        f"_parse_error_response: Using detail.error: {error_msg}"
+                    )
+                    return error_msg
+                elif "message" in detail:
+                    error_msg = detail["message"]
+                    logging.info(
+                        f"_parse_error_response: Using detail.message: {error_msg}"
+                    )
+                    return error_msg
+                else:
+                    error_msg = str(detail)
+                    logging.info(
+                        f"_parse_error_response: Using str(detail): {error_msg}"
+                    )
+                    return error_msg
+            elif "detail" in error_data:
+                error_msg = str(error_data["detail"])
+                logging.info(f"_parse_error_response: Using detail string: {error_msg}")
+                return error_msg
+            else:
+                error_msg = upload_response.text
+                logging.info(
+                    f"_parse_error_response: Fallback to response.text: {error_msg}"
+                )
+                return error_msg
+        else:
+            error_msg = upload_response.text
+            logging.info(
+                f"_parse_error_response: Non-dict response, using text: {error_msg}"
+            )
+            return error_msg
+    except Exception as e:
+        # Fallback to text if JSON parsing fails
+        error_msg = upload_response.text
+        logging.error(
+            f"_parse_error_response: JSON parsing failed: {str(e)}, using text: {error_msg}"
+        )
+        return error_msg
+
+
+def enhanced_batch_upload(
+    files_list, existing_file_ids_input, is_image=False, urls_input=None
+):
+    """Handle batch file uploads to the backend API."""
     file_count = len(files_list) if files_list else 0
-    has_file_ids = bool(existing_file_ids_input)
+    has_file_ids = bool(existing_file_ids_input and existing_file_ids_input.strip())
+    has_urls = bool(urls_input and urls_input.strip())
+
     logging.info(
-        f"[enhanced_batch_upload] Processing files: {file_count}, existing file IDs input: {has_file_ids}"
+        f"[enhanced_batch_upload] Processing: files={file_count}, "
+        f"file_ids={has_file_ids}, urls={has_urls}"
     )
 
-    # Prepare the files for the multipart/form-data request
+    # Prepare form data
+    form_data = {"is_image": str(is_image), "username": st.session_state.username}
+
+    # Prepare files data
     files_data = []
     if files_list:
-        for file in files_list:
-            file_content = file.read()
-            files_data.append(("files", (file.name, file_content, file.type)))
-            file.seek(0)  # Reset file pointer
+        for f in files_list:
+            files_data.append(("files", (f.name, f.getvalue(), f.type)))
 
-    # Prepare form data
-    form_data = {
-        "username": st.session_state.username,
-        "is_image": str(is_image).lower(),
-    }
+    # Add URLs if present
+    if has_urls:
+        form_data["urls"] = urls_input
 
-    # Add existing file IDs if provided
-    if existing_file_ids_input and existing_file_ids_input.strip():
+    if has_file_ids:
         form_data["existing_file_ids"] = existing_file_ids_input.strip()
 
     # Send the request
@@ -2222,7 +2314,9 @@ def handle_existing_file_ids_processing(existing_file_ids_input):
 
     with st.spinner("Processing existing file IDs..."):
         # Use enhanced upload with no files, only existing file IDs
-        upload_response = enhanced_batch_upload(None, existing_file_ids_input, False)
+        upload_response = enhanced_batch_upload(
+            None, existing_file_ids_input, False, None
+        )
 
         if upload_response and upload_response.status_code == 200:
             try:
@@ -2280,7 +2374,7 @@ def handle_existing_file_ids_processing(existing_file_ids_input):
                 logging.error(f"Error processing file IDs response: {str(e)}")
                 st.error(f"Error processing server response: {str(e)}")
         else:
-            error_msg = "Unknown error" if not upload_response else upload_response.text
+            error_msg = _parse_error_response(upload_response)
             logging.error(f"File IDs processing failed: {error_msg}")
             st.error(f"Failed to process file IDs: {error_msg}")
 
@@ -2326,29 +2420,12 @@ def _render_database_info():
 
 
 def _process_url_and_file_ids(url_input, existing_file_ids_input):
-    """Process URLs and existing file IDs."""
-    has_urls = url_input and url_input.strip()
-    has_existing_file_ids = existing_file_ids_input and existing_file_ids_input.strip()
-
-    if has_urls and has_existing_file_ids:
-        # Mixed mode: URLs + existing file IDs
-        with st.spinner("Processing URLs and existing file IDs..."):
-            data = {
-                "username": st.session_state.username,
-                "urls": url_input,
-                "existing_file_ids": existing_file_ids_input,
-            }
-
-            upload_response = requests.post(f"{API_URL}/file/upload", data=data)
-            _process_sidebar_upload_response(upload_response)
-    elif has_urls:
-        process_url_input(url_input)
-    elif has_existing_file_ids:
-        with st.spinner("Processing existing file IDs..."):
-            upload_response = enhanced_batch_upload(
-                None, existing_file_ids_input, False
-            )
-            _process_sidebar_upload_response(upload_response)
+    """Process both URLs and existing file IDs from the sidebar."""
+    with st.spinner("Processing URLs and file IDs..."):
+        upload_response = enhanced_batch_upload(
+            [], existing_file_ids_input, False, url_input
+        )
+        _process_sidebar_upload_response(upload_response)
 
 
 def _process_sidebar_upload_response(upload_response):
@@ -2369,7 +2446,7 @@ def _process_sidebar_upload_response(upload_response):
             logging.error(f"Error processing response: {str(e)}")
             st.error(f"Error processing server response: {str(e)}")
     else:
-        error_msg = "Unknown error" if not upload_response else upload_response.text
+        error_msg = _parse_error_response(upload_response)
         logging.error(f"Processing failed: {error_msg}")
         st.error(f"Failed to process: {error_msg}")
 
@@ -2440,51 +2517,20 @@ def _render_url_interface():
 
 
 def _render_file_uploader_interface():
-    """Render file uploader interface."""
-    is_image = st.session_state.file_type == "Image"
-    file_types = _get_file_types_config()
+    """Render the file uploader and process sidebar uploads."""
+    with st.form("sidebar_file_uploader_form"):
+        uploaded_files = st.file_uploader(
+            "Upload files",
+            type=_get_file_types_config(),
+            accept_multiple_files=True,
+            label_visibility="collapsed",
+        )
+        submitted = st.form_submit_button("Upload")
 
-    uploaded_files = st.file_uploader(
-        f"Choose {st.session_state.file_type} file(s)",
-        type=file_types,
-        accept_multiple_files=True,
-    )
-
-    st.markdown("**file ids:**")
-    existing_file_ids_input = st.text_input(
-        "Enter existing File IDs (comma-separated)",
-        placeholder="file-id-1, file-id-2",
-        label_visibility="collapsed",
-    )
-
-    has_new_files = uploaded_files and len(uploaded_files) > 0
-    has_existing_file_ids = existing_file_ids_input and existing_file_ids_input.strip()
-
-    if has_new_files or has_existing_file_ids:
-        process_items = []
-        if has_new_files:
-            process_items.append(
-                f"{len(uploaded_files)} file{'s' if len(uploaded_files) > 1 else ''}"
-            )
-        if has_existing_file_ids:
-            file_ids_list = existing_file_ids_input.replace("\n", ",").split(",")
-            existing_count = len([fid.strip() for fid in file_ids_list if fid.strip()])
-            process_items.append(
-                f"{existing_count} existing file ID{'s' if existing_count > 1 else ''}"
-            )
-
-        button_label = "Process " + " and ".join(process_items)
-
-        if st.button(button_label):
-            file_count = len(uploaded_files) if uploaded_files else 0
-            has_file_ids = bool(existing_file_ids_input)
-            logging.info(
-                f"Processing mixed content from sidebar: files={file_count}, file_ids={has_file_ids}"
-            )
-
-            with st.spinner("Processing files and file IDs..."):
+        if submitted and uploaded_files:
+            with st.spinner("Uploading files..."):
                 upload_response = enhanced_batch_upload(
-                    uploaded_files, existing_file_ids_input, is_image
+                    uploaded_files, None, is_image=False, urls_input=None
                 )
                 _process_sidebar_upload_response(upload_response)
 

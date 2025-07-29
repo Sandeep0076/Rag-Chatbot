@@ -8,6 +8,7 @@ structure.txt
 __pycache__/
 chroma_db/
 local_data/
+diagnostic_extracted_texts/
 .DS_Store
 rag-pdf-api.code-workspace
 processed_data/

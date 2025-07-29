@@ -104,6 +104,10 @@ class Config(BaseSettings):
     generate_visualization: bool = Field(
         default=True, description="Enable chart generation and visualization features"
     )
+    save_extracted_text_diagnostic: bool = Field(
+        default=False,
+        description="Save extracted text to diagnostic files for debugging",
+    )
 
     class Config:
         env_nested_delimiter = "__"

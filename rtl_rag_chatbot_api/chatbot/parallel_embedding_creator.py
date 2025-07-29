@@ -71,6 +71,15 @@ async def create_embeddings_parallel(
                     file_metadata,
                     background_tasks,
                 )
+
+                # Check if create_embeddings_background returned an error result
+                if result.get("status") == "error":
+                    error_msg = result.get("message", "Unknown error")
+                    logging.error(
+                        f"Embedding creation failed for file {file_id}: {error_msg}"
+                    )
+                    return {"file_id": file_id, "status": "error", "error": error_msg}
+
                 return {"file_id": file_id, "status": "success", "result": result}
             except Exception as e:
                 logging.error(f"Error creating embeddings for file {file_id}: {str(e)}")
