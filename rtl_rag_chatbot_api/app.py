@@ -705,7 +705,7 @@ async def process_document_type_file(
         # For single file uploads, directly use create_embeddings_parallel to wait for embedding creation
         # This matches the behavior of multi-file uploads
         logging.info(f"Creating embeddings for single file: {filename} (ID: {file_id})")
-        await create_embeddings_parallel(
+        embedding_results = await create_embeddings_parallel(
             file_ids=[file_id],
             file_paths=[temp_file_path],
             embedding_handler=embedding_handler,
@@ -716,6 +716,29 @@ async def process_document_type_file(
             file_metadata_list=[file_metadata],
             max_concurrent_tasks=1,
         )
+
+        # Check for errors in embedding creation results
+        error_results = [
+            result for result in embedding_results if result.get("status") == "error"
+        ]
+        if error_results:
+            # Get the error message
+            error_result = error_results[0]  # Single file, so only one result
+            error_msg = error_result.get("error", "Unknown error")
+
+            # Log the error
+            logging.error(f"Embedding creation failed for file {file_id}: {error_msg}")
+
+            # Raise HTTPException with error information
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": f"Failed to create embeddings for file {filename}",
+                    "error": error_msg,
+                    "file_id": file_id,
+                },
+            )
+
         logging.info(f"Completed embedding creation for single file: {file_id}")
 
     # Handle existing files - check if they need new embeddings
@@ -842,7 +865,7 @@ async def process_document_files_parallel(
         )
 
         # Run parallel embedding creation with BackgroundTasks for non-blocking uploads
-        await create_embeddings_parallel(
+        embedding_results = await create_embeddings_parallel(
             file_ids,
             file_paths,
             embedding_handler,
@@ -853,6 +876,35 @@ async def process_document_files_parallel(
             file_metadata_list,
             max_concurrent,
         )
+
+        # Check for errors in embedding creation results
+        error_results = [
+            result for result in embedding_results if result.get("status") == "error"
+        ]
+        if error_results:
+            # Collect error messages
+            error_messages = []
+            for error_result in error_results:
+                file_id = error_result.get("file_id", "unknown")
+                error_msg = error_result.get("error", "Unknown error")
+                error_messages.append(f"File {file_id}: {error_msg}")
+
+            # Log the errors
+            logging.error(
+                f"Embedding creation failed for {len(error_results)} files: {error_messages}"
+            )
+
+            # Raise HTTPException with detailed error information
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": f"Failed to create embeddings for {len(error_results)} file(s)",
+                    "errors": error_messages,
+                    "total_files": len(files_to_process),
+                    "failed_files": len(error_results),
+                    "successful_files": len(files_to_process) - len(error_results),
+                },
+            )
 
         logging.info(
             f"Completed parallel embedding creation for {len(files_to_process)} files"

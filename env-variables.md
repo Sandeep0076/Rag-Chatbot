@@ -90,3 +90,7 @@
 - AZURE_LLM__MODELS__GPT_4_1_NANO__DEPLOYMENT
 - AZURE_LLM__MODELS__GPT_4_1_NANO__API_VERSION
 - AZURE_LLM__MODELS__GPT_4_1_NANO__MODEL_NAME
+
+## Feature Flags
+- GENERATE_VISUALIZATION (default: true - enables chart generation and visualization features)
+- SAVE_EXTRACTED_TEXT_DIAGNOSTIC (default: false - saves extracted text to diagnostic files for debugging)

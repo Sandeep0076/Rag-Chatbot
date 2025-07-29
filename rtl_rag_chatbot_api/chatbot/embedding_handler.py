@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
@@ -632,11 +633,12 @@ class EmbeddingHandler:
         Returns:
             Dictionary with error information
         """
+        # Use the actual error message instead of a generic one
+        # This ensures specific error messages (like text extraction failures) are shown to users
         return {
             "file_id": file_id,
             "status": "error",
-            "message": "An error occurred while processing your file.",
-            "error_message": error_message,
+            "message": error_message,
             "can_chat": False,
             "azure_embeddings_exist": False,
             "gemini_embeddings_exist": False,
@@ -1025,11 +1027,77 @@ class EmbeddingHandler:
         if text.startswith("ERROR:"):
             raise Exception(f"Error extracting text: {text[7:]}")
 
+        # Save extracted text to diagnostic file
+        self._save_extracted_text_for_diagnosis(file_path, text)
+
+        # Check if extracted text is too short
+        if len(text.strip()) < 100:
+            raise Exception(
+                "Unable to extract sufficient text from this file (less than 100 characters). "
+                "Please try using the 'Chat with Image' feature instead."
+            )
+
         text_chunks = base_handler.split_text(text)
         if not text_chunks:
             raise Exception("No processable text found in the document")
 
         return text, text_chunks
+
+    def _save_extracted_text_for_diagnosis(self, file_path: str, extracted_text: str):
+        """Save extracted text to a diagnostic file for testing purposes."""
+        # Check if diagnostic saving is enabled
+        if not getattr(self.configs, "save_extracted_text_diagnostic", False):
+            return
+
+        try:
+            # Create diagnostic directory if it doesn't exist
+            diagnostic_dir = "diagnostic_extracted_texts"
+            os.makedirs(diagnostic_dir, exist_ok=True)
+
+            # Generate filename based on original file
+            original_filename = os.path.basename(file_path)
+            base_name = os.path.splitext(original_filename)[0]
+            timestamp = int(time.time())
+            diagnostic_filename = f"{base_name}_extracted_text_{timestamp}.txt"
+            diagnostic_path = os.path.join(diagnostic_dir, diagnostic_filename)
+
+            # Save the extracted text
+            with open(diagnostic_path, "w", encoding="utf-8") as f:
+                f.write("=== EXTRACTED TEXT DIAGNOSTIC FILE ===\n")
+                f.write(f"Original file: {file_path}\n")
+                f.write(f"Extraction timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Text length: {len(extracted_text)} characters\n")
+                f.write(f"Word count: {len(extracted_text.split())} words\n")
+                f.write(f"Line count: {len(extracted_text.splitlines())} lines\n")
+                f.write(f"Contains markdown headers: {'#' in extracted_text}\n")
+                f.write(
+                    f"Contains markdown lists: {'* ' in extracted_text or '- ' in extracted_text}\n"
+                )
+                f.write(f"Contains markdown bold: {'**' in extracted_text}\n")
+                f.write(f"Contains markdown italic: {'*' in extracted_text}\n")
+                f.write(f"Contains markdown code blocks: {'```' in extracted_text}\n")
+                f.write(
+                    f"Contains markdown links: {'[' in extracted_text and '](' in extracted_text}\n"
+                )
+                f.write(f"Contains tables: {'|' in extracted_text}\n")
+                newline_check = "\\n" in repr(extracted_text)
+                tab_check = "\\t" in repr(extracted_text)
+                f.write(f"Contains newlines: {newline_check}\n")
+                f.write(f"Contains tabs: {tab_check}\n")
+                f.write(f"First 200 characters: {repr(extracted_text[:200])}\n")
+                f.write(f"Last 200 characters: {repr(extracted_text[-200:])}\n")
+                f.write(f"\n{'=' * 50}\n")
+                f.write("FULL EXTRACTED TEXT:\n")
+                f.write(f"{'=' * 50}\n\n")
+                f.write(extracted_text)
+                f.write(f"\n\n{'=' * 50}\n")
+                f.write("END OF EXTRACTED TEXT\n")
+                f.write(f"{'=' * 50}\n")
+
+            logging.info(f"Saved extracted text diagnostic file: {diagnostic_path}")
+
+        except Exception as e:
+            logging.warning(f"Failed to save extracted text diagnostic file: {str(e)}")
 
     def _log_chunk_info(self, base_handler, chunks: List[str], prefix: str = ""):
         """Log information about chunks."""

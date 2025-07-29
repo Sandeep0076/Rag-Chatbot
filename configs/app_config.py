@@ -96,5 +96,18 @@ class Config(BaseSettings):
     vertexai_imagen: VertexAIImagenConfig = Field(default_factory=VertexAIImagenConfig)
     cleanup: CleanupConfig = Field(default_factory=lambda: CleanupConfig())
 
+    # Feature flags
+    use_file_hash_db: bool = Field(
+        default=True,
+        description="Use database for file hash lookup instead of GCS (recommended for performance)",
+    )
+    generate_visualization: bool = Field(
+        default=True, description="Enable chart generation and visualization features"
+    )
+    save_extracted_text_diagnostic: bool = Field(
+        default=False,
+        description="Save extracted text to diagnostic files for debugging",
+    )
+
     class Config:
         env_nested_delimiter = "__"
