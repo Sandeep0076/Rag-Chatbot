@@ -36,7 +36,7 @@ MOCK_FILE_1 = os.path.join(MOCK_FILE_DIR, "mock_file1.pdf")
 MOCK_FILE_2 = os.path.join(MOCK_FILE_DIR, "mock_file2.pdf")
 MOCK_CSV_FILE = os.path.join(MOCK_FILE_DIR, "mock_file.csv")
 MOCK_TXT_FILE = os.path.join(MOCK_FILE_DIR, "mock_txt.txt")
-MOCK_IMAGE_FILE_1 = os.path.join(MOCK_FILE_DIR, "mock_file1.png")
+MOCK_IMAGE_FILE = os.path.join(MOCK_FILE_DIR, "mock_file.png")
 MOCK_IMAGE_FILE_2 = os.path.join(MOCK_FILE_DIR, "mock_file2.jpg")
 MOCK_DB_FILE = os.path.join(MOCK_FILE_DIR, "mock_file.sqlite")
 MOCK_EXCEL_FILE = os.path.join(MOCK_FILE_DIR, "mock_file.xlsx")
@@ -172,7 +172,7 @@ class TestEndToEndPipeline:
 
         chat_data = {
             "text": [
-                "In mock_file1.pdf, From which country this paper is from, and in mock_file2.pdf, who is the author?"
+                "In mock_file1.pdf, what is the country mentioned, and in mock_file2.pdf, who is the author?"
             ],
             "file_ids": file_ids,
             "session_id": session_id,
@@ -430,8 +430,8 @@ def test_chat_with_single_image(client):
     Tests the full pipeline for uploading and chatting with a single image file.
     """
     print("\n--- Running Test: Chat with Single Image ---")
-    with open(MOCK_IMAGE_FILE_1, "rb") as f:
-        files = {"file": ("mock_file1.png", f, "image/png")}
+    with open(MOCK_IMAGE_FILE, "rb") as f:
+        files = {"file": ("mock_file.png", f, "image/png")}
         upload_response = client.post(
             "/file/upload",
             data={"username": "testuser", "is_image": "true"},
@@ -460,7 +460,7 @@ def test_chat_with_single_image(client):
 
     # Chat with the processed image file
     chat_data = {
-        "text": ["Who has highest gdp per capita in the given image.?"],
+        "text": ["Who has highest gdp per capita?"],
         "file_id": file_id,
         "session_id": session_id,
         "model_choice": "gpt_4o_mini",
@@ -486,8 +486,8 @@ def test_chat_with_multiple_images(client):
     print("\n--- Running Test: Chat with Multiple Images ---")
 
     # First upload the first image
-    with open(MOCK_IMAGE_FILE_1, "rb") as f:
-        files = {"file": ("mock_file1.png", f, "image/png")}
+    with open(MOCK_IMAGE_FILE, "rb") as f:
+        files = {"file": ("mock_file.png", f, "image/png")}
         upload_response_1 = client.post(
             "/file/upload",
             data={"username": "testuser", "is_image": "true"},
@@ -547,7 +547,7 @@ def test_chat_with_multiple_images(client):
     # Chat with both images
     chat_data = {
         "text": [
-            "In mock_file1.png, which country has the highest GDP per capita, "
+            "In mock_file.png, who has the highest GDP per capita, "
             "and in mock_file2.jpg, which model has the highest Global Average value?"
         ],
         "file_ids": file_ids,
@@ -689,155 +689,155 @@ def test_chat_with_excel(client):
     ), f"Expected 'Pennsylvania' in response: {response_text}"
 
 
-# def test_chat_with_single_url(client):
-#     """
-#     Tests the full pipeline for uploading and chatting with a single URL.
-#     """
-#     print("\n--- Running Test: Chat with Single URL ---")
-#     upload_response = client.post(
-#         "/file/upload",
-#         data={
-#             "urls": "https://en.wikipedia.org/wiki/Tesla_Model_3",
-#             "username": "testuser",
-#         },
-#     )
+def test_chat_with_single_url(client):
+    """
+    Tests the full pipeline for uploading and chatting with a single URL.
+    """
+    print("\n--- Running Test: Chat with Single URL ---")
+    upload_response = client.post(
+        "/file/upload",
+        data={
+            "urls": "https://en.wikipedia.org/wiki/Tesla_Model_3",
+            "username": "testuser",
+        },
+    )
 
-#     assert upload_response.status_code == 200
-#     upload_json = upload_response.json()
-#     file_id = upload_json.get("file_id")
-#     session_id = upload_json.get("session_id")
-#     assert file_id and session_id
-#     print(f"Uploaded URL content. Received file_id: {file_id}")
+    assert upload_response.status_code == 200
+    upload_json = upload_response.json()
+    file_id = upload_json.get("file_id")
+    session_id = upload_json.get("session_id")
+    assert file_id and session_id
+    print(f"Uploaded URL content. Received file_id: {file_id}")
 
-#     # Poll the status endpoint to ensure the URL content is processed
-#     print(f"Polling for status of file_id: {file_id}...")
-#     start_time = time.time()
-#     while time.time() - start_time < 120:  # 2-minute timeout for URL processing
-#         status_response = client.get(f"/embeddings/status/{file_id}")
-#         assert status_response.status_code == 200
-#         if status_response.json().get("can_chat"):
-#             print(f"Success! URL content {file_id} is ready for chat.")
-#             break
-#         time.sleep(5)
-#     else:
-#         pytest.fail(f"Timeout waiting for URL content {file_id} to process.")
+    # Poll the status endpoint to ensure the URL content is processed
+    print(f"Polling for status of file_id: {file_id}...")
+    start_time = time.time()
+    while time.time() - start_time < 120:  # 2-minute timeout for URL processing
+        status_response = client.get(f"/embeddings/status/{file_id}")
+        assert status_response.status_code == 200
+        if status_response.json().get("can_chat"):
+            print(f"Success! URL content {file_id} is ready for chat.")
+            break
+        time.sleep(5)
+    else:
+        pytest.fail(f"Timeout waiting for URL content {file_id} to process.")
 
-#     # Chat with the processed URL content
-#     chat_data = {
-#         "text": ["What is the Wheelbase for tesla model"],
-#         "file_id": file_id,
-#         "session_id": session_id,
-#         "model_choice": "gpt_4o_mini",
-#         "user_id": "testuser",
-#     }
-#     chat_response = client.post("/file/chat", json=chat_data)
+    # Chat with the processed URL content
+    chat_data = {
+        "text": ["What is the Wheelbase for tesla model"],
+        "file_id": file_id,
+        "session_id": session_id,
+        "model_choice": "gpt_4o_mini",
+        "user_id": "testuser",
+    }
+    chat_response = client.post("/file/chat", json=chat_data)
 
-#     assert chat_response.status_code == 200
-#     response_json = chat_response.json()
-#     response_text = response_json.get("response", "")
-#     print(f"Received chat response for URL: '{response_text}'")
+    assert chat_response.status_code == 200
+    response_json = chat_response.json()
+    response_text = response_json.get("response", "")
+    print(f"Received chat response for URL: '{response_text}'")
 
-#     # Assert that the response contains the expected wheelbase measurement
-#     assert any(
-#         measurement in response_text
-#         for measurement in ["113.8", "2,895", "113", "2895"]
-#     ), f"Expected wheelbase measurement (113.8 inches or 2,895 mm) in response: {response_text}"
+    # Assert that the response contains the expected wheelbase measurement
+    assert any(
+        measurement in response_text
+        for measurement in ["113.8", "2,895", "113", "2895"]
+    ), f"Expected wheelbase measurement (113.8 inches or 2,895 mm) in response: {response_text}"
 
 
-# def test_chat_with_multiple_urls(client):
-#     """
-#     Tests the full pipeline for uploading and chatting with multiple URLs.
-#     """
-#     print("\n--- Running Test: Chat with Multiple URLs ---")
+def test_chat_with_multiple_urls(client):
+    """
+    Tests the full pipeline for uploading and chatting with multiple URLs.
+    """
+    print("\n--- Running Test: Chat with Multiple URLs ---")
 
-#     # First upload the first URL (Elon Musk)
-#     upload_response_1 = client.post(
-#         "/file/upload",
-#         data={
-#             "urls": "https://en.wikipedia.org/wiki/Elon_Musk",
-#             "username": "testuser",
-#         },
-#     )
+    # First upload the first URL (Elon Musk)
+    upload_response_1 = client.post(
+        "/file/upload",
+        data={
+            "urls": "https://en.wikipedia.org/wiki/Elon_Musk",
+            "username": "testuser",
+        },
+    )
 
-#     assert upload_response_1.status_code == 200
-#     upload_json_1 = upload_response_1.json()
-#     file_id_1 = upload_json_1.get("file_id")
-#     assert file_id_1
-#     print(f"Uploaded first URL content. Received file_id: {file_id_1}")
+    assert upload_response_1.status_code == 200
+    upload_json_1 = upload_response_1.json()
+    file_id_1 = upload_json_1.get("file_id")
+    assert file_id_1
+    print(f"Uploaded first URL content. Received file_id: {file_id_1}")
 
-#     # Wait for first URL to be processed
-#     print(f"Polling for status of first URL file_id: {file_id_1}...")
-#     start_time = time.time()
-#     while time.time() - start_time < 120:
-#         status_response = client.get(f"/embeddings/status/{file_id_1}")
-#         assert status_response.status_code == 200
-#         if status_response.json().get("can_chat"):
-#             print(f"Success! First URL content {file_id_1} is ready for chat.")
-#             break
-#         time.sleep(5)
-#     else:
-#         pytest.fail(f"Timeout waiting for first URL content {file_id_1} to process.")
+    # Wait for first URL to be processed
+    print(f"Polling for status of first URL file_id: {file_id_1}...")
+    start_time = time.time()
+    while time.time() - start_time < 120:
+        status_response = client.get(f"/embeddings/status/{file_id_1}")
+        assert status_response.status_code == 200
+        if status_response.json().get("can_chat"):
+            print(f"Success! First URL content {file_id_1} is ready for chat.")
+            break
+        time.sleep(5)
+    else:
+        pytest.fail(f"Timeout waiting for first URL content {file_id_1} to process.")
 
-#     # Now upload the second URL with the existing file ID
-#     upload_response_2 = client.post(
-#         "/file/upload",
-#         data={
-#             "urls": "https://en.wikipedia.org/wiki/Tesla_Model_3",
-#             "username": "testuser",
-#             "existing_file_ids": file_id_1,
-#         },
-#     )
+    # Now upload the second URL with the existing file ID
+    upload_response_2 = client.post(
+        "/file/upload",
+        data={
+            "urls": "https://en.wikipedia.org/wiki/Tesla_Model_3",
+            "username": "testuser",
+            "existing_file_ids": file_id_1,
+        },
+    )
 
-#     assert upload_response_2.status_code == 200
-#     upload_json_2 = upload_response_2.json()
-#     file_ids = upload_json_2.get("file_ids")
-#     session_id = upload_json_2.get("session_id")
-#     assert file_ids and len(file_ids) == 2 and session_id
-#     print(f"Uploaded second URL content. Received file_ids: {file_ids}")
+    assert upload_response_2.status_code == 200
+    upload_json_2 = upload_response_2.json()
+    file_ids = upload_json_2.get("file_ids")
+    session_id = upload_json_2.get("session_id")
+    assert file_ids and len(file_ids) == 2 and session_id
+    print(f"Uploaded second URL content. Received file_ids: {file_ids}")
 
-#     # Wait for the new (second) URL to be processed
-#     new_file_id = next(fid for fid in file_ids if fid != file_id_1)
-#     print(f"Polling for status of second URL file_id: {new_file_id}...")
-#     start_time = time.time()
-#     while time.time() - start_time < 120:
-#         status_response = client.get(f"/embeddings/status/{new_file_id}")
-#         assert status_response.status_code == 200
-#         if status_response.json().get("can_chat"):
-#             print(f"Success! Second URL content {new_file_id} is ready for chat.")
-#             break
-#         time.sleep(5)
-#     else:
-#         pytest.fail(f"Timeout waiting for second URL content {new_file_id} to process.")
+    # Wait for the new (second) URL to be processed
+    new_file_id = next(fid for fid in file_ids if fid != file_id_1)
+    print(f"Polling for status of second URL file_id: {new_file_id}...")
+    start_time = time.time()
+    while time.time() - start_time < 120:
+        status_response = client.get(f"/embeddings/status/{new_file_id}")
+        assert status_response.status_code == 200
+        if status_response.json().get("can_chat"):
+            print(f"Success! Second URL content {new_file_id} is ready for chat.")
+            break
+        time.sleep(5)
+    else:
+        pytest.fail(f"Timeout waiting for second URL content {new_file_id} to process.")
 
-#     # Chat with both URLs
-#     chat_data = {
-#         "text": [
-#             "From Elon Musk page, in which month was he born? "
-#             "From Tesla Model 3 page, what is the Wheelbase for tesla model?"
-#         ],
-#         "file_ids": file_ids,
-#         "session_id": session_id,
-#         "model_choice": "gpt_4o_mini",
-#         "user_id": "testuser",
-#     }
-#     chat_response = client.post("/file/chat", json=chat_data)
+    # Chat with both URLs
+    chat_data = {
+        "text": [
+            "From Elon Musk page, in which month was he born? "
+            "From Tesla Model 3 page, what is the Wheelbase for tesla model?"
+        ],
+        "file_ids": file_ids,
+        "session_id": session_id,
+        "model_choice": "gpt_4o_mini",
+        "user_id": "testuser",
+    }
+    chat_response = client.post("/file/chat", json=chat_data)
 
-#     assert chat_response.status_code == 200
-#     response_json = chat_response.json()
-#     response_text = response_json.get("response", "")
-#     print(f"Received chat response for multiple URLs: '{response_text}'")
+    assert chat_response.status_code == 200
+    response_json = chat_response.json()
+    response_text = response_json.get("response", "")
+    print(f"Received chat response for multiple URLs: '{response_text}'")
 
-#     # Assert that the response contains references to both expected answers
-#     # For Elon Musk: June or 6
-#     # For Tesla Model 3: wheelbase measurements
-#     assert any(
-#         month in response_text for month in ["June", "6"]
-#     ), f"Expected 'June' or '6' for Elon Musk birth month in response: {response_text}"
+    # Assert that the response contains references to both expected answers
+    # For Elon Musk: June or 6
+    # For Tesla Model 3: wheelbase measurements
+    assert any(
+        month in response_text for month in ["June", "6"]
+    ), f"Expected 'June' or '6' for Elon Musk birth month in response: {response_text}"
 
-#     assert any(
-#         measurement in response_text
-#         for measurement in ["113.8", "2,895", "113", "2895"]
-#     ), f"Expected wheelbase measurement (113.8 inches or 2,895 mm) for Tesla in response: {response_text}"
+    assert any(
+        measurement in response_text
+        for measurement in ["113.8", "2,895", "113", "2895"]
+    ), f"Expected wheelbase measurement (113.8 inches or 2,895 mm) for Tesla in response: {response_text}"
 
 
 def test_generate_dalle3_images(client):

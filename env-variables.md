@@ -24,7 +24,6 @@
 - API_VERSION
 - AZURE_DEPLOYMENT
 - IMAGE_FILE_PATH
-- USE_FILE_HASH_DB (default: true - enables database lookup for file hashes instead of GCS iteration for better performance)
 
 ## Google Cloud Platform Configuration
 - GCP_PROJECT
