@@ -277,8 +277,24 @@ class GCSHandler:
             self._upload_single_item(bucket, source, destination_blob_name)
 
     def find_existing_file_by_hash(self, file_hash):
+        """
+        Find existing file by hash from GCS (fallback method).
+
+        This method is only called when use_file_hash_db=False as a fallback.
+        The file_handler.py handles database operations when use_file_hash_db=True.
+
+        Args:
+            file_hash: The file hash to search for
+
+        Returns:
+            file_id if found, None otherwise
+        """
         try:
-            logging.info(f"Searching for existing file with hash: {file_hash}")
+            logging.info(
+                f"Searching for existing file with hash: {file_hash} (GCS fallback)"
+            )
+
+            # GCS lookup (fallback method)
             blobs = self._storage_client.list_blobs(
                 self.bucket_name, prefix="file-embeddings/"
             )
