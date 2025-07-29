@@ -276,42 +276,25 @@ class GCSHandler:
             # Single upload case
             self._upload_single_item(bucket, source, destination_blob_name)
 
-    def find_existing_file_by_hash(self, file_hash, db_session=None, use_db=False):
+    def find_existing_file_by_hash(self, file_hash):
         """
-        Find existing file by hash from either database or GCS.
+        Find existing file by hash from GCS (fallback method).
+
+        This method is only called when use_file_hash_db=False as a fallback.
+        The file_handler.py handles database operations when use_file_hash_db=True.
 
         Args:
             file_hash: The file hash to search for
-            db_session: Database session (required if use_db=True)
-            use_db: Whether to use database lookup instead of GCS
 
         Returns:
             file_id if found, None otherwise
         """
         try:
-            logging.info(f"Searching for existing file with hash: {file_hash}")
+            logging.info(
+                f"Searching for existing file with hash: {file_hash} (GCS fallback)"
+            )
 
-            # Use database lookup if enabled
-            if use_db:
-                try:
-                    from rtl_rag_chatbot_api.app import get_db_session
-                    from rtl_rag_chatbot_api.common.db import find_file_by_hash_db
-
-                    with get_db_session() as db_session:
-                        file_id = find_file_by_hash_db(db_session, file_hash)
-                        if file_id:
-                            logging.info(f"File found in database with ID: {file_id}")
-                            return file_id
-                        else:
-                            logging.info(
-                                f"No file found in database with hash: {file_hash}"
-                            )
-                            return None
-                except Exception as e:
-                    logging.error(f"Error in database lookup: {str(e)}")
-                    return None
-
-            # Fallback to GCS lookup
+            # GCS lookup (fallback method)
             blobs = self._storage_client.list_blobs(
                 self.bucket_name, prefix="file-embeddings/"
             )

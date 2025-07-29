@@ -98,7 +98,8 @@ class Config(BaseSettings):
 
     # Feature flags
     use_file_hash_db: bool = Field(
-        default=False, description="Use database for file hash lookup instead of GCS"
+        default=True,
+        description="Use database for file hash lookup instead of GCS (recommended for performance)",
     )
     generate_visualization: bool = Field(
         default=True, description="Enable chart generation and visualization features"
