@@ -15,6 +15,7 @@ from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.chatbot.utils.file_encryption_manager import (
     FileEncryptionManager,
 )
+from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
@@ -704,6 +705,82 @@ class FileHandler:
                 temp_file_path = None
 
             del file_content  # Free memory
+
+            # Validate text content for document files before encryption
+            file_extension = os.path.splitext(original_filename)[1].lower()
+            if file_extension in [".pdf", ".doc", ".docx"] and not is_image:
+                try:
+                    # Create a base handler for text extraction
+                    base_handler = BaseRAGHandler(self.configs, self.gcs_handler)
+                    extracted_text = base_handler.extract_text_from_file(temp_file_path)
+
+                    # Check if extraction returned an error
+                    if extracted_text.startswith("ERROR:"):
+                        # Clean up temp file and directory before returning error
+                        if os.path.exists(temp_file_path):
+                            os.remove(temp_file_path)
+                        await self._cleanup_empty_directory(file_id)
+
+                        error_msg = extracted_text[7:]  # Remove "ERROR: " prefix
+                        logging.error(
+                            f"Text extraction failed for {original_filename}: {error_msg}"
+                        )
+                        return {
+                            "status": "error",
+                            "message": error_msg,
+                            "file_id": file_id,
+                            "is_image": is_image,
+                            "embeddings_exist": False,
+                            "temp_file_path": None,
+                        }
+
+                    # Validate text length for document files (minimum 100 characters)
+                    cleaned_text = extracted_text.strip()
+                    if len(cleaned_text) < 100:
+                        # Clean up temp file and directory before returning error
+                        if os.path.exists(temp_file_path):
+                            os.remove(temp_file_path)
+                        await self._cleanup_empty_directory(file_id)
+
+                        error_msg = (
+                            f"Insufficient text content extracted from {file_extension} file. "
+                            f"Only {len(cleaned_text)} characters found (minimum 100 required). "
+                            f"The document may be empty, corrupted, or contain only images/non-text content."
+                        )
+                        logging.error(
+                            f"Text validation failed for {original_filename}: {error_msg}"
+                        )
+                        return {
+                            "status": "error",
+                            "message": error_msg,
+                            "file_id": file_id,
+                            "is_image": is_image,
+                            "embeddings_exist": False,
+                            "temp_file_path": None,
+                        }
+
+                    logging.info(
+                        f"Text validation passed for {original_filename} ({len(extracted_text)} characters)"
+                    )
+
+                except Exception as e:
+                    # Clean up temp file and directory before returning error
+                    if os.path.exists(temp_file_path):
+                        os.remove(temp_file_path)
+                    await self._cleanup_empty_directory(file_id)
+
+                    error_msg = f"Failed to validate text content: {str(e)}"
+                    logging.error(
+                        f"Text validation failed for {original_filename}: {error_msg}"
+                    )
+                    return {
+                        "status": "error",
+                        "message": error_msg,
+                        "file_id": file_id,
+                        "is_image": is_image,
+                        "embeddings_exist": False,
+                        "temp_file_path": None,
+                    }
 
             # Handle file encryption
             encrypted_file_path = await self._handle_file_encryption(

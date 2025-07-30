@@ -1106,6 +1106,25 @@ async def upload_file(
                     file_handler, all_files, is_image, username
                 )
 
+                # Check for errors in file processing
+                error_results = [
+                    result for result in results if result.get("status") == "error"
+                ]
+                if error_results:
+                    # If there are any errors, return the first error message
+                    error_result = error_results[0]
+                    logging.error(
+                        f"File processing failed: {error_result.get('message')}"
+                    )
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "message": f"File processing failed: {error_result.get('message')}",
+                            "file_id": error_result.get("file_id"),
+                            "status": "error",
+                        },
+                    )
+
                 # Process each file based on its type
                 await process_files_by_type(
                     background_tasks,
