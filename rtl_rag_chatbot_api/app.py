@@ -2518,7 +2518,7 @@ def _filter_context_from_file_info(file_info: Dict[str, Any]) -> Dict[str, Any]:
     context_info = {}
 
     # --- Essential keys for application logic ---
-    for key in ["is_tabular", "embeddings_status", "file_id"]:
+    for key in ["is_tabular", "embeddings_status", "file_id", "embedding_type"]:
         if key in file_info:
             context_info[key] = file_info[key]
 

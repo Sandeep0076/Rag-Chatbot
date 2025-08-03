@@ -114,7 +114,7 @@ class EmbeddingHandler:
             "embeddings_ready": azure_result.get("success", False),
             "file_id": file_id,  # Ensure file_id consistency
             "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
-            "embedding_type": "azure",  # Explicitly indicate we're using Azure embeddings
+            "embedding_type": "azure-03-small",  # Use new text-embedding-3-small for new uploads
         }
 
         # Ensure critical fields are present

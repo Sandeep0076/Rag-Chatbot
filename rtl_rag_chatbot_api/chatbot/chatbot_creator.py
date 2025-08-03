@@ -73,15 +73,121 @@ class AzureChatbot(BaseRAGHandler):
             azure_endpoint=self.model_config.endpoint,
             api_version=self.model_config.api_version,
         )
-        self.embedding_client = openai.AzureOpenAI(
+
+        # Initialize both embedding clients
+        # Legacy ada-002 client
+        self.embedding_client_ada002 = openai.AzureOpenAI(
             api_key=self.configs.azure_embedding.azure_embedding_api_key,
             azure_endpoint=self.configs.azure_embedding.azure_embedding_endpoint,
             api_version=self.configs.azure_embedding.azure_embedding_api_version,
         )
 
-    def get_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Get embeddings using Azure's embedding model."""
+        # New 03-small client
+        self.embedding_client_03_small = openai.AzureOpenAI(
+            api_key=self.configs.azure_embedding_03_small.azure_embedding_03_small_api_key,
+            azure_endpoint=self.configs.azure_embedding_03_small.azure_embedding_03_small_endpoint,
+            api_version=self.configs.azure_embedding_03_small.azure_embedding_03_small_api_version,
+        )
+
+        # Default to 03-small for new embeddings
+        self.embedding_client = self.embedding_client_03_small
+
+    def _get_embedding_config_for_file(self, file_id: str = None):
+        """Get the appropriate embedding client and deployment based on file's embedding_type"""
+        # Default to new embedding for new files
+        default_client = self.embedding_client_03_small
+        default_deployment = (
+            self.configs.azure_embedding_03_small.azure_embedding_03_small_deployment
+        )
+
+        if not file_id:
+            return default_client, default_deployment
+
+        # Check file_info to determine embedding type
         try:
+            # First check if we have it in all_file_infos
+            if (
+                hasattr(self, "all_file_infos")
+                and self.all_file_infos
+                and file_id in self.all_file_infos
+            ):
+                file_info_data = self.all_file_infos[file_id]
+                embedding_type = file_info_data.get("embedding_type", "azure-03-small")
+                # For tabular files (no embedding_type), explicitly use new embedding
+                if file_info_data.get("is_tabular", False):
+                    embedding_type = "azure-03-small"
+                    import logging
+
+                    logging.info(
+                        f"Tabular file {file_id} detected, using text-embedding-3-small"
+                    )
+            else:
+                # Check local file_info.json
+                import json
+                import os
+
+                local_info_path = os.path.join("./chroma_db", file_id, "file_info.json")
+                if os.path.exists(local_info_path):
+                    with open(local_info_path, "r") as f:
+                        file_info_data = json.load(f)
+                        embedding_type = file_info_data.get(
+                            "embedding_type", "azure-03-small"
+                        )
+                        # For tabular files (no embedding_type), explicitly use new embedding
+                        if file_info_data.get("is_tabular", False):
+                            embedding_type = "azure-03-small"
+                            import logging
+
+                            logging.info(
+                                f"Tabular file {file_id} detected, using text-embedding-3-small"
+                            )
+                else:
+                    # Default to new embedding for files without info
+                    embedding_type = "azure-03-small"
+
+            # Return appropriate client and deployment based on embedding_type
+            import logging
+
+            logging.info(f"File {file_id} has embedding_type: '{embedding_type}'")
+
+            if embedding_type == "azure":
+                logging.info(f"Using legacy ada-002 embeddings for file {file_id}")
+                return (
+                    self.embedding_client_ada002,
+                    self.configs.azure_embedding.azure_embedding_deployment,
+                )
+            else:  # "azure-03-small" or any other value (including tabular files) defaults to new embedding
+                logging.info(
+                    f"Using text-embedding-3-small for file {file_id} (embedding_type: '{embedding_type}')"
+                )
+                return (
+                    self.embedding_client_03_small,
+                    self.configs.azure_embedding_03_small.azure_embedding_03_small_deployment,
+                )
+        except Exception as e:
+            import logging
+
+            logging.warning(
+                f"Error getting embedding config for file {file_id}: {e}, using default"
+            )
+            return default_client, default_deployment
+
+    def get_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Get embeddings using Azure's embedding model based on file embedding_type."""
+        try:
+            # For query-time, check the first active file to determine embedding type
+            # In multi-file scenarios, all files should use the same embedding type for compatibility
+            file_id_for_config = None
+            if hasattr(self, "active_file_ids") and self.active_file_ids:
+                file_id_for_config = self.active_file_ids[0]
+            elif hasattr(self, "file_id") and self.file_id:
+                file_id_for_config = self.file_id
+
+            # Get appropriate client and deployment
+            embedding_client, deployment = self._get_embedding_config_for_file(
+                file_id_for_config
+            )
+
             batch_embeddings = []
             for (
                 text_item
@@ -91,15 +197,16 @@ class AzureChatbot(BaseRAGHandler):
                 )
                 if not current_text.strip():  # Handle empty strings
                     # OpenAI API errors on empty strings, return zero vector or skip
-                    # For simplicity, let's assume a zero vector of the expected dimension (e.g., 1536 for ada-002)
-                    # This part might need adjustment based on actual embedding dimension
+                    # Default dimension for both models (ada-002: 1536, text-embedding-3-small: 1536)
                     logging.warning(
                         "Empty string encountered in get_embeddings, returning zero vector."
                     )
-                    batch_embeddings.append([0.0] * 1536)  # Assuming ada-002 dimension
+                    batch_embeddings.append(
+                        [0.0] * 1536
+                    )  # Both models use 1536 dimensions
                     continue
-                response = self.embedding_client.embeddings.create(
-                    model=self.configs.azure_embedding.azure_embedding_deployment,
+                response = embedding_client.embeddings.create(
+                    model=deployment,
                     input=current_text,
                 )
                 batch_embeddings.append(response.data[0].embedding)
