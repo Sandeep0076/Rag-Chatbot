@@ -463,12 +463,37 @@ class FileHandler:
         google_result : dict
             Kept for backwards compatibility but not used in the unified Azure approach
         """
+        # Add debugging logs
+        logging.info(
+            f"_process_image_analysis called with: is_image={is_image}, "
+            f"existing_file_id={existing_file_id}, azure_result={azure_result}"
+        )
+
         # Skip image analysis if:
         #   • file is not an image, or
         #   • we already have Azure embeddings for this image (unified embedding approach)
-        if not is_image or (existing_file_id and azure_result["embeddings_exist"]):
+        embeddings_exist = (
+            azure_result.get("embeddings_exist", False) if azure_result else False
+        )
+        should_skip = not is_image or (existing_file_id and embeddings_exist)
+
+        logging.info(
+            f"Image analysis decision: should_skip={should_skip} "
+            f"(not is_image: {not is_image}, "
+            f"existing_file_id and embeddings_exist: {existing_file_id and embeddings_exist})"
+        )
+
+        if should_skip:
+            logging.info(
+                f"Skipping image analysis: is_image={is_image}, "
+                f"existing_file_id={existing_file_id}, embeddings_exist={embeddings_exist}"
+            )
             return []
 
+        logging.info(
+            f"Proceeding with image analysis for file_id: {actual_file_id}, "
+            f"temp_file_path: {temp_file_path}"
+        )
         analysis_files = []
         # Use the actual_file_id for image analysis to ensure consistency
         await self._handle_image_analysis(

@@ -250,6 +250,17 @@ async def process_file_with_semaphore(file_handler, file, file_id, is_image, use
         logging.info(
             f"Starting parallel processing for file: {file.filename} with ID: {file_id}"
         )
+
+        # Determine is_image based on file extension, overriding the form parameter
+        file_extension = os.path.splitext(file.filename)[1].lower()
+        form_is_image = is_image  # Store original form parameter
+        is_image = file_extension in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
+
+        logging.info(f"Processing file with extension: {file_extension}")
+        logging.info(
+            f"Form is_image parameter: {form_is_image}, Detected is_image: {is_image}"
+        )
+
         start_time = time.time()
         # below function is for new file only encrypts and uploads to GCS
         result = await file_handler.process_file(file, file_id, is_image, username)
@@ -662,12 +673,18 @@ async def process_files_by_type(
     # Process document files in parallel if there are multiple
     if len(document_files) > 1:
         # Pass background_tasks to enable non-blocking GCS uploads after local embedding creation
+        # Note: process_document_files_parallel should determine is_image per file internally
         await process_document_files_parallel(
             document_files, username, is_image, background_tasks
         )
     # Process single document file normally
     elif len(document_files) == 1:
         file_info = document_files[0]
+
+        # Determine is_image based on file extension for this specific file
+        file_extension = os.path.splitext(file_info["filename"])[1].lower()
+        is_image = file_extension in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
+
         await process_document_type_file(
             background_tasks,
             file_info["file_id"],
@@ -774,9 +791,18 @@ async def process_document_files_parallel(
 
         logging.info(f"Processing file in parallel: {filename} (ID: {file_id})")
 
-        # Check file extension
+        # Check file extension and determine if this specific file is an image
         file_extension = os.path.splitext(filename)[1].lower()
-        if not is_document_file(file_extension, is_image):
+        file_is_image = file_extension in [
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".bmp",
+            ".webp",
+        ]
+
+        if not is_document_file(file_extension, file_is_image):
             logging.info(f"Skipping non-document file: {filename}")
             return None
 
