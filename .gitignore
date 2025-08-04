@@ -29,3 +29,4 @@ old_working_chatwithcsv/
 userinput.py
 .cursor/
 temp_files/
+.coverage.*

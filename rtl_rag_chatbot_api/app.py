@@ -986,37 +986,43 @@ async def handle_existing_file(
 ):
     """Handle an existing file, checking if embeddings need to be recreated."""
 
-    logging.info(f"File {file_id} already exists, checking if it needs new embeddings")
-
-    # Check if embeddings exist
-    azure_result = await embedding_handler.check_embeddings_exist(
-        file_id, "gpt_4o_mini"
-    )
-
-    # Get existing username list to ensure we preserve all users
-    gcs_handler = GCSHandler(configs)
-    current_file_info = gcs_handler.get_file_info(file_id)
-    current_username_list = current_file_info.get("username", [])
-
-    # Ensure current_username_list is a list
-    if not isinstance(current_username_list, list):
-        current_username_list = [current_username_list]
-
-    # If embeddings already exist, just update the username list directly
-    if azure_result["embeddings_exist"]:
-        await update_username_for_existing_file(
-            file_id, username, current_username_list
+    try:
+        logging.info(
+            f"File {file_id} already exists, checking if it needs new embeddings"
         )
-    # If any embeddings are missing, recreate them
-    else:
-        await recreate_embeddings_for_existing_file(
-            background_tasks,
-            file_id,
-            temp_file_path,
-            username,
-            result,
-            current_username_list,
+
+        # Check if embeddings exist
+        azure_result = await embedding_handler.check_embeddings_exist(
+            file_id, "gpt_4o_mini"
         )
+
+        # Get existing username list to ensure we preserve all users
+        gcs_handler = GCSHandler(configs)
+        current_file_info = gcs_handler.get_file_info(file_id)
+        current_username_list = current_file_info.get("username", [])
+
+        # If embeddings already exist, just update the username list directly
+        if azure_result["embeddings_exist"]:
+            await update_username_for_existing_file(
+                file_id, username, current_username_list
+            )
+        # If any embeddings are missing, recreate them
+        else:
+            await recreate_embeddings_for_existing_file(
+                background_tasks,
+                file_id,
+                temp_file_path,
+                username,
+                result,
+                current_username_list,
+            )
+    finally:
+        # Clean up empty directory if it exists
+        import os
+
+        os.rmdir(temp_file_path) if os.path.isdir(temp_file_path) and not os.listdir(
+            temp_file_path
+        ) else None
 
 
 async def update_username_for_existing_file(file_id, username, current_username_list):
@@ -1065,6 +1071,7 @@ async def upload_file(
     urls: str = Form(None),
     existing_file_ids: str = Form(None),  # New parameter for existing file IDs
     current_user=Depends(get_current_user),
+    db=Depends(get_db_session),
 ):
     """
     Handles file upload and automatically creates embeddings for PDFs and images.
@@ -1079,6 +1086,14 @@ async def upload_file(
     All file processing is done asynchronously and in parallel when multiple files are uploaded.
     Embeddings creation and other post-processing happens in background tasks.
     """
+    # Update FileHandler with database session for file hash lookup
+    if configs.use_file_hash_db:
+        # The db parameter is a context manager, we need to get the actual session
+        # For now, we'll create a new session when needed in the FileHandler
+        file_handler.update_db_session(
+            None
+        )  # We'll handle session creation in FileHandler
+
     try:
         # Parse existing file IDs if provided (do this before URL processing)
         parsed_existing_file_ids = []
@@ -1224,21 +1239,7 @@ async def upload_file(
         raise http_ex
     except Exception as e:
         logging.exception(f"Unexpected error in upload_file: {str(e)}")
-        # Return a more detailed error response with stack trace in dev mode
-        if configs.app.dev:
-            import traceback
-
-            stack_trace = traceback.format_exc()
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": str(e),
-                    "stack_trace": stack_trace,
-                    "message": "File upload failed. See error details.",
-                },
-            )
-        else:
-            raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
 
 
 async def prepare_sqlite_db(file_id: str, temp_file_path: str):
@@ -2698,6 +2699,7 @@ async def _detect_visualization_need(
     if should_visualize_filter:
         question_for_detection = CHART_DETECTION_PROMPT + question
         try:
+            logging.info("Detecting if visualization is needed..")
             # vis_detection_response = get_gemini_non_rag_response(
             #     configs, question_for_detection, "gemini-2.5-flash", temperature
             # )
@@ -2752,12 +2754,15 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             temperature = _get_default_temperature(query.model_choice)
         logging.info(f"Using temperature {temperature} for model {query.model_choice}")
 
-        generate_visualization = await _detect_visualization_need(
-            current_actual_question, configs, temperature
-        )
-
-        # TEMPORARILY DISABLE CHART GENERATION - HARDCODED TO FALSE
-        generate_visualization = False
+        # Use config flag for chart generation
+        if not configs.generate_visualization:
+            # If flag is explicitly set to False, disable visualization
+            generate_visualization = False
+        else:
+            # Otherwise, use the existing detection logic
+            generate_visualization = await _detect_visualization_need(
+                current_actual_question, configs, temperature
+            )
 
         # Process file information and build the model key
         file_data = await _process_file_info(query, gcs_handler, generate_visualization)
@@ -2914,16 +2919,7 @@ async def get_neighbors(query: NeighborsQuery, current_user=Depends(get_current_
         return {"neighbors": neighbors}
     except Exception as e:
         logging.exception(f"Error in get_neighbors: {str(e)}")
-        # Return a more detailed error response with stack trace in dev mode
-        if configs.app.dev:
-            import traceback
-
-            stack_trace = traceback.format_exc()
-            raise HTTPException(
-                status_code=500, detail={"error": str(e), "stack_trace": stack_trace}
-            )
-        else:
-            raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/analyze-image", response_model=Dict[str, Any])

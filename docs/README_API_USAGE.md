@@ -46,6 +46,7 @@ The API supports optional database integration for efficient file hash lookup an
 - **Database Table**: `FileInfo` table tracks file_id, file_hash, and creation timestamps
 - **Cleanup Behavior**: When enabled, file deletions automatically remove corresponding database records
 
+
 ## Basic Workflow
 
 **Unified Embedding Strategy:** The API now employs a unified embedding strategy. All embeddings are generated using Azure OpenAI models, regardless of the chat model chosen (e.g., GPT series or Gemini). This ensures consistency and efficiency.
