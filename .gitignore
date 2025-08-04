@@ -30,3 +30,4 @@ userinput.py
 .cursor/
 temp_files/
 .coverage.*
+.env
