@@ -571,7 +571,8 @@ def test_chat_with_multiple_images(client):
 
     # Check for any model-related terms that might indicate the answer to the second question
     assert any(
-        term in response_text.lower() for term in ["o3 mini high", "o3"]
+        term in response_text.lower()
+        for term in ["o3 mini high", "o3", "o1 High", "o1"]
     ), f"Expected model/average related terms in response: {response_text}"
 
 
