@@ -22,9 +22,10 @@ class EmbeddingHandler:
         gcs_handler: Handler for Google Cloud Storage operations.
     """
 
-    def __init__(self, configs, gcs_handler):
+    def __init__(self, configs, gcs_handler, file_handler=None):
         self.configs = configs
         self.gcs_handler = gcs_handler
+        self.file_handler = file_handler
         self.chroma_manager = ChromaDBManager()
 
     def create_base_handler(self):
@@ -375,6 +376,7 @@ class EmbeddingHandler:
         temp_file_path: str,
         second_file_path: str = None,
         is_image: bool = False,
+        extracted_text: str = None,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
         Process embeddings with timeout handling.
@@ -385,6 +387,7 @@ class EmbeddingHandler:
             temp_file_path: Path to the temporary file
             second_file_path: Optional path to second file (for images)
             is_image: Whether the file is an image
+            extracted_text: Pre-extracted text to avoid duplicate extraction
 
         Returns:
             Tuple of (azure_result, gemini_result) dictionaries
@@ -400,7 +403,9 @@ class EmbeddingHandler:
                 )
             else:
                 return await asyncio.wait_for(
-                    self._process_regular_file(file_id, base_handler, temp_file_path),
+                    self._process_regular_file(
+                        file_id, base_handler, temp_file_path, extracted_text
+                    ),
                     timeout=900,  # 15 minute timeout
                 )
         except asyncio.TimeoutError:
@@ -457,6 +462,7 @@ class EmbeddingHandler:
         second_file_path: str = None,
         is_image: bool = False,
         file_metadata: Dict[str, Any] = None,
+        extracted_text: str = None,
     ) -> Dict[str, Any]:
         """
         Creates embeddings for a file locally. This is a blocking operation.
@@ -467,6 +473,7 @@ class EmbeddingHandler:
             second_file_path: Optional second file path (for images with separate analysis)
             is_image: Whether the file is an image
             file_metadata: Additional metadata for the file
+            extracted_text: Pre-extracted text to avoid duplicate extraction
 
         Returns:
             Dictionary with embedding status information
@@ -486,7 +493,12 @@ class EmbeddingHandler:
 
             # Process embeddings with timeout handling
             azure_result, gemini_result = await self._process_embeddings_with_timeout(
-                file_id, base_handler, temp_file_path, second_file_path, is_image
+                file_id,
+                base_handler,
+                temp_file_path,
+                second_file_path,
+                is_image,
+                extracted_text,
             )
 
             # Extract embedding existence status
@@ -1020,12 +1032,26 @@ class EmbeddingHandler:
         return temp_metadata
 
     def _extract_and_chunk_text(
-        self, base_handler, file_path: str
+        self, base_handler, file_path: str, extracted_text: str = None
     ) -> tuple[str, List[str]]:
-        """Extract text from file and split into chunks."""
-        text = base_handler.extract_text_from_file(file_path)
-        if text.startswith("ERROR:"):
-            raise Exception(f"Error extracting text: {text[7:]}")
+        """Extract text from file and split into chunks.
+
+        Args:
+            base_handler: Base handler for text operations
+            file_path: Path to the file (used if extracted_text is not provided)
+            extracted_text: Pre-extracted text (if available from FileHandler)
+        """
+        # Use pre-extracted text if available, otherwise extract from file
+        if extracted_text:
+            logging.info(
+                "Using pre-extracted text from FileHandler (avoiding duplicate extraction)"
+            )
+            text = extracted_text
+        else:
+            logging.info("No pre-extracted text found, extracting from file")
+            text = base_handler.extract_text_from_file(file_path)
+            if text.startswith("ERROR:"):
+                raise Exception(f"Error extracting text: {text[7:]}")
 
         # Save extracted text to diagnostic file
         self._save_extracted_text_for_diagnosis(file_path, text)
@@ -1115,8 +1141,14 @@ class EmbeddingHandler:
         logging.info(f"Processing image file {file_id} with Azure-only embeddings")
 
         try:
+            # Get pre-extracted text from metadata if available
+            metadata = self._get_metadata(file_id)
+            extracted_text = metadata.get("extracted_text") if metadata else None
+
             # Process only GPT-4 analysis for embeddings
-            _, gpt4_chunks = self._extract_and_chunk_text(base_handler, temp_file_path)
+            _, gpt4_chunks = self._extract_and_chunk_text(
+                base_handler, temp_file_path, extracted_text
+            )
             self._log_chunk_info(base_handler, gpt4_chunks, "GPT-4")
             azure_result = await self._create_azure_embeddings(file_id, gpt4_chunks)
             logging.info(
@@ -1157,13 +1189,27 @@ class EmbeddingHandler:
             }
 
     async def _process_regular_file(
-        self, file_id: str, base_handler, temp_file_path: str
+        self,
+        file_id: str,
+        base_handler,
+        temp_file_path: str,
+        extracted_text: str = None,
     ) -> tuple[Dict, Dict]:
         """Process regular (non-image) file using only Azure embeddings for all models."""
         logging.info(f"Processing non-image file with file_id: {file_id}")
 
+        # Use provided extracted text, get from file handler, or get from metadata if available
+        if not extracted_text and self.file_handler:
+            extracted_text = self.file_handler.get_extracted_text(file_id)
+
+        if not extracted_text:
+            metadata = self._get_metadata(file_id)
+            extracted_text = metadata.get("extracted_text") if metadata else None
+
         # Extract text and create chunks
-        _, text_chunks = self._extract_and_chunk_text(base_handler, temp_file_path)
+        _, text_chunks = self._extract_and_chunk_text(
+            base_handler, temp_file_path, extracted_text
+        )
         self._log_chunk_info(base_handler, text_chunks)
 
         # Create only Azure embeddings for all use cases

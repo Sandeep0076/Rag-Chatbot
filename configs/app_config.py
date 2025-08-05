@@ -117,6 +117,10 @@ class Config(BaseSettings):
         default=False,
         description="Save extracted text to diagnostic files for debugging",
     )
+    save_extracted_text_in_metadata: bool = Field(
+        default=False,
+        description="Save extracted text in file metadata to avoid duplicate extraction",
+    )
 
     class Config:
         env_nested_delimiter = "__"

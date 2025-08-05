@@ -82,8 +82,13 @@ configs = Config()
 gcs_handler = GCSHandler(configs)
 gemini_handler = GeminiHandler(configs, gcs_handler)
 file_handler = FileHandler(configs, gcs_handler, gemini_handler)
+# Set file hash database flag based on config
+file_handler.use_file_hash_db = configs.use_file_hash_db
+logging.info(
+    f"File hash database lookup {'enabled' if configs.use_file_hash_db else 'disabled'}"
+)
 model_handler = ModelHandler(configs, gcs_handler)
-embedding_handler = EmbeddingHandler(configs, gcs_handler)
+embedding_handler = EmbeddingHandler(configs, gcs_handler, file_handler)
 # Initialize image handlers only once
 dalle_handler = DalleImageGenerator(configs)
 imagen_handler = ImagenGenerator(configs)
@@ -1086,13 +1091,7 @@ async def upload_file(
     All file processing is done asynchronously and in parallel when multiple files are uploaded.
     Embeddings creation and other post-processing happens in background tasks.
     """
-    # Update FileHandler with database session for file hash lookup
-    if configs.use_file_hash_db:
-        # The db parameter is a context manager, we need to get the actual session
-        # For now, we'll create a new session when needed in the FileHandler
-        file_handler.update_db_session(
-            None
-        )  # We'll handle session creation in FileHandler
+    # FileHandler database flag is already set at module level
 
     try:
         # Parse existing file IDs if provided (do this before URL processing)
@@ -1733,6 +1732,38 @@ async def create_embeddings_background(
 
         # If embeddings were created successfully, trigger background upload
         if embedding_result["status"] == "ready_for_chat":
+            # Store file hash in database if the feature is enabled
+            if configs.use_file_hash_db and file_metadata:
+                file_hash = file_metadata.get("file_hash")
+                original_filename = file_metadata.get("original_filename")
+                if file_hash:
+                    try:
+                        # Import database function and store hash directly
+                        from rtl_rag_chatbot_api.common.db import (
+                            insert_file_info_record,
+                        )
+
+                        with get_db_session() as db_session:
+                            result = insert_file_info_record(
+                                db_session,
+                                file_id,
+                                file_hash,
+                                original_filename,
+                                "azure-03-small",
+                            )
+                            if result["status"] == "success":
+                                logging.info(
+                                    f"Successfully stored file hash in database for file_id: {file_id}"
+                                )
+                            else:
+                                logging.error(
+                                    f"Failed to store file hash in database: {result['message']}"
+                                )
+                    except Exception as hash_store_error:
+                        logging.error(
+                            f"Failed to store file hash in database: {str(hash_store_error)}"
+                        )
+
             # Start the GCS upload as a non-blocking operation using background_tasks if available
             if background_tasks:
                 # Use FastAPI's BackgroundTasks for proper non-blocking execution
@@ -3749,6 +3780,7 @@ async def insert_file_info(
     file_id: str = Form(...),
     file_hash: str = Form(...),
     filename: str = Form(None),
+    embedding_type: str = Form("azure-03-small"),
     current_user=Depends(get_current_user),
 ):
     """Insert a new record into the FileInfo table."""
@@ -3756,7 +3788,9 @@ async def insert_file_info(
 
     # Use the context manager properly
     with get_db_session() as db:
-        result = insert_file_info_record(db, file_id, file_hash, filename)
+        result = insert_file_info_record(
+            db, file_id, file_hash, filename, embedding_type
+        )
 
         if result["status"] == "success":
             return JSONResponse(status_code=200, content=result)

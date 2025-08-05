@@ -29,6 +29,7 @@ class FileInfo(Base):
     file_name = Column(
         String, nullable=True
     )  # Using the correct column name from database
+    embedding_type = Column(String, nullable=True, default="azure-03-small")
     createdAt = Column(DateTime, nullable=False)
 
 
@@ -70,7 +71,11 @@ def find_file_by_hash_db(session: Session, file_hash: str) -> Optional[str]:
 
 
 def insert_file_info_record(
-    session: Session, file_id: str, file_hash: str, filename: str = None
+    session: Session,
+    file_id: str,
+    file_hash: str,
+    filename: str = None,
+    embedding_type: str = "azure-03-small",
 ) -> Dict[str, Any]:
     """
     Insert a new record into the FileInfo table.
@@ -80,6 +85,7 @@ def insert_file_info_record(
         file_id: The file ID
         file_hash: The file hash
         filename: The original filename (optional)
+        embedding_type: The embedding type to use (default: "azure-03-small")
 
     Returns:
         Dict containing the result of the operation
@@ -97,6 +103,7 @@ def insert_file_info_record(
             file_id=file_id,
             file_hash=file_hash,
             file_name=filename,  # Using the correct column name
+            embedding_type=embedding_type,
             createdAt=datetime.now(),
         )
 
@@ -113,6 +120,7 @@ def insert_file_info_record(
                 "file_id": new_file_info.file_id,
                 "file_hash": new_file_info.file_hash,
                 "filename": new_file_info.file_name,
+                "embedding_type": new_file_info.embedding_type,
                 "createdAt": new_file_info.createdAt.isoformat(),
             },
         }
@@ -145,6 +153,7 @@ def check_file_hash_exists(session: Session, file_hash: str) -> Dict[str, Any]:
                 FileInfo.file_id,
                 FileInfo.file_hash,
                 FileInfo.file_name,
+                FileInfo.embedding_type,
                 FileInfo.createdAt,
             )
             .filter(FileInfo.file_hash == file_hash)
@@ -165,6 +174,7 @@ def check_file_hash_exists(session: Session, file_hash: str) -> Dict[str, Any]:
                     "file_id": existing_record.file_id,
                     "file_hash": existing_record.file_hash,
                     "filename": existing_record.file_name,
+                    "embedding_type": existing_record.embedding_type,
                     "createdAt": existing_record.createdAt.isoformat(),
                 },
             }
@@ -198,12 +208,12 @@ def delete_file_info_by_file_id(session: Session, file_id: str) -> Dict[str, Any
         Dict containing the result of the deletion operation
     """
     try:
-        # Query for existing records with the file_id
-        existing_records = (
-            session.query(FileInfo).filter(FileInfo.file_id == file_id).all()
+        # Check if any records exist with the file_id
+        record_count = (
+            session.query(FileInfo).filter(FileInfo.file_id == file_id).count()
         )
 
-        if not existing_records:
+        if record_count == 0:
             logging.info(f"No FileInfo records found for file_id: {file_id}")
             return {
                 "status": "success",
@@ -212,20 +222,7 @@ def delete_file_info_by_file_id(session: Session, file_id: str) -> Dict[str, Any
                 "deleted_count": 0,
             }
 
-        # Store information about records to be deleted
-        deleted_records_info = []
-        for record in existing_records:
-            deleted_records_info.append(
-                {
-                    "id": record.id,
-                    "file_id": record.file_id,
-                    "file_hash": record.file_hash,
-                    "filename": record.file_name,
-                    "createdAt": record.createdAt.isoformat(),
-                }
-            )
-
-        # Delete all records with the specified file_id
+        # Delete all records with the specified file_id directly
         deleted_count = (
             session.query(FileInfo).filter(FileInfo.file_id == file_id).delete()
         )
@@ -239,7 +236,6 @@ def delete_file_info_by_file_id(session: Session, file_id: str) -> Dict[str, Any
             "deleted": True,
             "message": f"Successfully deleted {deleted_count} record(s)",
             "deleted_count": deleted_count,
-            "deleted_records": deleted_records_info,
         }
     except Exception as e:
         logging.error(f"Error deleting FileInfo records for file_id {file_id}: {e}")
@@ -275,21 +271,7 @@ def delete_all_file_info_records(session: Session) -> Dict[str, Any]:
                 "deleted_count": 0,
             }
 
-        # Get all records for logging purposes (optional - can be removed for performance)
-        all_records = session.query(FileInfo).all()
-        deleted_records_info = []
-        for record in all_records:
-            deleted_records_info.append(
-                {
-                    "id": record.id,
-                    "file_id": record.file_id,
-                    "file_hash": record.file_hash,
-                    "filename": record.file_name,
-                    "createdAt": record.createdAt.isoformat(),
-                }
-            )
-
-        # Delete all records from FileInfo table
+        # Delete all records from FileInfo table directly
         deleted_count = session.query(FileInfo).delete()
         session.commit()
 
@@ -301,7 +283,6 @@ def delete_all_file_info_records(session: Session) -> Dict[str, Any]:
             "deleted": True,
             "message": f"Successfully deleted all {deleted_count} record(s) from FileInfo table",
             "deleted_count": deleted_count,
-            "deleted_records": deleted_records_info,
         }
     except Exception as e:
         logging.error(f"Error deleting all FileInfo records: {e}")

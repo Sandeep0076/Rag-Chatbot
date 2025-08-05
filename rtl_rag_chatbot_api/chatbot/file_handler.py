@@ -43,6 +43,8 @@ class FileHandler:
         self.db_session = db_session
         self.use_file_hash_db = getattr(configs, "use_file_hash_db", False)
         self.encryption_manager = FileEncryptionManager(gcs_handler)
+        # Temporary storage for extracted text to pass to embedding handler
+        self._extracted_text_storage = {}
 
     def update_db_session(self, db_session):
         """
@@ -53,8 +55,42 @@ class FileHandler:
         """
         self.db_session = db_session
 
+    def store_extracted_text(self, file_id: str, extracted_text: str):
+        """
+        Store extracted text temporarily for passing to embedding handler.
+
+        Args:
+            file_id: The file ID
+            extracted_text: The extracted text to store
+        """
+        self._extracted_text_storage[file_id] = extracted_text
+        logging.info(
+            f"Stored extracted text for {file_id} (length: {len(extracted_text)})"
+        )
+
+    def get_extracted_text(self, file_id: str) -> str:
+        """
+        Retrieve and remove extracted text for a file.
+
+        Args:
+            file_id: The file ID
+
+        Returns:
+            The extracted text or None if not found
+        """
+        extracted_text = self._extracted_text_storage.pop(file_id, None)
+        if extracted_text:
+            logging.info(
+                f"Retrieved extracted text for {file_id} (length: {len(extracted_text)})"
+            )
+        return extracted_text
+
     async def store_file_hash_in_db(
-        self, file_id: str, file_hash: str, filename: str = None
+        self,
+        file_id: str,
+        file_hash: str,
+        filename: str = None,
+        embedding_type: str = "azure-03-small",
     ):
         """
         Store file hash and filename in the database if the feature is enabled.
@@ -63,6 +99,7 @@ class FileHandler:
             file_id: The file ID
             file_hash: The file hash to store
             filename: The original filename to store (optional)
+            embedding_type: The embedding type to use (default: "azure-03-small")
         """
         if self.use_file_hash_db:
             try:
@@ -71,7 +108,7 @@ class FileHandler:
 
                 with get_db_session() as db_session:
                     result = insert_file_info_record(
-                        db_session, file_id, file_hash, filename
+                        db_session, file_id, file_hash, filename, embedding_type
                     )
                     if result["status"] == "success":
                         logging.info(
@@ -308,8 +345,10 @@ class FileHandler:
             logging.error(f"Error uploading metadata: {str(e)}")
             raise
 
-        # Store file hash and filename in database if enabled
-        await self.store_file_hash_in_db(file_id, file_hash, original_filename)
+        # Store file hash and filename in database if enabled for tabular files
+        await self.store_file_hash_in_db(
+            file_id, file_hash, original_filename, "azure-03-small"
+        )
 
         return {
             "file_id": file_id,
@@ -768,7 +807,7 @@ class FileHandler:
 
             # Validate text content for document files before encryption
             file_extension = os.path.splitext(original_filename)[1].lower()
-            if file_extension in [".pdf", ".doc", ".docx"] and not is_image:
+            if file_extension in [".pdf", ".doc", ".docx", ".txt"] and not is_image:
                 try:
                     # Create a base handler for text extraction
                     base_handler = BaseRAGHandler(self.configs, self.gcs_handler)
@@ -793,6 +832,18 @@ class FileHandler:
                             "embeddings_exist": False,
                             "temp_file_path": None,
                         }
+
+                    # Calculate word count for extracted text
+                    word_count = len(extracted_text.split())
+                    logging.info(
+                        f"Text extraction completed for {original_filename}: "
+                        f"{len(extracted_text)} characters, {word_count} words"
+                    )
+
+                    # Store extracted text in a temporary variable for metadata
+                    self.extracted_text_cache = extracted_text
+                    # Store extracted text for embedding handler to avoid duplicate extraction
+                    self.store_extracted_text(file_id, extracted_text)
 
                     # Validate text length for document files (minimum 100 characters)
                     cleaned_text = extracted_text.strip()
@@ -920,11 +971,6 @@ class FileHandler:
                 metadata,
             )
 
-            # Store file hash and filename in database if enabled
-            await self.store_file_hash_in_db(
-                actual_file_id, file_hash, original_filename
-            )
-
             # Return final response
             return self._prepare_file_success_response(
                 actual_file_id,
@@ -1037,7 +1083,7 @@ class FileHandler:
         file_id: str,
     ):
         """Prepare metadata for the processed file"""
-        return {
+        metadata = {
             "is_image": is_image,
             "is_tabular": is_tabular or is_database,
             "file_hash": file_hash,
@@ -1045,6 +1091,27 @@ class FileHandler:
             "original_filename": original_filename,
             "file_id": file_id,  # Always use the actual file_id (existing or new)
         }
+
+        # Add extracted text and word count if available and feature is enabled
+        if (
+            hasattr(self, "extracted_text_cache")
+            and self.extracted_text_cache
+            and getattr(self.configs, "save_extracted_text_in_metadata", False)
+        ):
+            metadata["extracted_text"] = self.extracted_text_cache
+            metadata["word_count"] = len(self.extracted_text_cache.split())
+            logging.info(
+                "Saved extracted text in metadata to avoid duplicate extraction"
+            )
+            # Clear the cache after use
+            self.extracted_text_cache = None
+        elif hasattr(self, "extracted_text_cache") and self.extracted_text_cache:
+            # Just save word count, not the full text
+            metadata["word_count"] = len(self.extracted_text_cache.split())
+            # Clear the cache after use
+            self.extracted_text_cache = None
+
+        return metadata
 
     async def _handle_file_conflicts(
         self,
@@ -1357,12 +1424,6 @@ class FileHandler:
                 )
                 logging.info(
                     f"Completed embedding creation for URL {url} with file_id {url_file_id}"
-                )
-                # Store file hash and filename in database if enabled
-                await self.store_file_hash_in_db(url_file_id, content_hash)
-                url_filename = title if title else "url_content.txt"
-                await self.store_file_hash_in_db(
-                    url_file_id, content_hash, url_filename
                 )
 
                 return {
