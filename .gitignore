@@ -1,5 +1,6 @@
 .windsurfrules
 run.sh
+.env
 # Folders
 structure.txt
 .idea/
@@ -27,3 +28,4 @@ env_variables.txt
 env_variables.txt
 old_working_chatwithcsv/
 userinput.py
+rag.mdc
