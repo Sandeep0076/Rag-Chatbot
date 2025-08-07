@@ -456,7 +456,7 @@ Generate an image based on a text prompt using DALL-E 3 or Imagen models.
   ```json
   {
     "success": true,
-    "image_url": "https://example.com/generated-image.png",
+    "image_urls": ["https://example.com/generated-image.png"],
     "prompt": "A futuristic city with flying cars",
     "model": "dall-e-3",
     "size": "1024x1024"
@@ -493,12 +493,12 @@ Generate images using both DALL-E and Imagen models concurrently with the same p
     "success": true,
     "dalle_result": {
       "success": true,
-      "image_url": "https://example.com/dalle-image.png",
+      "image_urls": ["https://example.com/dalle-image.png"],
       "model": "dall-e-3"
     },
     "imagen_result": {
       "success": true,
-      "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+      "image_urls": ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."],
       "model": "imagen-3.0"
     },
     "prompt": "A beautiful sunset over mountains",

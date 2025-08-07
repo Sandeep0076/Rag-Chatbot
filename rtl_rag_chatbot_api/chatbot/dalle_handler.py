@@ -47,7 +47,8 @@ class DalleImageGenerator:
             n (int): Number of images to generate (default: 1)
 
         Returns:
-            Dict[str, Any]: Response containing the generated image URL and other metadata
+            Dict[str, Any]: Response containing the generated image URLs and other metadata
+            Uses optimized response format with single image_urls array to reduce memory usage
 
         Raises:
             Exception: If there's an error in generating the image
@@ -65,12 +66,18 @@ class DalleImageGenerator:
             # Extract response data
             response_data = json.loads(result.model_dump_json())
 
-            # Extract image URL
-            image_url = response_data["data"][0]["url"]
+            # Extract image URLs - DALL-E typically returns one image
+            image_urls = [item["url"] for item in response_data["data"]]
+
+            # Log memory optimization info
+            logging.info(
+                f"Optimized DALL-E response: returning {len(image_urls)} URLs in single array"
+            )
 
             return {
                 "success": True,
-                "image_url": image_url,
+                "is_base64": False,  # DALL-E returns HTTP URLs, not base64 data
+                "image_urls": image_urls,  # Single source of truth for image URLs
                 "prompt": prompt,
                 "model": self.configs.azure_dalle_3.model_name,
                 "size": size,
