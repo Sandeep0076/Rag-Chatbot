@@ -49,21 +49,21 @@ def get_conversations_by_file_ids(session: Session, file_ids: str) -> datetime:
     return conversations
 
 
-def find_file_by_hash_db(session: Session, file_hash: str) -> Optional[str]:
+def find_file_by_hash_db(session: Session, file_hash: str) -> Optional[tuple[str, str]]:
     """
-    Find file_id by file_hash from database.
+    Find file_id and embedding_type by file_hash from database.
 
     Args:
         session: Database session
         file_hash: The file hash to search for
 
     Returns:
-        file_id if found, None otherwise
+        tuple of (file_id, embedding_type) if found, None otherwise
     """
     try:
         result = check_file_hash_exists(session, file_hash)
         if result["status"] == "success" and result["exists"]:
-            return result["data"]["file_id"]
+            return result["data"]["file_id"], result["data"]["embedding_type"]
         return None
     except Exception as e:
         logging.error(f"Error finding file by hash in database: {e}")

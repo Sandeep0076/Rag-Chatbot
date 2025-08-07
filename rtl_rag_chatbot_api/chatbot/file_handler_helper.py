@@ -91,7 +91,7 @@ async def process_single_url(
         content_hash = self.calculate_file_hash(content.encode("utf-8"))
 
         # Check if we've already processed this content
-        existing_file_id = await self.find_existing_file_by_hash_async(content_hash)
+        existing_file_id, _ = await self.find_existing_file_by_hash_async(content_hash)
 
         # If we found existing content with the same hash, reuse it
         if existing_file_id:

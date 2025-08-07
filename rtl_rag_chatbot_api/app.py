@@ -42,6 +42,9 @@ from rtl_rag_chatbot_api.chatbot.gemini_handler import (
 )
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.imagen_handler import ImagenGenerator
+from rtl_rag_chatbot_api.chatbot.migration_handler import (
+    decide_migration_for_mixed_upload,
+)
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
@@ -1114,58 +1117,93 @@ async def upload_file(
                     detail=f"Invalid format for existing_file_ids: {str(e)}",
                 )
 
-        # Handle URL processing - may need to combine with existing file IDs
-        if urls:
-            # Check if we also have existing file IDs to process
-            if parsed_existing_file_ids:
-                # Combined mode: URLs + existing file IDs
-                logging.info(
-                    f"Processing URLs and {len(parsed_existing_file_ids)} existing file IDs together"
-                )
-
-                # Process URLs first
-                url_response_data = await process_url_content(
-                    file_handler, embedding_handler, urls, username, background_tasks
-                )
-
-                # Process existing file IDs
-                existing_results = await process_existing_file_ids_in_parallel(
-                    parsed_existing_file_ids, username, background_tasks
-                )
-
-                # Extract URL results and combine with existing file IDs
-                url_file_ids = url_response_data.get("file_ids", [])
-                url_filenames = url_response_data.get("original_filenames", [])
-                # Safely handle case where filenames list might be shorter than file_ids list
-                url_results = []
-                for i, file_id in enumerate(url_file_ids):
-                    filename = (
-                        url_filenames[i]
-                        if i < len(url_filenames)
-                        else f"url_file_{file_id}"
-                    )
-                    url_results.append((file_id, filename, False))
-
-                # Combine both results
-                return combine_upload_results(existing_results, url_results)
-            else:
-                # URLs only
-                response_data = await process_url_content(
-                    file_handler, embedding_handler, urls, username, background_tasks
-                )
-                return JSONResponse(content=response_data)
-
-        # Continue processing existing file IDs and new files if no URLs were processed
-
         # Combine files from both parameters
         all_files = prepare_file_list(file, files)
 
-        # Process existing file IDs and new files
-        if len(parsed_existing_file_ids) > 0 or len(all_files) > 0:
+        # ===== MIGRATION DECISION LOGIC - ONLY FOR MULTI-FILE SCENARIOS =====
+        # Check if this is a multi-file scenario (multiple files OR existing file IDs OR both)
+        is_multi_file_scenario = (
+            len(all_files) > 1
+            or len(parsed_existing_file_ids) > 0  # Multiple new files
+            or (  # Existing file IDs
+                len(all_files) == 1 and len(parsed_existing_file_ids) > 0
+            )  # One new file + existing file IDs
+        )
+
+        if is_multi_file_scenario:
             logging.info(
-                f"Processing {len(all_files)} new files and {len(parsed_existing_file_ids)} existing file IDs"
+                "=== MULTI-FILE SCENARIO DETECTED - RUNNING MIGRATION CHECK ==="
+            )
+            logging.info(
+                f"New files: {len(all_files)}, Existing file IDs: {len(parsed_existing_file_ids)}"
             )
 
+            # Prepare file contents for migration check (only for new files)
+            file_contents_for_migration = []
+            if len(all_files) > 0:
+                # We need to read file contents for hash calculation
+                for uploaded_file in all_files:
+                    try:
+                        content = await uploaded_file.read()
+                        # Reset file pointer for later processing
+                        await uploaded_file.seek(0)
+                        # Use a temporary ID for migration check
+                        temp_id = f"temp_{uploaded_file.filename}"
+                        file_contents_for_migration.append((temp_id, content))
+                        logging.info(
+                            f"Added file {uploaded_file.filename} for migration check"
+                        )
+                    except Exception as e:
+                        logging.error(
+                            f"Error reading file {uploaded_file.filename}: {str(e)}"
+                        )
+
+            # Call migration decision function
+            try:
+                migration_decision = await decide_migration_for_mixed_upload(
+                    file_contents=file_contents_for_migration,
+                    existing_file_ids=parsed_existing_file_ids,
+                    configs=configs,
+                )
+
+                # Log migration decision results
+                logging.info("=== MIGRATION DECISION RESULTS ===")
+                logging.info(
+                    f"Migration needed: {migration_decision['migration_needed']}"
+                )
+                logging.info(f"Reason: {migration_decision['reason']}")
+                logging.info(
+                    f"Files to migrate: {migration_decision['files_to_migrate']}"
+                )
+                logging.info(f"File breakdown: {migration_decision['file_counts']}")
+
+                # DEBUG: Add break statement here to stop execution
+                logging.info(
+                    "=== DEBUG BREAK: Migration decision made, stopping execution ==="
+                )
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "message": "Migration decision check completed - DEBUG MODE",
+                        "migration_decision": migration_decision,
+                        "debug_info": {
+                            "is_multi_file_scenario": is_multi_file_scenario,
+                            "new_files_count": len(file_contents_for_migration),
+                            "existing_file_ids_count": len(parsed_existing_file_ids),
+                            "total_files_checked": len(file_contents_for_migration)
+                            + len(parsed_existing_file_ids),
+                        },
+                    },
+                )
+
+            except Exception as e:
+                logging.error(f"Error in migration decision logic: {str(e)}")
+                # Continue with normal processing if migration check fails
+                logging.info(
+                    "Continuing with normal file processing due to migration check error"
+                )
+            # ===== END MIGRATION DECISION LOGIC =====
+        else:
             # Process existing file IDs in parallel
             existing_results = []
             if parsed_existing_file_ids:

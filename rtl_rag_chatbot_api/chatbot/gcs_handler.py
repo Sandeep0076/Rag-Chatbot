@@ -298,18 +298,19 @@ class GCSHandler:
                     from rtl_rag_chatbot_api.common.db import find_file_by_hash_db
 
                     with get_db_session() as db_session:
-                        file_id = find_file_by_hash_db(db_session, file_hash)
-                        if file_id:
+                        result = find_file_by_hash_db(db_session, file_hash)
+                        if result:
+                            file_id, embedding_type = result
                             logging.info(f"File found in database with ID: {file_id}")
-                            return file_id
+                            return file_id, embedding_type
                         else:
                             logging.info(
                                 f"No file found in database with hash: {file_hash}"
                             )
-                            return None
+                            return None, None
                 except Exception as e:
                     logging.error(f"Error in database lookup: {str(e)}")
-                    return None
+                    return None, None
 
             # Fallback to GCS lookup
             blobs = self._storage_client.list_blobs(
@@ -320,13 +321,14 @@ class GCSHandler:
                 if blob.name.endswith("/file_info.json"):
                     file_info = json.loads(blob.download_as_bytes().decode("utf-8"))
                     if file_info.get("file_hash") == file_hash:
-                        return file_info.get("file_id")
-
+                        return file_info.get("file_id"), file_info.get(
+                            "embedding_type", "azure-03-small"
+                        )
             logging.info(f"No file found with hash: {file_hash}")
-            return None
+            return None, None
         except Exception as e:
             logging.error(f"Error in find_existing_file_by_hash: {str(e)}")
-            return None
+            return None, None
 
     def get_file_info(self, file_id: str):
         blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")

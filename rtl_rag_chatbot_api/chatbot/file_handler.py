@@ -1019,7 +1019,7 @@ class FileHandler:
         """Check if a file with the same hash already exists and verify it's not a hash collision"""
         azure_result = {"embeddings_exist": False}
 
-        existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
+        existing_file_id, _ = await self.find_existing_file_by_hash_async(file_hash)
         if not existing_file_id:
             return None, azure_result
 
@@ -1243,21 +1243,22 @@ class FileHandler:
                 from rtl_rag_chatbot_api.common.db import find_file_by_hash_db
 
                 with get_db_session() as db_session:
-                    file_id = find_file_by_hash_db(db_session, file_hash)
-                    if file_id:
+                    result = find_file_by_hash_db(db_session, file_hash)
+                    if result:
+                        file_id, embedding_type = result
                         logging.info(f"File found in database with ID: {file_id}")
-                        return file_id
+                        return file_id, embedding_type
                     else:
                         logging.info(
                             f"No file found in database with hash: {file_hash}"
                         )
-                        return None
+                        return None, None
 
             except Exception as db_e:
                 logging.error(
                     f"Error during file_hash_db lookup: {str(db_e)}", exc_info=True
                 )
-                return None
+                return None, None
         else:
             # Fallback to GCS lookup if not using file_hash_db
             return await asyncio.to_thread(
@@ -1347,7 +1348,7 @@ class FileHandler:
                 content_hash = self.calculate_file_hash(content.encode("utf-8"))
                 logging.info(f"Calculated hash for {url}: {content_hash[:16]}...")
 
-                existing_file_id = await self.find_existing_file_by_hash_async(
+                existing_file_id, _ = await self.find_existing_file_by_hash_async(
                     content_hash
                 )
 
