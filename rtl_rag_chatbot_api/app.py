@@ -1177,10 +1177,18 @@ async def upload_file(
                 )
                 logging.info(f"File breakdown: {migration_decision['file_counts']}")
 
-                # DEBUG: Add break statement here to stop execution
-                logging.info(
-                    "=== DEBUG BREAK: Migration decision made, stopping execution ==="
+                # Log detailed file info for all files
+                from rtl_rag_chatbot_api.chatbot.migration_handler import (
+                    log_detailed_migration_file_info,
                 )
+
+                await log_detailed_migration_file_info(
+                    migration_decision["files_to_migrate"],
+                    migration_decision["existing_files_no_migration"],
+                    migration_decision["new_files"],
+                    configs,
+                )
+
                 return JSONResponse(
                     status_code=200,
                     content={

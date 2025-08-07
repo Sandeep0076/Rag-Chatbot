@@ -171,44 +171,40 @@ def classify_files_by_embedding_type(
     return classification
 
 
-# async def migrate_single_file_embedding(file_id: str, configs: dict) -> MigrationResult:
-#     """
-#     Migrate a single file from legacy to new embedding type
-#     This is a dummy function for now - implement actual migration logic later
+async def migrate_single_file_embedding(file_id: str, configs: dict) -> MigrationResult:
+    """
+    Migrate a single file from legacy to new embedding type
+    This is a dummy function for now - implement actual migration logic later
 
-#     Args:
-#         file_id: File ID to migrate
-#         configs: Configuration dictionary
+    Args:
+        file_id: File ID to migrate
+        configs: Configuration dictionary
 
-#     Returns:
-#         MigrationResult object
-#     """
-#     try:
-#         logger.info(f"Starting migration for file {file_id} from {LEGACY_EMBEDDING_TYPE} to {NEW_EMBEDDING_TYPE}")
+    Returns:
+        MigrationResult object
+    """
+    try:
+        logger.info(
+            f"Starting migration for file {file_id} from {LEGACY_EMBEDDING_TYPE} to {NEW_EMBEDDING_TYPE}"
+        )
 
-#         # TODO: Implement actual migration logic:
-#         # 1. Load existing embeddings
-#         # 2. Delete old embeddings
-#         # 3. Create new embeddings with azure-03-small
-#         # 4. Update database records
+        # TODO: Implement actual migration logic:
+        # 1. Load existing embeddings
+        # 2. Delete old embeddings
+        # 3. Create new embeddings with azure-03-small
+        # 4. Update database records
 
-#         # Dummy implementation for now
-#         await asyncio.sleep(0.1)  # Simulate processing time
+        # Dummy implementation for now
+        await asyncio.sleep(0.1)  # Simulate processing time
 
-#         logger.info(f"Migration completed successfully for file {file_id}")
-#         return MigrationResult(
-#             file_id=file_id,
-#             success=True,
-#             embedding_type=NEW_EMBEDDING_TYPE
-#         )
+        logger.info(f"Migration completed successfully for file {file_id}")
+        return MigrationResult(
+            file_id=file_id, success=True, embedding_type=NEW_EMBEDDING_TYPE
+        )
 
-#     except Exception as e:
-#         logger.error(f"Migration failed for file {file_id}: {str(e)}")
-#         return MigrationResult(
-#             file_id=file_id,
-#             success=False,
-#             error=str(e)
-#         )
+    except Exception as e:
+        logger.error(f"Migration failed for file {file_id}: {str(e)}")
+        return MigrationResult(file_id=file_id, success=False, error=str(e))
 
 
 # async def migrate_files_in_parallel(file_ids: List[str], configs: dict) -> List[MigrationResult]:
@@ -376,10 +372,13 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
     Returns:
         Dictionary with:
         {
-            'files_to_migrate': List[str],  # File IDs that need migration
-            'migration_needed': bool,       # Whether any migration is needed
-            'reason': str,                  # Explanation of the decision
-            'file_counts': Dict            # Breakdown of file types
+            'files_to_migrate': List[str],              # File IDs that need migration
+            'existing_files_no_migration': List[str],    # Existing file IDs that don't need migration
+            'new_files': List[str],                     # New file IDs that need to be processed
+            'migration_needed': bool,                   # Whether any migration is needed
+            'reason': str,                              # Explanation of the decision
+            'file_counts': Dict,                       # Breakdown of file types
+            'file_classification': Dict                # Complete classification of all files
         }
     """
     # Classify files by type
@@ -404,32 +403,44 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
         "total_existing": total_existing_files,
     }
 
+    # Separate existing files that don't need migration from new files
+    existing_files_no_migration = new_embedding_files + missing_files
+
     # Decision logic based on flowchart
     if total_existing_files == 0:
         # All files are new - no migration needed
         return {
             "files_to_migrate": [],
+            "existing_files_no_migration": existing_files_no_migration,
+            "new_files": new_files,
             "migration_needed": False,
             "reason": "All files are new - no existing embeddings to migrate",
             "file_counts": file_counts,
+            "file_classification": classification,
         }
 
     elif legacy_count > 0 and new_embedding_count == 0 and new_files_count == 0:
         # ALL existing files are legacy AND no new files - consistent state, no migration needed
         return {
             "files_to_migrate": [],
+            "existing_files_no_migration": existing_files_no_migration,
+            "new_files": new_files,
             "migration_needed": False,
             "reason": "All existing files have legacy embeddings - consistent state, no migration needed",
             "file_counts": file_counts,
+            "file_classification": classification,
         }
 
     elif legacy_count == 0 and new_embedding_count > 0:
         # ALL existing files have new embeddings - consistent state (regardless of new files)
         return {
             "files_to_migrate": [],
+            "existing_files_no_migration": existing_files_no_migration,
+            "new_files": new_files,
             "migration_needed": False,
             "reason": "All existing files have new embeddings - consistent state, no migration needed",
             "file_counts": file_counts,
+            "file_classification": classification,
         }
 
     elif legacy_count > 0 and (new_embedding_count > 0 or new_files_count > 0):
@@ -448,107 +459,25 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
 
         return {
             "files_to_migrate": legacy_files,
+            "existing_files_no_migration": existing_files_no_migration,
+            "new_files": new_files,
             "migration_needed": True,
             "reason": reason,
             "file_counts": file_counts,
+            "file_classification": classification,
         }
 
     else:
         # Edge case - shouldn't happen but handle gracefully
         return {
             "files_to_migrate": [],
+            "existing_files_no_migration": existing_files_no_migration,
+            "new_files": new_files,
             "migration_needed": False,
             "reason": "No clear migration decision could be made",
             "file_counts": file_counts,
+            "file_classification": classification,
         }
-
-
-# async def process_upload_migration_logic_for_new_files(
-#     file_contents: List[Tuple[str, bytes]], configs: dict
-# ) -> Dict[str, Any]:
-#     """
-#     Main function that implements the flowchart logic for handling new file uploads
-#     This should be called for new files being uploaded
-
-#     Args:
-#         file_contents: List of tuples (file_id, file_content_bytes) for new files
-#         configs: Configuration dictionary
-
-#     Returns:
-#         Dictionary containing migration results and recommendations
-#     """
-#     result = {
-#         'needs_processing': True,
-#         'migration_results': [],
-#         'file_classification': {},
-#         'recommendations': []
-#     }
-
-#     if not file_contents:
-#         result['recommendations'].append("No new files to process")
-#         return result
-
-#     logger.info(f"Processing migration logic for {len(file_contents)} new files")
-
-#     # Step 1: Check embedding status of all new files (to see if they already exist)
-#     file_infos = await check_files_embedding_status(file_contents, configs)
-
-#     # Step 2: Classify files by embedding type
-#     classification = classify_files_by_embedding_type(file_infos)
-#     result['file_classification'] = classification
-
-#     # Step 3: Apply flowchart logic
-#     legacy_files = classification['legacy_files']
-#     new_embedding_files = classification['new_embedding_files']
-#     new_files = classification['new_files']
-
-#     # Log current state
-#     logger.info(
-#         f"File classification: {len(legacy_files)} legacy, "
-#         f"{len(new_embedding_files)} new embeddings, {len(new_files)} new files"
-#     )
-
-#     # Decision logic based on flowchart
-#     migration_decision = decide_migration_files(file_infos)
-
-#     if migration_decision['migration_needed']:
-#         files_to_migrate = migration_decision['files_to_migrate']
-#         # Perform migration only on these specific files
-#         result['recommendations'].append(
-#             f"Mixed embedding types detected - migrating {len(files_to_migrate)} legacy files."
-#         )
-#         result['migration_results'] = await migrate_files_in_parallel(files_to_migrate, configs)
-#     else:
-#         # No migration needed - proceed normally
-#         result['recommendations'].append("All files have current embeddings - proceed normally")
-
-#     return result
-
-
-# def get_migration_summary(migration_results: List[MigrationResult]) -> Dict[str, Any]:
-#     """
-#     Generate a summary of migration results
-
-#     Args:
-#         migration_results: List of MigrationResult objects
-
-#     Returns:
-#         Dictionary with migration summary
-#     """
-#     if not migration_results:
-#         return {'total': 0, 'successful': 0, 'failed': 0, 'failures': []}
-
-#     successful = [r for r in migration_results if r.success]
-#     failed = [r for r in migration_results if not r.success]
-
-#     return {
-#         'total': len(migration_results),
-#         'successful': len(successful),
-#         'failed': len(failed),
-#         'successful_files': [r.file_id for r in successful],
-#         'failed_files': [r.file_id for r in failed],
-#         'failures': [{'file_id': r.file_id, 'error': r.error} for r in failed]
-#     }
 
 
 async def check_existing_file_ids_embedding_status(
@@ -631,3 +560,75 @@ async def decide_migration_for_mixed_upload(
 
     # Apply the corrected migration decision logic
     return decide_migration_files(all_file_infos)
+
+
+async def log_detailed_migration_file_info(
+    files_to_migrate: List[str],
+    existing_files_no_migration: List[str],
+    new_files: List[str],
+    configs: dict,
+) -> None:
+    """
+    Log detailed file information for all files (migration needed, existing no migration, and new files).
+
+    Args:
+        files_to_migrate: List of file IDs that need migration
+        existing_files_no_migration: List of existing file IDs that don't need migration
+        new_files: List of new file IDs that need to be processed
+        configs: Configuration dictionary
+    """
+    gcs_handler = GCSHandler(configs)
+
+    # Log files that need migration
+    if files_to_migrate:
+        logger.info("=== FILES THAT NEED MIGRATION ===")
+        for file_id in files_to_migrate:
+            file_info = gcs_handler.get_file_info(file_id)
+            if file_info:
+                file_id_from_info = file_info.get("file_id", "N/A")
+                usernames = file_info.get("username", [])
+                if not isinstance(usernames, list):
+                    usernames = [usernames] if usernames else []
+                logger.info(
+                    f"File ID: {file_id_from_info}, "
+                    f"Usernames: {usernames}, "
+                    f"Embedding Type: {file_info.get('embedding_type', 'N/A')}"
+                )
+            else:
+                logger.warning(f"No file info found for file ID: {file_id}")
+
+    # Log existing files that don't need migration
+    if existing_files_no_migration:
+        logger.info("=== EXISTING FILES THAT DON'T NEED MIGRATION ===")
+        for file_id in existing_files_no_migration:
+            file_info = gcs_handler.get_file_info(file_id)
+            if file_info:
+                file_id_from_info = file_info.get("file_id", "N/A")
+                usernames = file_info.get("username", [])
+                if not isinstance(usernames, list):
+                    usernames = [usernames] if usernames else []
+                logger.info(
+                    f"File ID: {file_id_from_info}, "
+                    f"Usernames: {usernames}, "
+                    f"Embedding Type: {file_info.get('embedding_type', 'N/A')}"
+                )
+            else:
+                logger.warning(f"No file info found for file ID: {file_id}")
+
+    # Log new files that need to be processed
+    if new_files:
+        logger.info("=== NEW FILES THAT NEED TO BE PROCESSED ===")
+        for file_id in new_files:
+            logger.info(
+                f"New File ID: {file_id} - Will be processed with azure-03-small embeddings"
+            )
+
+    # Log summary
+    total_files = (
+        len(files_to_migrate) + len(existing_files_no_migration) + len(new_files)
+    )
+    logger.info(
+        f"=== SUMMARY: {len(files_to_migrate)} files need migration, "
+        f"{len(existing_files_no_migration)} existing files don't need migration, "
+        f"{len(new_files)} new files to process (Total: {total_files}) ==="
+    )
