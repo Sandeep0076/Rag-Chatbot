@@ -367,7 +367,7 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
     - If ALL files are new embeddings → NO migration (consistent state)
     - If ALL files are new → NO migration (no existing embeddings)
     - If MIX of legacy + new embeddings → Migrate legacy files
-    - If MIX of legacy + new files → Migrate legacy files
+    - If MIX of legacy + new files → Migrate legacy files (NEW FILES WILL CREATE azure-03-small!)
     - If MIX of new embeddings + new files → NO migration
 
     Args:
@@ -414,8 +414,8 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
             "file_counts": file_counts,
         }
 
-    elif legacy_count > 0 and new_embedding_count == 0:
-        # ALL existing files are legacy - no migration needed (consistent state)
+    elif legacy_count > 0 and new_embedding_count == 0 and new_files_count == 0:
+        # ALL existing files are legacy AND no new files - consistent state, no migration needed
         return {
             "files_to_migrate": [],
             "migration_needed": False,
@@ -424,7 +424,7 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
         }
 
     elif legacy_count == 0 and new_embedding_count > 0:
-        # ALL existing files have new embeddings - no migration needed (consistent state)
+        # ALL existing files have new embeddings - consistent state (regardless of new files)
         return {
             "files_to_migrate": [],
             "migration_needed": False,
@@ -432,13 +432,24 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
             "file_counts": file_counts,
         }
 
-    elif legacy_count > 0 and new_embedding_count > 0:
-        # MIX of legacy and new embeddings - migrate legacy files (inconsistent state)
+    elif legacy_count > 0 and (new_embedding_count > 0 or new_files_count > 0):
+        # MIX: legacy files + (new embeddings OR new files) - migrate legacy files
+        # New files will create azure-03-small embeddings, creating mixed state
+        reason_parts = []
+        if new_embedding_count > 0:
+            reason_parts.append(f"{new_embedding_count} existing new-embedding files")
+        if new_files_count > 0:
+            reason_parts.append(
+                f"{new_files_count} new files (will create azure-03-small)"
+            )
+
+        additional_info = " + ".join(reason_parts)
+        reason = f"Mixed embedding types: {legacy_count} legacy + {additional_info} - migrating legacy"
+
         return {
             "files_to_migrate": legacy_files,
             "migration_needed": True,
-            "reason": f"Mixed embedding types detected: {legacy_count} "
-            f"legacy + {new_embedding_count} new - migrating legacy files",
+            "reason": reason,
             "file_counts": file_counts,
         }
 

@@ -2516,7 +2516,7 @@ def _render_url_interface():
             _process_url_and_file_ids(url_input, existing_file_ids_input)
 
 
-def _render_file_uploader_interface():
+def _render_file_uploader_interface(existing_file_ids_input=None):
     """Render the file uploader and process sidebar uploads."""
     with st.form("sidebar_file_uploader_form"):
         uploaded_files = st.file_uploader(
@@ -2527,12 +2527,24 @@ def _render_file_uploader_interface():
         )
         submitted = st.form_submit_button("Upload")
 
-        if submitted and uploaded_files:
-            with st.spinner("Uploading files..."):
-                upload_response = enhanced_batch_upload(
-                    uploaded_files, None, is_image=False, urls_input=None
-                )
-                _process_sidebar_upload_response(upload_response)
+        if submitted:
+            # Check if we have files to upload or existing file IDs to process
+            has_files = uploaded_files and len(uploaded_files) > 0
+            has_existing_file_ids = (
+                existing_file_ids_input and existing_file_ids_input.strip()
+            )
+
+            if has_files or has_existing_file_ids:
+                with st.spinner("Processing files and file IDs..."):
+                    upload_response = enhanced_batch_upload(
+                        uploaded_files,
+                        existing_file_ids_input,
+                        is_image=False,
+                        urls_input=None,
+                    )
+                    _process_sidebar_upload_response(upload_response)
+            else:
+                st.warning("Please upload files or enter existing file IDs")
 
 
 def _render_uploaded_image_sidebar():
@@ -2552,10 +2564,19 @@ def _render_chat_file_interface():
 
     _render_database_info()
 
+    # Always show file ID input field for all file types
+    st.markdown("**Existing File IDs:**")
+    existing_file_ids_input = st.text_input(
+        "Enter existing File IDs (comma-separated)",
+        placeholder="file-id-1, file-id-2",
+        label_visibility="collapsed",
+        key="sidebar_file_ids",
+    )
+
     if st.session_state.file_type == "URL":
         _render_url_interface()
     else:
-        _render_file_uploader_interface()
+        _render_file_uploader_interface(existing_file_ids_input)
 
     _render_uploaded_image_sidebar()
 
