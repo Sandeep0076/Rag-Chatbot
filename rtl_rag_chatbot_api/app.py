@@ -1124,7 +1124,7 @@ async def upload_file(
         # Check if this is a multi-file scenario (multiple files OR existing file IDs OR both)
         is_multi_file_scenario = (
             len(all_files) > 1
-            or len(parsed_existing_file_ids) > 0  # Multiple new files
+            or len(parsed_existing_file_ids) > 1  # Multiple new files
             or (  # Existing file IDs
                 len(all_files) == 1 and len(parsed_existing_file_ids) > 0
             )  # One new file + existing file IDs
@@ -1171,13 +1171,7 @@ async def upload_file(
                 logging.info(
                     f"Migration needed: {migration_decision['migration_needed']}"
                 )
-                logging.info(f"Reason: {migration_decision['reason']}")
-                logging.info(
-                    f"Files to migrate: {migration_decision['files_to_migrate']}"
-                )
                 logging.info(f"File breakdown: {migration_decision['file_counts']}")
-
-                # Log detailed file info for all files
                 from rtl_rag_chatbot_api.chatbot.migration_handler import (
                     log_detailed_migration_file_info,
                 )
