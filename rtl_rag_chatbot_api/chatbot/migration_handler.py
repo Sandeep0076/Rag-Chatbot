@@ -73,7 +73,9 @@ async def check_file_id_and_embedding_type(
     try:
         # Use GCSHandler's find_existing_file_by_hash method
         gcs_handler = GCSHandler(configs)
-        result = gcs_handler.find_existing_file_by_hash(file_hash, use_db=True)
+        # Only use database if it's enabled
+        use_db = getattr(configs, "use_file_hash_db", False)
+        result = gcs_handler.find_existing_file_by_hash(file_hash, use_db=use_db)
 
         if result:
             file_id, embedding_type = result
@@ -171,13 +173,16 @@ def classify_files_by_embedding_type(
     return classification
 
 
-async def migrate_single_file_embedding(file_id: str, configs: dict) -> MigrationResult:
+async def migrate_single_file_embedding(
+    file_id: str, usernames: List[str], configs: dict
+) -> MigrationResult:
     """
     Migrate a single file from legacy to new embedding type
     This is a dummy function for now - implement actual migration logic later
 
     Args:
         file_id: File ID to migrate
+        usernames: List of usernames associated with the file to migrate
         configs: Configuration dictionary
 
     Returns:
@@ -185,174 +190,31 @@ async def migrate_single_file_embedding(file_id: str, configs: dict) -> Migratio
     """
     try:
         logger.info(
-            f"Starting migration for file {file_id} from {LEGACY_EMBEDDING_TYPE} to {NEW_EMBEDDING_TYPE}"
+            f"Starting migration for file {file_id} for users {usernames} "
+            f"from {LEGACY_EMBEDDING_TYPE} to {NEW_EMBEDDING_TYPE}"
         )
 
         # TODO: Implement actual migration logic:
-        # 1. Load existing embeddings
-        # 2. Delete old embeddings
+        # 1. Use usernames list to scope the migration if needed
+        # 2. Delete old embeddings for all users
         # 3. Create new embeddings with azure-03-small
         # 4. Update database records
 
         # Dummy implementation for now
         await asyncio.sleep(0.1)  # Simulate processing time
 
-        logger.info(f"Migration completed successfully for file {file_id}")
+        logger.info(
+            f"Migration completed successfully for file {file_id} for users {usernames}"
+        )
         return MigrationResult(
             file_id=file_id, success=True, embedding_type=NEW_EMBEDDING_TYPE
         )
 
     except Exception as e:
-        logger.error(f"Migration failed for file {file_id}: {str(e)}")
+        logger.error(
+            f"Migration failed for file {file_id} for users {usernames}: {str(e)}"
+        )
         return MigrationResult(file_id=file_id, success=False, error=str(e))
-
-
-# async def migrate_files_in_parallel(file_ids: List[str], configs: dict) -> List[MigrationResult]:
-#     """
-#     Migrate multiple files in parallel
-
-#     Args:
-#         file_ids: List of file IDs to migrate
-#         configs: Configuration dictionary
-
-#     Returns:
-#         List of MigrationResult objects
-#     """
-#     if not file_ids:
-#         return []
-
-#     logger.info(f"Starting parallel migration for {len(file_ids)} files")
-
-#     # Create migration tasks
-#     tasks = [migrate_single_file_embedding(file_id, configs) for file_id in file_ids]
-
-#     # Execute migrations in parallel
-#     results = await asyncio.gather(*tasks, return_exceptions=True)
-
-#     # Process results and handle exceptions
-#     migration_results = []
-#     for i, result in enumerate(results):
-#         if isinstance(result, Exception):
-#             migration_results.append(MigrationResult(
-#                 file_id=file_ids[i],
-#                 success=False,
-#                 error=str(result)
-#             ))
-#         else:
-#             migration_results.append(result)
-
-#     # Log summary
-#     successful = sum(1 for r in migration_results if r.success)
-#     failed = len(migration_results) - successful
-#     logger.info(f"Migration completed: {successful} successful, {failed} failed")
-
-#     return migration_results
-
-
-# async def process_upload_migration_logic_for_existing_files
-# (existing_file_ids: List[str], configs: dict) -> Dict[str, Any]:
-#     """
-#     Main function that implements the flowchart logic for handling existing file IDs in uploads
-#     This should be called at the very beginning of the upload endpoint for existing files
-
-#     Args:
-#         existing_file_ids: List of existing file IDs from the upload
-#         configs: Configuration dictionary
-
-#     Returns:
-#         Dictionary containing:
-#         {
-#             'needs_processing': bool,  # Whether files need further processing
-#             'migration_results': List[MigrationResult],  # Results of any migrations
-#             'file_classification': Dict,  # Classification of files
-#             'recommendations': List[str]  # Recommendations for next steps
-#         }
-#     """
-#     result = {
-#         'needs_processing': True,
-#         'migration_results': [],
-#         'file_classification': {},
-#         'recommendations': []
-#     }
-
-#     # If no existing files, proceed with normal upload
-#     if not existing_file_ids:
-#         result['recommendations'].append("All new files - proceed with normal upload")
-#         return result
-
-#     logger.info(f"Processing migration logic for {len(existing_file_ids)} existing files")
-
-#     # For existing file IDs, check embedding types in database
-#     # This is simplified - in practice, download and check actual files
-#     legacy_files = []
-#     new_embedding_files = []
-
-#     try:
-#         with get_db_session() as db:
-#             for file_id in existing_file_ids:
-#                 # For existing files, get embedding type from database
-#                 # This is a placeholder - implement proper embedding type lookup
-#                 file_info = db.query(FileInfo).filter(
-#                     FileInfo.file_id == file_id
-#                 ).first()
-#                 if file_info:
-#                     embedding_type = getattr(file_info, 'embedding_type', NEW_EMBEDDING_TYPE)
-#                     if embedding_type == LEGACY_EMBEDDING_TYPE:
-#                         legacy_files.append(file_id)
-#                     else:
-#                         new_embedding_files.append(file_id)
-#                 else:
-#                     # File not found in database - treat as new
-#                     logger.warning(f"File ID {file_id} not found in database")
-
-#     except Exception as e:
-#         logger.error(f"Error checking existing files: {str(e)}")
-#         result['recommendations'].append(f"Error checking existing files: {str(e)}")
-#         return result
-
-#     # Classify files
-#     classification = {
-#         'new_files': [],
-#         'legacy_files': legacy_files,
-#         'new_embedding_files': new_embedding_files,
-#         'missing_files': []
-#     }
-#     result['file_classification'] = classification
-
-#     # Log current state
-#     logger.info(
-#         f"File classification: {len(legacy_files)} legacy, "
-#         f"{len(new_embedding_files)} new embeddings"
-#     )
-
-#     # Decision logic based on flowchart
-#     if len(legacy_files) > 0:
-#         # Any legacy embeddings found - need migration
-#         logger.info("Legacy embeddings detected - starting migration process")
-#         result['recommendations'].append("Legacy embeddings found - migration required")
-
-#         # Migrate legacy files
-#         migration_results = await migrate_files_in_parallel(legacy_files, configs)
-#         result['migration_results'] = migration_results
-
-#         # Check if all migrations were successful
-#         failed_migrations = [r for r in migration_results if not r.success]
-#         if failed_migrations:
-#             result['recommendations'].append(
-#                 f"Migration failed for {len(failed_migrations)} files"
-#             )
-#             logger.warning(
-#                 f"Migration failed for files: {[r.file_id for r in failed_migrations]}"
-#             )
-#         else:
-#             result['recommendations'].append("All legacy files migrated successfully")
-
-#     elif len(new_embedding_files) > 0:
-#         # All existing files have new embeddings - no migration needed
-#         logger.info("All existing files have new embeddings - no migration required")
-#         result['recommendations'].append("All files have current embeddings - proceed normally")
-
-#     return result
 
 
 def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any]:
@@ -562,24 +424,43 @@ async def decide_migration_for_mixed_upload(
     return decide_migration_files(all_file_infos)
 
 
-async def log_detailed_migration_file_info(
+async def get_detailed_migration_file_info(
     files_to_migrate: List[str],
     existing_files_no_migration: List[str],
     new_files: List[str],
     configs: dict,
-) -> None:
+    existing_file_ids: List[str] = None,
+) -> Dict[str, Any]:
     """
-    Log detailed file information for all files (migration needed, existing no migration, and new files).
+    Get detailed file information for all files (migration needed, existing no migration, and new files).
 
     Args:
         files_to_migrate: List of file IDs that need migration
         existing_files_no_migration: List of existing file IDs that don't need migration
         new_files: List of new file IDs that need to be processed
         configs: Configuration dictionary
+        existing_file_ids: List of file IDs that were passed as existing_file_ids parameter
+
+    Returns:
+        Dictionary containing detailed file information:
+        {
+            'files_to_migrate': List[Dict],  # Detailed info for files needing migration
+            'existing_files_no_migration': List[Dict],  # Detailed info for existing files not needing migration
+            'new_files': List[Dict],  # Detailed info for new files
+            'summary': Dict  # Summary statistics
+        }
     """
     gcs_handler = GCSHandler(configs)
+    existing_ids_set = set(existing_file_ids or [])
 
-    # Log files that need migration
+    result = {
+        "files_to_migrate": [],
+        "existing_files_no_migration": [],
+        "new_files": [],
+        "summary": {},
+    }
+
+    # Get detailed info for files that need migration
     if files_to_migrate:
         logger.info("=== FILES THAT NEED MIGRATION ===")
         for file_id in files_to_migrate:
@@ -589,15 +470,48 @@ async def log_detailed_migration_file_info(
                 usernames = file_info.get("username", [])
                 if not isinstance(usernames, list):
                     usernames = [usernames] if usernames else []
+                original_filename = file_info.get("original_filename", "N/A")
+
+                # Determine if this file came from existing_file_ids or uploaded files
+                source = (
+                    "existing_file_ids"
+                    if file_id in existing_ids_set
+                    else "uploaded_file"
+                )
+
+                detailed_info = {
+                    "file_id": file_id_from_info,
+                    "usernames": usernames,
+                    "embedding_type": file_info.get("embedding_type", "N/A"),
+                    "original_filename": original_filename,
+                    "source": source,
+                }
+                result["files_to_migrate"].append(detailed_info)
+
                 logger.info(
                     f"File ID: {file_id_from_info}, "
                     f"Usernames: {usernames}, "
-                    f"Embedding Type: {file_info.get('embedding_type', 'N/A')}"
+                    f"Embedding Type: {file_info.get('embedding_type', 'N/A')}, "
+                    f"Source: {source}"
                 )
             else:
                 logger.warning(f"No file info found for file ID: {file_id}")
+                source = (
+                    "existing_file_ids"
+                    if file_id in existing_ids_set
+                    else "uploaded_file"
+                )
+                result["files_to_migrate"].append(
+                    {
+                        "file_id": file_id,
+                        "usernames": [],
+                        "embedding_type": "N/A",
+                        "original_filename": "N/A",
+                        "source": source,
+                    }
+                )
 
-    # Log existing files that don't need migration
+    # Get detailed info for existing files that don't need migration
     if existing_files_no_migration:
         logger.info("=== EXISTING FILES THAT DON'T NEED MIGRATION ===")
         for file_id in existing_files_no_migration:
@@ -607,28 +521,217 @@ async def log_detailed_migration_file_info(
                 usernames = file_info.get("username", [])
                 if not isinstance(usernames, list):
                     usernames = [usernames] if usernames else []
+                original_filename = file_info.get("original_filename", "N/A")
+
+                # Determine if this file came from existing_file_ids or uploaded files
+                source = (
+                    "existing_file_ids"
+                    if file_id in existing_ids_set
+                    else "uploaded_file"
+                )
+
+                detailed_info = {
+                    "file_id": file_id_from_info,
+                    "usernames": usernames,
+                    "embedding_type": file_info.get("embedding_type", "N/A"),
+                    "original_filename": original_filename,
+                    "source": source,
+                }
+                result["existing_files_no_migration"].append(detailed_info)
+
                 logger.info(
                     f"File ID: {file_id_from_info}, "
                     f"Usernames: {usernames}, "
-                    f"Embedding Type: {file_info.get('embedding_type', 'N/A')}"
+                    f"Embedding Type: {file_info.get('embedding_type', 'N/A')}, "
+                    f"Source: {source}"
                 )
             else:
                 logger.warning(f"No file info found for file ID: {file_id}")
+                source = (
+                    "existing_file_ids"
+                    if file_id in existing_ids_set
+                    else "uploaded_file"
+                )
+                result["existing_files_no_migration"].append(
+                    {
+                        "file_id": file_id,
+                        "usernames": [],
+                        "embedding_type": "N/A",
+                        "original_filename": "N/A",
+                        "source": source,
+                    }
+                )
 
-    # Log new files that need to be processed
+    # Get detailed info for new files that need to be processed
     if new_files:
         logger.info("=== NEW FILES THAT NEED TO BE PROCESSED ===")
         for file_id in new_files:
+            detailed_info = {
+                "file_id": file_id,
+                "usernames": [],
+                "embedding_type": "azure-03-small",
+                "original_filename": file_id.replace("temp_", ""),
+                "source": "uploaded_file",  # New files are always from uploads
+            }
+            result["new_files"].append(detailed_info)
+
             logger.info(
                 f"New File ID: {file_id} - Will be processed with azure-03-small embeddings"
             )
 
-    # Log summary
+    # Create summary
     total_files = (
         len(files_to_migrate) + len(existing_files_no_migration) + len(new_files)
     )
+    result["summary"] = {
+        "files_to_migrate_count": len(files_to_migrate),
+        "existing_files_no_migration_count": len(existing_files_no_migration),
+        "new_files_count": len(new_files),
+        "total_files": total_files,
+    }
+
     logger.info(
         f"=== SUMMARY: {len(files_to_migrate)} files need migration, "
         f"{len(existing_files_no_migration)} existing files don't need migration, "
         f"{len(new_files)} new files to process (Total: {total_files}) ==="
     )
+
+    return result
+
+
+async def handle_migration_for_upload(
+    all_files: List,
+    parsed_existing_file_ids: List[str],
+    configs: dict,
+) -> Tuple[bool, Optional[Dict], Optional[Dict]]:
+    """
+    Handle migration logic for upload scenarios.
+
+    This function encapsulates all the migration decision logic that was previously
+    in the upload function. It handles:
+    1. Multi-file scenario detection
+    2. File content preparation for migration check
+    3. Migration decision making
+    4. Detailed info gathering
+    5. Migration execution or blocking
+
+    Args:
+        all_files: List of uploaded files
+        parsed_existing_file_ids: List of existing file IDs
+        configs: Configuration dictionary
+
+    Returns:
+        Tuple of (is_multi_file_scenario, migration_result, detailed_info)
+        - is_multi_file_scenario: Boolean indicating if this is a multi-file scenario
+        - migration_result: Dict with migration decision results or None
+        - detailed_info: Dict with detailed file information or None
+    """
+    # Check if this is a multi-file scenario (multiple files OR existing file IDs OR both)
+    is_multi_file_scenario = (
+        len(all_files) > 1
+        or len(parsed_existing_file_ids) > 1  # Multiple new files
+        or (  # Existing file IDs
+            len(all_files) == 1 and len(parsed_existing_file_ids) > 0
+        )  # One new file + existing file IDs
+    )
+
+    if not is_multi_file_scenario:
+        return False, None, None
+
+    logger.info("=== MULTI-FILE SCENARIO DETECTED - RUNNING MIGRATION CHECK ===")
+    logger.info(
+        f"New files: {len(all_files)}, Existing file IDs: {len(parsed_existing_file_ids)}"
+    )
+
+    # Prepare file contents for migration check (only for new files)
+    file_contents_for_migration = []
+    if len(all_files) > 0:
+        # We need to read file contents for hash calculation
+        for uploaded_file in all_files:
+            try:
+                content = await uploaded_file.read()
+                # Reset file pointer for later processing
+                await uploaded_file.seek(0)
+                # Use a temporary ID for migration check
+                temp_id = f"temp_{uploaded_file.filename}"
+                file_contents_for_migration.append((temp_id, content))
+                logger.info(f"Added file {uploaded_file.filename} for migration check")
+            except Exception as e:
+                logger.error(f"Error reading file {uploaded_file.filename}: {str(e)}")
+
+    # Call migration decision function
+    try:
+        migration_decision = await decide_migration_for_mixed_upload(
+            file_contents=file_contents_for_migration,
+            existing_file_ids=parsed_existing_file_ids,
+            configs=configs,
+        )
+
+        # Log migration decision results
+        logger.info("=== MIGRATION DECISION RESULTS ===")
+        logger.info(f"Migration needed: {migration_decision['migration_needed']}")
+        logger.info(f"File breakdown: {migration_decision['file_counts']}")
+
+        detailed_info = await get_detailed_migration_file_info(
+            migration_decision["files_to_migrate"],
+            migration_decision["existing_files_no_migration"],
+            migration_decision["new_files"],
+            configs,
+            parsed_existing_file_ids,
+        )
+
+        # Check if migration is blocked due to existing file IDs without uploads
+        if migration_decision["files_to_migrate"] and parsed_existing_file_ids:
+            logger.warning(
+                "Cannot migrate legacy embeddings for existing IDs without uploads. "
+                "Please upload the PDF so we can re-create embeddings for the listed files."
+            )
+            return (
+                True,
+                {
+                    "blocked": True,
+                    "message": "You're trying to chat with mixed embeddings. "
+                    "Please upload the PDF so we can re-create embeddings "
+                    "for the listed files.",
+                    "files_requiring_upload": [
+                        file_info["original_filename"]
+                        for file_info in detailed_info["files_to_migrate"]
+                    ],
+                },
+                detailed_info,
+            )
+
+        # Migrate files with their associated usernames
+        for file_info in detailed_info["files_to_migrate"]:
+            file_id = file_info["file_id"]
+            usernames = file_info["usernames"]
+
+            logger.info(f"Migrating file {file_id} for usernames: {usernames}")
+            await migrate_single_file_embedding(file_id, usernames, configs)
+
+        logger.info(f"Detailed migration file info: {detailed_info}")
+
+        return (
+            True,
+            {
+                "blocked": False,
+                "message": "Migration decision check completed - DEBUG MODE",
+                "migration_decision": migration_decision,
+                "debug_info": {
+                    "is_multi_file_scenario": is_multi_file_scenario,
+                    "new_files_count": len(file_contents_for_migration),
+                    "existing_file_ids_count": len(parsed_existing_file_ids),
+                    "total_files_checked": len(file_contents_for_migration)
+                    + len(parsed_existing_file_ids),
+                },
+            },
+            detailed_info,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in migration decision logic: {str(e)}")
+        # Continue with normal processing if migration check fails
+        logger.info(
+            "Continuing with normal file processing due to migration check error"
+        )
+        return True, None, None

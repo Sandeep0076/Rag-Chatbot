@@ -310,7 +310,8 @@ class GCSHandler:
                             return None, None
                 except Exception as e:
                     logging.error(f"Error in database lookup: {str(e)}")
-                    return None, None
+                    # Fall through to GCS lookup on database error
+                    pass
 
             # Fallback to GCS lookup
             blobs = self._storage_client.list_blobs(

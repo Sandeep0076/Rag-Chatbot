@@ -42,9 +42,6 @@ from rtl_rag_chatbot_api.chatbot.gemini_handler import (
 )
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.imagen_handler import ImagenGenerator
-from rtl_rag_chatbot_api.chatbot.migration_handler import (
-    decide_migration_for_mixed_upload,
-)
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
@@ -98,16 +95,20 @@ imagen_handler = ImagenGenerator(configs)
 # Pass existing handlers to avoid duplicate initialization
 combined_image_handler = CombinedImageGenerator(configs, dalle_handler, imagen_handler)
 
-# database connection
-if os.getenv("DB_INSTANCE"):
-    logging.info("Using DB_INSTANCE env variable to connect to database")
-    DATABASE_URL = f"postgresql://{os.getenv('DB_USERNAME')}:{os.getenv('DB_PASSWORD')}@127.0.0.1:5432/chatbot_ui"
-    engine = create_engine(DATABASE_URL)
-    SessionLocal = sessionmaker(bind=engine)
+# database connection - only initialize if USE_FILE_HASH_DB is enabled
+if configs.use_file_hash_db:
+    if os.getenv("DB_INSTANCE"):
+        logging.info("Using DB_INSTANCE env variable to connect to database")
+        DATABASE_URL = f"postgresql://{os.getenv('DB_USERNAME')}:{os.getenv('DB_PASSWORD')}@127.0.0.1:5432/chatbot_ui"
+        engine = create_engine(DATABASE_URL)
+        SessionLocal = sessionmaker(bind=engine)
+    else:
+        logging.warning(
+            "USE_FILE_HASH_DB is enabled but no DB_INSTANCE env variable present. Not able to connect to database."
+        )
+        SessionLocal = None
 else:
-    logging.warning(
-        "No DB_INSTANCE env variable present. Not able to connect to database."
-    )
+    logging.info("Database connection disabled - USE_FILE_HASH_DB is set to false")
     SessionLocal = None
 
 title = "RAG PDF API"
@@ -139,39 +140,55 @@ Note: File storage in GCP has been removed from this version.
 
 @asynccontextmanager
 async def start_scheduler(app: FastAPI):
-    cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
-    scheduler = BackgroundScheduler()
-    scheduler.configure(logger=logging.getLogger("apscheduler"))
+    # Only initialize cleanup coordinator if database is enabled and SessionLocal is available
+    if configs.use_file_hash_db and SessionLocal:
+        cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
+        scheduler = BackgroundScheduler()
+        scheduler.configure(logger=logging.getLogger("apscheduler"))
 
-    # Use config value for interval
-    scheduler.add_job(
-        cleanup_coordinator.cleanup,
-        trigger="interval",
-        minutes=configs.cleanup.cleanup_interval_minutes,  # Use configured interval
-        id="cleanup_job",
-    )
+        # Use config value for interval
+        scheduler.add_job(
+            cleanup_coordinator.cleanup,
+            trigger="interval",
+            minutes=configs.cleanup.cleanup_interval_minutes,  # Use configured interval
+            id="cleanup_job",
+        )
 
-    scheduler.start()
-    try:
-        yield
-    finally:
-        # Proper cleanup of resources
-        scheduler.shutdown()
-        # Clean up ChromaDB
-        if chroma_manager:
-            chroma_manager.cleanup()
-        # Clean up any initialized models
-        for model in initialized_models.values():
-            if hasattr(model, "cleanup"):
-                model.cleanup()
-        # Clean up handlers
-        for handler in initialized_handlers.values():
-            if hasattr(handler, "cleanup"):
-                handler.cleanup()
-        # Clean up chatbots
-        for chatbot in initialized_chatbots.values():
-            if hasattr(chatbot, "cleanup"):
-                chatbot.cleanup()
+        scheduler.start()
+        try:
+            yield
+        finally:
+            # Proper cleanup of resources
+            scheduler.shutdown()
+    else:
+        if configs.use_file_hash_db and not SessionLocal:
+            logging.info(
+                "Skipping cleanup coordinator initialization - database is enabled but not connected"
+            )
+        else:
+            logging.info(
+                "Skipping cleanup coordinator initialization - database is disabled"
+            )
+        try:
+            yield
+        finally:
+            pass
+
+    # Clean up ChromaDB
+    if chroma_manager:
+        chroma_manager.cleanup()
+    # Clean up any initialized models
+    for model in initialized_models.values():
+        if hasattr(model, "cleanup"):
+            model.cleanup()
+    # Clean up handlers
+    for handler in initialized_handlers.values():
+        if hasattr(handler, "cleanup"):
+            handler.cleanup()
+    # Clean up chatbots
+    for chatbot in initialized_chatbots.values():
+        if hasattr(chatbot, "cleanup"):
+            chatbot.cleanup()
 
 
 app = FastAPI(
@@ -290,6 +307,24 @@ def get_db_session():
         logging.error(f"Error in session: {e}")
     finally:
         db_session.close()
+
+
+def get_conditional_db_session():
+    """
+    Conditional dependency to get a SQLAlchemy session only when USE_FILE_HASH_DB is enabled.
+
+    Returns:
+        Session: SQLAlchemy session if database is enabled, None otherwise.
+    """
+    if not configs.use_file_hash_db:
+        logging.info("Database connection skipped - USE_FILE_HASH_DB is disabled")
+        return None
+
+    if SessionLocal is None:
+        logging.info("Database connection skipped - SessionLocal is not available")
+        return None
+
+    return get_db_session()
 
 
 # Asynchronous file processing function that runs concurrently with a semaphore limit
@@ -1079,7 +1114,6 @@ async def upload_file(
     urls: str = Form(None),
     existing_file_ids: str = Form(None),  # New parameter for existing file IDs
     current_user=Depends(get_current_user),
-    db=Depends(get_db_session),
 ):
     """
     Handles file upload and automatically creates embeddings for PDFs and images.
@@ -1121,90 +1155,35 @@ async def upload_file(
         all_files = prepare_file_list(file, files)
 
         # ===== MIGRATION DECISION LOGIC - ONLY FOR MULTI-FILE SCENARIOS =====
-        # Check if this is a multi-file scenario (multiple files OR existing file IDs OR both)
-        is_multi_file_scenario = (
-            len(all_files) > 1
-            or len(parsed_existing_file_ids) > 1  # Multiple new files
-            or (  # Existing file IDs
-                len(all_files) == 1 and len(parsed_existing_file_ids) > 0
-            )  # One new file + existing file IDs
+        from rtl_rag_chatbot_api.chatbot.migration_handler import (
+            handle_migration_for_upload,
+        )
+
+        (
+            is_multi_file_scenario,
+            migration_result,
+            detailed_info,
+        ) = await handle_migration_for_upload(
+            all_files, parsed_existing_file_ids, configs
         )
 
         if is_multi_file_scenario:
-            logging.info(
-                "=== MULTI-FILE SCENARIO DETECTED - RUNNING MIGRATION CHECK ==="
-            )
-            logging.info(
-                f"New files: {len(all_files)}, Existing file IDs: {len(parsed_existing_file_ids)}"
-            )
-
-            # Prepare file contents for migration check (only for new files)
-            file_contents_for_migration = []
-            if len(all_files) > 0:
-                # We need to read file contents for hash calculation
-                for uploaded_file in all_files:
-                    try:
-                        content = await uploaded_file.read()
-                        # Reset file pointer for later processing
-                        await uploaded_file.seek(0)
-                        # Use a temporary ID for migration check
-                        temp_id = f"temp_{uploaded_file.filename}"
-                        file_contents_for_migration.append((temp_id, content))
-                        logging.info(
-                            f"Added file {uploaded_file.filename} for migration check"
-                        )
-                    except Exception as e:
-                        logging.error(
-                            f"Error reading file {uploaded_file.filename}: {str(e)}"
-                        )
-
-            # Call migration decision function
-            try:
-                migration_decision = await decide_migration_for_mixed_upload(
-                    file_contents=file_contents_for_migration,
-                    existing_file_ids=parsed_existing_file_ids,
-                    configs=configs,
-                )
-
-                # Log migration decision results
-                logging.info("=== MIGRATION DECISION RESULTS ===")
-                logging.info(
-                    f"Migration needed: {migration_decision['migration_needed']}"
-                )
-                logging.info(f"File breakdown: {migration_decision['file_counts']}")
-                from rtl_rag_chatbot_api.chatbot.migration_handler import (
-                    log_detailed_migration_file_info,
-                )
-
-                await log_detailed_migration_file_info(
-                    migration_decision["files_to_migrate"],
-                    migration_decision["existing_files_no_migration"],
-                    migration_decision["new_files"],
-                    configs,
-                )
-
+            if migration_result and migration_result.get("blocked"):
                 return JSONResponse(
-                    status_code=200,
+                    status_code=400,
                     content={
-                        "message": "Migration decision check completed - DEBUG MODE",
-                        "migration_decision": migration_decision,
-                        "debug_info": {
-                            "is_multi_file_scenario": is_multi_file_scenario,
-                            "new_files_count": len(file_contents_for_migration),
-                            "existing_file_ids_count": len(parsed_existing_file_ids),
-                            "total_files_checked": len(file_contents_for_migration)
-                            + len(parsed_existing_file_ids),
-                        },
+                        "message": migration_result["message"],
+                        "files_requiring_upload": migration_result[
+                            "files_requiring_upload"
+                        ],
                     },
                 )
-
-            except Exception as e:
-                logging.error(f"Error in migration decision logic: {str(e)}")
-                # Continue with normal processing if migration check fails
-                logging.info(
-                    "Continuing with normal file processing due to migration check error"
+            elif migration_result:
+                return JSONResponse(
+                    status_code=200,
+                    content=migration_result,
                 )
-            # ===== END MIGRATION DECISION LOGIC =====
+        # ===== END MIGRATION DECISION LOGIC =====
         else:
             # Process existing file IDs in parallel
             existing_results = []
@@ -1830,14 +1809,46 @@ async def create_embeddings_background(
                 f"Error creating embeddings for {file_id}: {embedding_result.get('message', 'Unknown error')}"
             )
             # Run cleanup in background to avoid blocking
-            asyncio.create_task(run_cleanup_after_error(configs, SessionLocal, file_id))
+            if configs.use_file_hash_db:
+                asyncio.create_task(
+                    run_cleanup_after_error(configs, SessionLocal, file_id)
+                )
+            else:
+                # When database is disabled, just clean up ChromaDB and GCS
+                from rtl_rag_chatbot_api.common.cleanup_coordinator import (
+                    CleanupCoordinator,
+                )
+
+                cleanup_coordinator = CleanupCoordinator(configs, None, gcs_handler)
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        cleanup_coordinator.cleanup_chroma_instance,
+                        file_id,
+                        include_gcs=True,
+                    )
+                )
 
         return embedding_result
 
     except Exception as e:
         logging.error(f"Error in create_embeddings_background for {file_id}: {str(e)}")
         # Run cleanup in background to avoid blocking
-        asyncio.create_task(run_cleanup_after_error(configs, SessionLocal, file_id))
+        if configs.use_file_hash_db:
+            asyncio.create_task(run_cleanup_after_error(configs, SessionLocal, file_id))
+        else:
+            # When database is disabled, just clean up ChromaDB and GCS
+            from rtl_rag_chatbot_api.common.cleanup_coordinator import (
+                CleanupCoordinator,
+            )
+
+            cleanup_coordinator = CleanupCoordinator(configs, None, gcs_handler)
+            asyncio.create_task(
+                asyncio.to_thread(
+                    cleanup_coordinator.cleanup_chroma_instance,
+                    file_id,
+                    include_gcs=True,
+                )
+            )
         return {
             "status": "error",
             "message": f"Failed to create embeddings: {str(e)}",
@@ -2954,6 +2965,9 @@ async def manual_cleanup(
     current_user=Depends(get_current_user),
 ):
     """Endpoint to manually trigger cleanup."""
+    if not configs.use_file_hash_db:
+        return {"status": "Cleanup skipped - database is disabled"}
+
     try:
         cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
         cleanup_coordinator.cleanup(is_manual=request.is_manual)
@@ -3096,12 +3110,25 @@ async def delete_resources(
 
                 # If username is the only one, delete the embeddings
                 if len(usernames) == 1 and usernames[0] == request.username:
-                    cleanup_coordinator = CleanupCoordinator(
-                        configs, SessionLocal, gcs_handler
-                    )
-                    cleanup_coordinator.cleanup_chroma_instance(
-                        file_id, include_gcs=request.include_gcs
-                    )
+                    if configs.use_file_hash_db:
+                        cleanup_coordinator = CleanupCoordinator(
+                            configs, SessionLocal, gcs_handler
+                        )
+                        cleanup_coordinator.cleanup_chroma_instance(
+                            file_id, include_gcs=request.include_gcs
+                        )
+                    else:
+                        # When database is disabled, just clean up ChromaDB and GCS
+                        from rtl_rag_chatbot_api.common.cleanup_coordinator import (
+                            CleanupCoordinator,
+                        )
+
+                        cleanup_coordinator = CleanupCoordinator(
+                            configs, None, gcs_handler
+                        )
+                        cleanup_coordinator.cleanup_chroma_instance(
+                            file_id, include_gcs=request.include_gcs
+                        )
                     results[file_id] = "Success: Embeddings deleted"
                 else:
                     # Remove username from the list and update file_info.json
@@ -3155,9 +3182,14 @@ async def delete_all_resources(
         results = {}
         for file_id in file_ids:
             try:
-                cleanup_coordinator = CleanupCoordinator(
-                    configs, SessionLocal, gcs_handler
-                )
+                if configs.use_file_hash_db:
+                    cleanup_coordinator = CleanupCoordinator(
+                        configs, SessionLocal, gcs_handler
+                    )
+                else:
+                    # When database is disabled, just clean up ChromaDB and GCS
+                    cleanup_coordinator = CleanupCoordinator(configs, None, gcs_handler)
+
                 cleanup_coordinator.cleanup_chroma_instance(
                     file_id, include_gcs=request.include_gcs
                 )
@@ -3803,6 +3835,12 @@ async def _initialize_single_file_model(
 @app.get("/test-db-connection")
 async def test_db_connection():
     """Test the database connection by executing a simple query and return JSON."""
+    if not configs.use_file_hash_db:
+        return {
+            "status": "disabled",
+            "message": "Database is disabled - USE_FILE_HASH_DB is set to false",
+        }
+
     try:
         with get_db_session() as db:
             # Execute a simple query to check the connection
@@ -3824,6 +3862,15 @@ async def insert_file_info(
     current_user=Depends(get_current_user),
 ):
     """Insert a new record into the FileInfo table."""
+    if not configs.use_file_hash_db:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "Database is disabled - USE_FILE_HASH_DB is set to false",
+            },
+        )
+
     from rtl_rag_chatbot_api.common.db import insert_file_info_record
 
     # Use the context manager properly
@@ -3852,6 +3899,15 @@ async def delete_all_file_info(current_user=Depends(get_current_user)):
     Returns:
         dict: Response containing the deletion result
     """
+    if not configs.use_file_hash_db:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "Database is disabled - USE_FILE_HASH_DB is set to false",
+            },
+        )
+
     from rtl_rag_chatbot_api.common.db import delete_all_file_info_records
 
     try:
