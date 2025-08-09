@@ -11,9 +11,12 @@ embeddings based on the flowchart logic. It provides functionality to:
 
 import asyncio
 import logging
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 # Import existing handlers and utilities
+from fastapi import UploadFile
+
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 
 logger = logging.getLogger(__name__)
@@ -174,7 +177,7 @@ def classify_files_by_embedding_type(
 
 
 async def migrate_single_file_embedding(
-    file_id: str, usernames: List[str], configs: dict
+    file_id: str, usernames: List[str], configs: dict, file: Optional[UploadFile] = None
 ) -> MigrationResult:
     """
     Migrate a single file from legacy to new embedding type
@@ -184,6 +187,7 @@ async def migrate_single_file_embedding(
         file_id: File ID to migrate
         usernames: List of usernames associated with the file to migrate
         configs: Configuration dictionary
+        file: Optional UploadFile object for new file uploads (similar to upload function)
 
     Returns:
         MigrationResult object
@@ -193,6 +197,24 @@ async def migrate_single_file_embedding(
             f"Starting migration for file {file_id} for users {usernames} "
             f"from {LEGACY_EMBEDDING_TYPE} to {NEW_EMBEDDING_TYPE}"
         )
+
+        # Handle file parameter if provided
+        if file:
+            logger.info(f"File provided for migration: {file.filename}")
+            # TODO: Use the file content for migration logic
+            # For now, just log that we have the file
+            try:
+                content = await file.read()
+                logger.info(f"Read {len(content)} bytes from file {file.filename}")
+                # Reset file pointer for potential future use
+                await file.seek(0)
+            except Exception as e:
+                logger.error(f"Error reading file {file.filename}: {str(e)}")
+                return MigrationResult(
+                    file_id=file_id,
+                    success=False,
+                    error=f"Error reading file: {str(e)}",
+                )
 
         # TODO: Implement actual migration logic:
         # 1. Use usernames list to scope the migration if needed
@@ -645,6 +667,7 @@ async def handle_migration_for_upload(
 
     # Prepare file contents for migration check (only for new files)
     file_contents_for_migration = []
+    file_objects_map = {}  # Map to preserve original file objects by filename
     if len(all_files) > 0:
         # We need to read file contents for hash calculation
         for uploaded_file in all_files:
@@ -655,6 +678,8 @@ async def handle_migration_for_upload(
                 # Use a temporary ID for migration check
                 temp_id = f"temp_{uploaded_file.filename}"
                 file_contents_for_migration.append((temp_id, content))
+                # Preserve the original file object for later use (use filename as key)
+                file_objects_map[uploaded_file.filename] = uploaded_file
                 logger.info(f"Added file {uploaded_file.filename} for migration check")
             except Exception as e:
                 logger.error(f"Error reading file {uploaded_file.filename}: {str(e)}")
@@ -682,34 +707,46 @@ async def handle_migration_for_upload(
 
         # Check if migration is blocked due to existing file IDs without uploads
         if migration_decision["files_to_migrate"] and parsed_existing_file_ids:
-            logger.warning(
-                "Cannot migrate legacy embeddings for existing IDs without uploads. "
-                "Please upload the PDF so we can re-create embeddings for the listed files."
-            )
-            return (
-                True,
-                {
-                    "blocked": True,
-                    "message": "You're trying to chat with mixed embeddings. "
-                    "Please upload the PDF so we can re-create embeddings "
-                    "for the listed files.",
-                    "files_requiring_upload": [
-                        file_info["original_filename"]
-                        for file_info in detailed_info["files_to_migrate"]
-                    ],
-                },
-                detailed_info,
+            logger.info(
+                "Starting migration for existing files - downloading and decrypting files from GCS"
             )
 
-        # Migrate files with their associated usernames
+            # Process each file that needs migration
+            for file_id in migration_decision["files_to_migrate"]:
+                try:
+                    logger.info(f"Processing migration for file_id: {file_id}")
+
+                    # Download and decrypt the encrypted file from GCS
+                    gcs_handler = GCSHandler(configs)
+                    decrypted_file_path = gcs_handler.download_encrypted_file_by_id(
+                        file_id
+                    )
+
+                    if decrypted_file_path and os.path.exists(decrypted_file_path):
+                        logger.info(
+                            f"Successfully downloaded and decrypted file for {file_id} "
+                            f"to {decrypted_file_path}"
+                        )
+                    else:
+                        logger.error(
+                            f"Failed to download or decrypt file for {file_id}"
+                        )
+
+                except Exception as e:
+                    logger.error(
+                        f"Error processing migration for file {file_id}: {str(e)}"
+                    )
+                    continue
+
+        # accumulate list of files with their associated usernames
         for file_info in detailed_info["files_to_migrate"]:
             file_id = file_info["file_id"]
             usernames = file_info["usernames"]
-
-            logger.info(f"Migrating file {file_id} for usernames: {usernames}")
-            await migrate_single_file_embedding(file_id, usernames, configs)
-
-        logger.info(f"Detailed migration file info: {detailed_info}")
+            original_filename = file_info.get("original_filename", "")
+            logger.info(f"Detailed migration file info: {file_info}")
+            logger.info(f"File ID: {file_id}")
+            logger.info(f"Usernames: {usernames}")
+            logger.info(f"Original filename: {original_filename}")
 
         return (
             True,

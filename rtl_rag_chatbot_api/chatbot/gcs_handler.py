@@ -117,6 +117,77 @@ class GCSHandler:
 
         logging.info(f"Finished downloading all files for file ID: {file_id}")
 
+    def download_encrypted_file_by_id(
+        self, file_id: str, destination_path: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Download and decrypt an encrypted file by file ID.
+
+        Args:
+            file_id (str): The file ID to download
+            destination_path (Optional[str]): Custom destination path. If None, uses default local_data structure
+
+        Returns:
+            Optional[str]: Path to the decrypted file if successful, None otherwise
+        """
+        prefix = f"file-embeddings/{file_id}/"
+        blobs = list(self.bucket.list_blobs(prefix=prefix))
+
+        if not blobs:
+            logging.warning(f"No files found for file ID: {file_id}")
+            return None
+
+        encrypted_files = [blob for blob in blobs if blob.name.endswith(".encrypted")]
+
+        if not encrypted_files:
+            logging.warning(f"No encrypted files found for file ID: {file_id}")
+            return None
+
+        # For now, we'll handle the first encrypted file found
+        # In the future, this could be extended to handle multiple encrypted files
+        encrypted_blob = encrypted_files[0]
+        relative_path = encrypted_blob.name[len(prefix) :]
+
+        # Determine destination path - use local_data/ directory like the file upload endpoint
+        if destination_path is None:
+            # Use local_data/ directory like the file upload endpoint
+            encrypted_temp_path = os.path.join(
+                "local_data", f"{file_id}_{relative_path}"
+            )
+        else:
+            encrypted_temp_path = destination_path + ".encrypted"
+
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(encrypted_temp_path), exist_ok=True)
+
+        try:
+            # Download the encrypted file
+            encrypted_blob.download_to_filename(encrypted_temp_path)
+            logging.info(
+                f"Downloaded encrypted file {encrypted_blob.name} to {encrypted_temp_path}"
+            )
+
+            # Decrypt the file
+            decrypted_path = decrypt_file(encrypted_temp_path)
+            logging.info(f"Decrypted file to {decrypted_path}")
+
+            return decrypted_path
+
+        except Exception as e:
+            logging.error(
+                f"Error downloading/decrypting file for file ID {file_id}: {str(e)}"
+            )
+            # Clean up encrypted temp file if it exists
+            if os.path.exists(encrypted_temp_path):
+                os.remove(encrypted_temp_path)
+            return None
+
+        finally:
+            # Clean up encrypted file
+            if os.path.exists(encrypted_temp_path):
+                os.remove(encrypted_temp_path)
+                logging.info(f"Cleaned up encrypted file {encrypted_temp_path}")
+
     def cleanup_local_files(self, exclude=[]):
         folders_to_clean = ["chroma_db", "local_data", "processed_data"]
         for folder in folders_to_clean:
