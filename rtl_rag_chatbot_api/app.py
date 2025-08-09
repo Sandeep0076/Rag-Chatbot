@@ -1185,6 +1185,8 @@ async def upload_file(
                 )
         # ===== END MIGRATION DECISION LOGIC =====
         else:
+            # ===== normal multifile logic =====
+
             # Process existing file IDs in parallel
             existing_results = []
             if parsed_existing_file_ids:

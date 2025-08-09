@@ -621,6 +621,115 @@ async def get_detailed_migration_file_info(
     return result
 
 
+def _is_multi_file_scenario(
+    all_files: List, parsed_existing_file_ids: List[str]
+) -> bool:
+    """Check if this is a multi-file scenario."""
+    return (
+        len(all_files) > 1
+        or len(parsed_existing_file_ids) > 1  # Multiple new files
+        or (  # Existing file IDs
+            len(all_files) == 1 and len(parsed_existing_file_ids) > 0
+        )  # One new file + existing file IDs
+    )
+
+
+async def _prepare_file_contents_for_migration(all_files: List) -> Tuple[List, Dict]:
+    """Prepare file contents for migration check and return file objects map."""
+    file_contents_for_migration = []
+    file_objects_map = {}
+
+    if len(all_files) > 0:
+        for uploaded_file in all_files:
+            try:
+                content = await uploaded_file.read()
+                await uploaded_file.seek(0)
+                temp_id = f"temp_{uploaded_file.filename}"
+                file_contents_for_migration.append((temp_id, content))
+                file_objects_map[uploaded_file.filename] = uploaded_file
+                logger.info(f"Added file {uploaded_file.filename} for migration check")
+            except Exception as e:
+                logger.error(f"Error reading file {uploaded_file.filename}: {str(e)}")
+
+    return file_contents_for_migration, file_objects_map
+
+
+async def _download_migration_files(files_to_migrate: List[str], configs: dict) -> None:
+    """Download and decrypt files that need migration."""
+    if not files_to_migrate:
+        return
+
+    logger.info(
+        "Starting migration for existing files - downloading and decrypting files from GCS"
+    )
+
+    for file_id in files_to_migrate:
+        try:
+            logger.info(f"Processing migration for file_id: {file_id}")
+            gcs_handler = GCSHandler(configs)
+            decrypted_file_path = gcs_handler.download_encrypted_file_by_id(file_id)
+
+            if decrypted_file_path and os.path.exists(decrypted_file_path):
+                logger.info(
+                    f"Successfully downloaded and decrypted file for {file_id} to {decrypted_file_path}"
+                )
+            else:
+                logger.error(f"Failed to download or decrypt file for {file_id}")
+
+        except Exception as e:
+            logger.error(f"Error processing migration for file {file_id}: {str(e)}")
+            continue
+
+
+async def _delete_old_embeddings(files_to_migrate: List[Dict], configs: dict) -> None:
+    """Delete old embeddings for files that need migration."""
+    if not files_to_migrate:
+        return
+
+    for file_info in files_to_migrate:
+        file_id = file_info["file_id"]
+        usernames = file_info["usernames"]
+        original_filename = file_info.get("original_filename", "")
+
+        logger.info(f"Detailed migration file info: {file_info}")
+        logger.info(f"File ID: {file_id}")
+        logger.info(f"Usernames: {usernames}")
+        logger.info(f"Original filename: {original_filename}")
+
+        try:
+            logger.info(f"Deleting old embeddings for file_id: {file_id}")
+
+            from rtl_rag_chatbot_api.common.cleanup_coordinator import (
+                CleanupCoordinator,
+            )
+
+            gcs_handler = GCSHandler(configs)
+
+            if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
+                try:
+                    from rtl_rag_chatbot_api.app import SessionLocal
+
+                    cleanup_coordinator = CleanupCoordinator(
+                        configs, SessionLocal, gcs_handler
+                    )
+                except ImportError:
+                    logger.warning(
+                        "SessionLocal not available, proceeding with database disabled"
+                    )
+                    cleanup_coordinator = CleanupCoordinator(configs, None, gcs_handler)
+            else:
+                cleanup_coordinator = CleanupCoordinator(configs, None, gcs_handler)
+
+            cleanup_coordinator.cleanup_chroma_instance(file_id, include_gcs=True)
+            logger.info(f"Successfully deleted old embeddings for file_id: {file_id}")
+
+        except Exception as e:
+            logger.error(
+                f"Error deleting old embeddings for file_id {file_id}: {str(e)}"
+            )
+            continue
+
+
 async def handle_migration_for_upload(
     all_files: List,
     parsed_existing_file_ids: List[str],
@@ -648,16 +757,7 @@ async def handle_migration_for_upload(
         - migration_result: Dict with migration decision results or None
         - detailed_info: Dict with detailed file information or None
     """
-    # Check if this is a multi-file scenario (multiple files OR existing file IDs OR both)
-    is_multi_file_scenario = (
-        len(all_files) > 1
-        or len(parsed_existing_file_ids) > 1  # Multiple new files
-        or (  # Existing file IDs
-            len(all_files) == 1 and len(parsed_existing_file_ids) > 0
-        )  # One new file + existing file IDs
-    )
-
-    if not is_multi_file_scenario:
+    if not _is_multi_file_scenario(all_files, parsed_existing_file_ids):
         return False, None, None
 
     logger.info("=== MULTI-FILE SCENARIO DETECTED - RUNNING MIGRATION CHECK ===")
@@ -665,26 +765,11 @@ async def handle_migration_for_upload(
         f"New files: {len(all_files)}, Existing file IDs: {len(parsed_existing_file_ids)}"
     )
 
-    # Prepare file contents for migration check (only for new files)
-    file_contents_for_migration = []
-    file_objects_map = {}  # Map to preserve original file objects by filename
-    if len(all_files) > 0:
-        # We need to read file contents for hash calculation
-        for uploaded_file in all_files:
-            try:
-                content = await uploaded_file.read()
-                # Reset file pointer for later processing
-                await uploaded_file.seek(0)
-                # Use a temporary ID for migration check
-                temp_id = f"temp_{uploaded_file.filename}"
-                file_contents_for_migration.append((temp_id, content))
-                # Preserve the original file object for later use (use filename as key)
-                file_objects_map[uploaded_file.filename] = uploaded_file
-                logger.info(f"Added file {uploaded_file.filename} for migration check")
-            except Exception as e:
-                logger.error(f"Error reading file {uploaded_file.filename}: {str(e)}")
+    (
+        file_contents_for_migration,
+        file_objects_map,
+    ) = await _prepare_file_contents_for_migration(all_files)
 
-    # Call migration decision function
     try:
         migration_decision = await decide_migration_for_mixed_upload(
             file_contents=file_contents_for_migration,
@@ -692,7 +777,6 @@ async def handle_migration_for_upload(
             configs=configs,
         )
 
-        # Log migration decision results
         logger.info("=== MIGRATION DECISION RESULTS ===")
         logger.info(f"Migration needed: {migration_decision['migration_needed']}")
         logger.info(f"File breakdown: {migration_decision['file_counts']}")
@@ -705,48 +789,8 @@ async def handle_migration_for_upload(
             parsed_existing_file_ids,
         )
 
-        # Check if migration is blocked due to existing file IDs without uploads
-        if migration_decision["files_to_migrate"] and parsed_existing_file_ids:
-            logger.info(
-                "Starting migration for existing files - downloading and decrypting files from GCS"
-            )
-
-            # Process each file that needs migration
-            for file_id in migration_decision["files_to_migrate"]:
-                try:
-                    logger.info(f"Processing migration for file_id: {file_id}")
-
-                    # Download and decrypt the encrypted file from GCS
-                    gcs_handler = GCSHandler(configs)
-                    decrypted_file_path = gcs_handler.download_encrypted_file_by_id(
-                        file_id
-                    )
-
-                    if decrypted_file_path and os.path.exists(decrypted_file_path):
-                        logger.info(
-                            f"Successfully downloaded and decrypted file for {file_id} "
-                            f"to {decrypted_file_path}"
-                        )
-                    else:
-                        logger.error(
-                            f"Failed to download or decrypt file for {file_id}"
-                        )
-
-                except Exception as e:
-                    logger.error(
-                        f"Error processing migration for file {file_id}: {str(e)}"
-                    )
-                    continue
-
-        # accumulate list of files with their associated usernames
-        for file_info in detailed_info["files_to_migrate"]:
-            file_id = file_info["file_id"]
-            usernames = file_info["usernames"]
-            original_filename = file_info.get("original_filename", "")
-            logger.info(f"Detailed migration file info: {file_info}")
-            logger.info(f"File ID: {file_id}")
-            logger.info(f"Usernames: {usernames}")
-            logger.info(f"Original filename: {original_filename}")
+        await _download_migration_files(migration_decision["files_to_migrate"], configs)
+        await _delete_old_embeddings(detailed_info["files_to_migrate"], configs)
 
         return (
             True,
@@ -755,7 +799,7 @@ async def handle_migration_for_upload(
                 "message": "Migration decision check completed - DEBUG MODE",
                 "migration_decision": migration_decision,
                 "debug_info": {
-                    "is_multi_file_scenario": is_multi_file_scenario,
+                    "is_multi_file_scenario": True,
                     "new_files_count": len(file_contents_for_migration),
                     "existing_file_ids_count": len(parsed_existing_file_ids),
                     "total_files_checked": len(file_contents_for_migration)
@@ -767,7 +811,6 @@ async def handle_migration_for_upload(
 
     except Exception as e:
         logger.error(f"Error in migration decision logic: {str(e)}")
-        # Continue with normal processing if migration check fails
         logger.info(
             "Continuing with normal file processing due to migration check error"
         )
