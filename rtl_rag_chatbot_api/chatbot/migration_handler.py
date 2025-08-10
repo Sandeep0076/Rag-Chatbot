@@ -287,15 +287,12 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
         "total_existing": total_existing_files,
     }
 
-    # Separate existing files that don't need migration from new files
-    existing_files_no_migration = new_embedding_files + missing_files
-
     # Decision logic based on flowchart
     if total_existing_files == 0:
         # All files are new - no migration needed
         return {
             "files_to_migrate": [],
-            "existing_files_no_migration": existing_files_no_migration,
+            "existing_files_no_migration": [],  # No existing files
             "new_files": new_files,
             "migration_needed": False,
             "reason": "All files are new - no existing embeddings to migrate",
@@ -305,9 +302,11 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
 
     elif legacy_count > 0 and new_embedding_count == 0 and new_files_count == 0:
         # ALL existing files are legacy AND no new files - consistent state, no migration needed
+        # BUT legacy files still need to be processed (downloaded)
         return {
             "files_to_migrate": [],
-            "existing_files_no_migration": existing_files_no_migration,
+            # Include legacy files for processing
+            "existing_files_no_migration": legacy_files + missing_files,
             "new_files": new_files,
             "migration_needed": False,
             "reason": "All existing files have legacy embeddings - consistent state, no migration needed",
@@ -319,7 +318,8 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
         # ALL existing files have new embeddings - consistent state (regardless of new files)
         return {
             "files_to_migrate": [],
-            "existing_files_no_migration": existing_files_no_migration,
+            # Include new embedding files for processing
+            "existing_files_no_migration": new_embedding_files + missing_files,
             "new_files": new_files,
             "migration_needed": False,
             "reason": "All existing files have new embeddings - consistent state, no migration needed",
@@ -343,7 +343,8 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
 
         return {
             "files_to_migrate": legacy_files,
-            "existing_files_no_migration": existing_files_no_migration,
+            "existing_files_no_migration": new_embedding_files
+            + missing_files,  # Non-legacy files for processing
             "new_files": new_files,
             "migration_needed": True,
             "reason": reason,
@@ -355,7 +356,10 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
         # Edge case - shouldn't happen but handle gracefully
         return {
             "files_to_migrate": [],
-            "existing_files_no_migration": existing_files_no_migration,
+            # All existing files for processing
+            "existing_files_no_migration": legacy_files
+            + new_embedding_files
+            + missing_files,
             "new_files": new_files,
             "migration_needed": False,
             "reason": "No clear migration decision could be made",
