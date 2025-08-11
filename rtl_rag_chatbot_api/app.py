@@ -1103,6 +1103,75 @@ async def recreate_embeddings_for_existing_file(
     process_document_file(background_tasks, file_id, temp_file_path, username_list)
 
 
+async def _process_normal_upload_flow(
+    all_files,
+    parsed_existing_file_ids,
+    is_image,
+    username,
+    background_tasks,
+    is_migration: bool = False,
+    migration_context: dict | None = None,
+):
+    existing_results = []
+    if parsed_existing_file_ids:
+        if is_migration and migration_context is not None:
+            existing_results = await process_migration_file_ids_in_parallel(
+                parsed_existing_file_ids,
+                username,
+                background_tasks,
+                migration_context,
+            )
+        else:
+            existing_results = await process_existing_file_ids_in_parallel(
+                parsed_existing_file_ids, username, background_tasks
+            )
+
+    new_file_results = []
+    if len(all_files) > 0:
+        (
+            results,
+            processed_file_ids,
+            original_filenames,
+            is_tabular_flags,
+            statuses,
+        ) = await process_files_in_parallel(file_handler, all_files, is_image, username)
+
+        # Check for errors in file processing
+        error_results = [r for r in results if r.get("status") == "error"]
+        if error_results:
+            # If there are any errors, return the first error message
+            error_result = error_results[0]
+            logging.error(f"File processing failed: {error_result.get('message')}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "message": (
+                        f"File processing failed: {error_result.get('message')}"
+                    ),
+                    "file_id": error_result.get("file_id"),
+                    "status": "error",
+                },
+            )
+
+        # Process each file based on its type
+        await process_files_by_type(
+            background_tasks,
+            all_files,
+            results,
+            processed_file_ids,
+            original_filenames,
+            is_tabular_flags,
+            is_image,
+            username,
+        )
+
+        new_file_results = list(
+            zip(processed_file_ids, original_filenames, is_tabular_flags)
+        )
+
+    return combine_upload_results(existing_results, new_file_results)
+
+
 @app.post("/file/upload", response_model=FileUploadResponse)
 async def upload_file(
     request: Request,
@@ -1166,6 +1235,16 @@ async def upload_file(
         ) = await handle_migration_for_upload(
             all_files, parsed_existing_file_ids, configs
         )
+
+        # If NOT a multi-file scenario, run the normal processing flow directly (single-file or simple case)
+        if not is_multi_file_scenario:
+            return await _process_normal_upload_flow(
+                all_files,
+                parsed_existing_file_ids,
+                is_image,
+                username,
+                background_tasks,
+            )
 
         if is_multi_file_scenario:
             # Check if migration is actually needed (has existing files)
@@ -1276,18 +1355,20 @@ async def upload_file(
 
                 # Keep only files that are NOT being handled by migration logic
                 # This ensures new files are processed normally without duplication
-                filtered_files = []
-                for file in all_files:
-                    if file.filename not in migration_filenames:
-                        filtered_files.append(file)
-
-                all_files = filtered_files
+                # Also exclude uploaded files that are already recognized as existing and need no migration
+                all_files = _exclude_uploaded_files_already_handled(
+                    all_files, detailed_info, available_migration_files
+                )
 
                 logging.info(
-                    f"Migration context: {len(files_to_migrate)} files to migrate, {len(existing_files_no_migration)} existing files no migration"
+                    "Migration context: %s files to migrate, %s existing files no migration",
+                    len(files_to_migrate),
+                    len(existing_files_no_migration),
                 )
                 logging.info(
-                    f"Prepared for existing logic: {len(parsed_existing_file_ids)} existing file IDs, {len(all_files)} files"
+                    "Prepared for existing logic: %s existing file IDs, %s files",
+                    len(parsed_existing_file_ids),
+                    len(all_files),
                 )
 
                 # Store migration context for use in existing logic
@@ -1316,73 +1397,15 @@ async def upload_file(
             migration_context = globals().get("current_migration_context", {})
             is_migration = migration_context.get("is_migration", False)
 
-            # Process existing file IDs in parallel
-            existing_results = []
-            if parsed_existing_file_ids:
-                if is_migration:
-                    # Handle migration scenario with special logic
-                    existing_results = await process_migration_file_ids_in_parallel(
-                        parsed_existing_file_ids,
-                        username,
-                        background_tasks,
-                        migration_context,
-                    )
-                else:
-                    # Normal existing file processing
-                    existing_results = await process_existing_file_ids_in_parallel(
-                        parsed_existing_file_ids, username, background_tasks
-                    )
-
-            # Process new files in parallel (existing logic)
-            new_file_results = []
-            if len(all_files) > 0:
-                (
-                    results,
-                    processed_file_ids,
-                    original_filenames,
-                    is_tabular_flags,
-                    statuses,
-                ) = await process_files_in_parallel(
-                    file_handler, all_files, is_image, username
-                )
-
-                # Check for errors in file processing
-                error_results = [
-                    result for result in results if result.get("status") == "error"
-                ]
-                if error_results:
-                    # If there are any errors, return the first error message
-                    error_result = error_results[0]
-                    logging.error(
-                        f"File processing failed: {error_result.get('message')}"
-                    )
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "message": f"File processing failed: {error_result.get('message')}",
-                            "file_id": error_result.get("file_id"),
-                            "status": "error",
-                        },
-                    )
-
-                # Process each file based on its type
-                await process_files_by_type(
-                    background_tasks,
-                    all_files,
-                    results,
-                    processed_file_ids,
-                    original_filenames,
-                    is_tabular_flags,
-                    is_image,
-                    username,
-                )
-
-                new_file_results = list(
-                    zip(processed_file_ids, original_filenames, is_tabular_flags)
-                )
-
-            # Combine results from existing file IDs and new files
-            response = combine_upload_results(existing_results, new_file_results)
+            response = await _process_normal_upload_flow(
+                all_files,
+                parsed_existing_file_ids,
+                is_image,
+                username,
+                background_tasks,
+                is_migration=is_migration,
+                migration_context=migration_context,
+            )
 
             # Clear migration context after processing
             if "current_migration_context" in globals():
@@ -4272,3 +4295,46 @@ async def delete_all_file_info(current_user=Depends(get_current_user)):
                 "message": f"An error occurred while deleting FileInfo records: {str(e)}",
             },
         )
+
+
+def _exclude_uploaded_files_already_handled(
+    all_files, detailed_info, available_migration_files
+):
+    """
+    Remove uploaded files from all_files that are already covered by migration logic
+    (files scheduled for migration) or recognized as existing with no migration
+    (source == 'uploaded_file'). This prevents duplicate preprocessing.
+    """
+    # Filenames of uploaded files scheduled for migration
+    migration_filenames = set()
+    for file_detail in available_migration_files:
+        if file_detail.get("source") == "uploaded_file":
+            original_filename = file_detail.get("original_filename", "")
+            if original_filename and original_filename != "N/A":
+                migration_filenames.add(original_filename)
+
+    # Filenames of uploaded files that are existing and need no migration
+    existing_no_migration_details = detailed_info.get("existing_files_no_migration", [])
+    existing_no_migration_uploaded_filenames = set(
+        d.get("original_filename")
+        for d in existing_no_migration_details
+        if d.get("source") == "uploaded_file"
+        and d.get("original_filename")
+        and d.get("original_filename") != "N/A"
+    )
+
+    filenames_to_exclude = migration_filenames.union(
+        existing_no_migration_uploaded_filenames
+    )
+
+    filtered_files = [
+        file for file in all_files if file.filename not in filenames_to_exclude
+    ]
+
+    if len(filtered_files) != len(all_files):
+        logging.info(
+            "Filtered %s uploaded file(s) already handled by migration/no-migration logic",
+            len(all_files) - len(filtered_files),
+        )
+
+    return filtered_files

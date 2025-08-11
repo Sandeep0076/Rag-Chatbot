@@ -630,7 +630,7 @@ def _is_multi_file_scenario(
 ) -> bool:
     """Check if this is a multi-file scenario."""
     return (
-        len(all_files) >= 1
+        len(all_files) > 1
         or len(parsed_existing_file_ids) > 1  # Multiple new files
         or (  # Existing file IDs
             len(all_files) == 1 and len(parsed_existing_file_ids) > 0
