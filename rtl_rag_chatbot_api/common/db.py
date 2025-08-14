@@ -293,3 +293,144 @@ def delete_all_file_info_records(session: Session) -> Dict[str, Any]:
             "message": str(e),
             "details": "Database operation failed",
         }
+
+
+def export_gcs_file_info_to_sql_text(
+    output_file_path: str = "./gcs_file_info_inserts.text",
+    bucket_name: str = "chatbot-storage-dev-gcs-eu",
+    prefix: str = "file-embeddings/",
+) -> Dict[str, Any]:
+    """
+    Export INSERT statements for FileInfo records by scanning file_info.json files in GCS.
+
+    This reads all file_info.json objects under the given prefix in the specified bucket,
+    extracts (file_id, file_hash, createdAt, file_name, embedding_type), and writes SQL
+    INSERT statements into a .text file for later execution.
+
+    Args:
+        output_file_path: Path to write the .text file with SQL INSERT statements
+        bucket_name: GCS bucket to scan (default: "chatbot-storage-dev-gcs-eu")
+        prefix: GCS prefix to search for file_info.json (default: "file-embeddings/")
+
+    Returns:
+        Dict with summary information: total_scanned, total_written, output_file
+    """
+    # Lazy imports to avoid hard dependency at module import time
+    try:
+        import json
+
+        from google.cloud import storage
+    except Exception as e:
+        logging.error(
+            "google-cloud-storage is required to export file info from GCS: %s", e
+        )
+        return {
+            "status": "error",
+            "message": "Missing dependency google-cloud-storage",
+            "details": str(e),
+        }
+
+    try:
+        storage_client = storage.Client()
+        # Access via client directly; no need to keep a bucket reference
+        _ = storage_client.bucket(bucket_name)
+
+        # List all blobs under the prefix
+        blobs_iter = storage_client.list_blobs(bucket_name, prefix=prefix)
+
+        insert_lines: list[str] = []
+        total_scanned = 0
+        total_written = 0
+
+        for blob in blobs_iter:
+            # Only process file_info.json files
+            if not blob.name.endswith("/file_info.json"):
+                continue
+
+            total_scanned += 1
+            try:
+                content_bytes = blob.download_as_bytes()
+                info = (
+                    json.loads(content_bytes.decode("utf-8")) if content_bytes else {}
+                )
+            except Exception as e:
+                logging.warning(
+                    "Skipping %s due to JSON parse error: %s", blob.name, str(e)
+                )
+                continue
+
+            # Extract fields with fallbacks
+            file_id = info.get("file_id")
+            if not file_id:
+                # Derive file_id from blob path file-embeddings/{file_id}/file_info.json
+                parts = blob.name.split("/")
+                if len(parts) >= 3:
+                    file_id = parts[1]
+
+            file_hash = info.get("file_hash")
+            # Map filename
+            file_name_value = info.get("original_filename") or info.get("file_name")
+            embedding_type_value = info.get("embedding_type", "azure-03-small")
+
+            # Determine createdAt value
+            created_at_str = info.get("embeddings_created_at")
+            if not created_at_str:
+                if getattr(blob, "time_created", None):
+                    created_at_str = blob.time_created.isoformat()
+                else:
+                    created_at_str = datetime.utcnow().isoformat()
+
+            # We require minimally file_id and file_hash to create an INSERT
+            if not file_id or not file_hash:
+                logging.info(
+                    "Skipping %s because required fields are missing (file_id=%s, file_hash=%s)",
+                    blob.name,
+                    file_id,
+                    file_hash,
+                )
+                continue
+
+            # Prepare values with SQL escaping
+            def _q(val: Optional[str]) -> str:
+                if val is None:
+                    return "NULL"
+                # escape single quotes
+                escaped = val.replace("'", "''")
+                return f"'{escaped}'"
+
+            record_id = str(uuid.uuid4())
+            insert_sql = (
+                'INSERT INTO "FileInfo" ("id", "file_id", "file_hash", '
+                '"file_name", "embedding_type", "createdAt") '
+                f"VALUES ({_q(record_id)}, {_q(file_id)}, {_q(file_hash)}, "
+                f"{_q(file_name_value)}, {_q(embedding_type_value)}, {_q(created_at_str)});"
+            )
+
+            insert_lines.append(insert_sql)
+            total_written += 1
+
+        # Write all statements to the output file
+        with open(output_file_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(insert_lines) + ("\n" if insert_lines else ""))
+
+        logging.info(
+            "Wrote %s INSERT statements to %s", total_written, output_file_path
+        )
+        return {
+            "status": "success",
+            "total_scanned": total_scanned,
+            "total_written": total_written,
+            "output_file": output_file_path,
+        }
+
+    except Exception as e:
+        logging.error(
+            "Failed to export GCS file info to SQL text: %s", str(e), exc_info=True
+        )
+        return {
+            "status": "error",
+            "message": str(e),
+        }
+
+
+# export_gcs_file_info_to_sql_text(output_file_path="./gcs_file_info_inserts.text")

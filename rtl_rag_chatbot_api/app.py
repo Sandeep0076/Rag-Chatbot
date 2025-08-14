@@ -338,8 +338,6 @@ async def process_file_with_semaphore(file_handler, file, file_id, is_image, use
         file_extension = os.path.splitext(file.filename)[1].lower()
         form_is_image = is_image  # Store original form parameter
         is_image = file_extension in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
-
-        logging.info(f"Processing file with extension: {file_extension}")
         logging.info(
             f"Form is_image parameter: {form_is_image}, Detected is_image: {is_image}"
         )
@@ -681,6 +679,174 @@ def format_upload_response(processed_file_ids, original_filenames, is_tabular_fl
     return JSONResponse(content=response_data)
 
 
+def _split_processed_files_by_type(
+    all_files,
+    results,
+    processed_file_ids,
+    original_filenames,
+    is_tabular_flags,
+):
+    """Split processed upload results into document and tabular buckets using precomputed flags."""
+    document_files = []
+    tabular_files = []
+
+    for i, result in enumerate(results):
+        file_id = processed_file_ids[i]
+        temp_file_path = result.get("temp_file_path")
+
+        if not file_id or not temp_file_path:
+            logging.warning(
+                f"Skipping invalid file: {original_filenames[i] if i < len(original_filenames) else 'unknown'}"
+            )
+            continue
+
+        file_bucket = (
+            tabular_files
+            if (i < len(is_tabular_flags) and is_tabular_flags[i])
+            else document_files
+        )
+        file_bucket.append(
+            {
+                "index": i,
+                "file_id": file_id,
+                "temp_file_path": temp_file_path,
+                "filename": all_files[i].filename if i < len(all_files) else "",
+                "result": result,
+            }
+        )
+
+    return document_files, tabular_files
+
+
+def _handle_tabular_files_results(tabular_files, is_tabular_flags):
+    """Update flags and log outcomes for tabular files based on FileHandler results."""
+    for file_info in tabular_files:
+        i = file_info["index"]
+        is_tabular_flags[i] = True
+
+        result = file_info["result"]
+        filename = file_info["filename"]
+        file_id = file_info["file_id"]
+
+        if result.get("status") == "success" and result.get("is_tabular"):
+            logging.info(
+                f"Tabular file {filename} with ID {file_id} already processed with database summary"
+            )
+        elif result.get("status") == "existing":
+            logging.info(
+                f"Existing tabular file {filename} with ID {file_id} already processed"
+            )
+        else:
+            logging.warning(
+                f"Unexpected status for tabular file {filename}: {result.get('status')}"
+            )
+
+
+def _augment_document_files_with_migration(document_files, username):
+    """Augment document files with migration files to enable true parallel processing."""
+    try:
+        migration_ctx = globals().get("current_migration_context")
+        if migration_ctx and migration_ctx.get("is_migration"):
+            available_migration_files = migration_ctx.get(
+                "files_to_migrate_details", []
+            )
+            for mig in available_migration_files:
+                mig_file_id = mig.get("file_id")
+                original_filename = mig.get("original_filename")
+                if (
+                    not mig_file_id
+                    or not original_filename
+                    or original_filename == "N/A"
+                ):
+                    continue
+                import os as _os
+
+                base_name = _os.path.basename(original_filename)
+                preferred_temp_path = f"temp_files/{mig_file_id}_{base_name}"
+                legacy_temp_path = f"temp_files/{mig_file_id}"
+                temp_path = (
+                    preferred_temp_path
+                    if _os.path.exists(preferred_temp_path)
+                    else legacy_temp_path
+                )
+                if not _os.path.exists(temp_path):
+                    continue
+                # Build metadata with merged usernames (preserved + current uploader). Duplicates allowed.
+                preserved_usernames = mig.get("usernames", [])
+                merged_usernames = (
+                    preserved_usernames.copy()
+                    if isinstance(preserved_usernames, list)
+                    else []
+                )
+                merged_usernames.append(username)
+                # Prefer file_hash from migration details, else from file_info, else compute
+                file_hash = mig.get("file_hash")
+                if not file_hash:
+                    try:
+                        gcs_info = GCSHandler(configs).get_file_info(mig_file_id) or {}
+                        file_hash = gcs_info.get("file_hash")
+                    except Exception:
+                        file_hash = None
+                if not file_hash:
+                    try:
+                        import hashlib as _hashlib
+
+                        with open(temp_path, "rb") as _f:
+                            file_hash = _hashlib.md5(_f.read()).hexdigest()
+                    except Exception:
+                        file_hash = None
+                # Derive flags from extension or file_info
+                ext = _os.path.splitext(base_name)[1].lower()
+                is_image_flag = ext in [
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".gif",
+                    ".bmp",
+                    ".webp",
+                ]
+                is_tabular_flag = ext in [
+                    ".csv",
+                    ".xlsx",
+                    ".xls",
+                    ".db",
+                    ".sqlite",
+                    ".sqlite3",
+                ]
+                if not (is_image_flag or is_tabular_flag):
+                    # check existing file_info type
+                    try:
+                        gcs_info = GCSHandler(configs).get_file_info(mig_file_id) or {}
+                        ftype = gcs_info.get("file_type")
+                        if ftype in ["tabular", "database"]:
+                            is_tabular_flag = True
+                        # images are covered by extension set above
+                    except Exception:
+                        pass
+                file_metadata = {
+                    "file_id": mig_file_id,
+                    "original_filename": base_name,
+                    "username": merged_usernames,
+                    "is_image": is_image_flag,
+                    "is_tabular": is_tabular_flag,
+                    "file_hash": file_hash,
+                }
+                document_files.append(
+                    {
+                        "index": -1,
+                        "file_id": mig_file_id,
+                        "temp_file_path": temp_path,
+                        "filename": base_name,
+                        "result": {"status": "success", "metadata": file_metadata},
+                    }
+                )
+    except Exception as e:
+        logging.warning(
+            f"Failed to augment document files for migration parallelism: {e}"
+        )
+    return document_files
+
+
 async def process_files_by_type(
     background_tasks,
     all_files,
@@ -693,70 +859,19 @@ async def process_files_by_type(
 ):
     """Process each uploaded file based on its type (tabular or document)."""
 
-    # Separate document files and tabular files for different processing
-    document_files = []
-    tabular_files = []
+    # Use precomputed flags instead of recalculating from filenames
+    document_files, tabular_files = _split_processed_files_by_type(
+        all_files, results, processed_file_ids, original_filenames, is_tabular_flags
+    )
 
-    for i, result in enumerate(results):
-        file_id = processed_file_ids[i]
-        temp_file_path = result.get("temp_file_path")
+    # Handle tabular files (flags, logging)
+    _handle_tabular_files_results(tabular_files, is_tabular_flags)
 
-        # Skip invalid files
-        if not file_id or not temp_file_path:
-            logging.warning(f"Skipping invalid file: {original_filenames[i]}")
-            continue
-
-        # Split files by type for batch processing
-        if is_tabular_file(all_files[i].filename):
-            tabular_files.append(
-                {
-                    "index": i,
-                    "file_id": file_id,
-                    "temp_file_path": temp_file_path,
-                    "filename": all_files[i].filename,
-                    "result": result,
-                }
-            )
-        else:
-            document_files.append(
-                {
-                    "index": i,
-                    "file_id": file_id,
-                    "temp_file_path": temp_file_path,
-                    "filename": all_files[i].filename,
-                    "result": result,
-                }
-            )
-
-    # Process tabular files - FileHandler.process_file already handled new vs existing logic
-    # We just need to ensure proper is_tabular flag setting
-    for file_info in tabular_files:
-        i = file_info["index"]
-        is_tabular_flags[i] = True
-
-        # Check if this is a new tabular file that needs database summary
-        result = file_info["result"]
-        if result.get("status") == "success" and result.get("is_tabular"):
-            # New tabular file - FileHandler already processed it with database summary
-            logging.info(
-                f"Tabular file {file_info['filename']} with ID {file_info['file_id']} "
-                f"already processed with database summary"
-            )
-        elif result.get("status") == "existing":
-            # Existing tabular file - also already handled by FileHandler
-            logging.info(
-                f"Existing tabular file {file_info['filename']} with ID {file_info['file_id']} already processed"
-            )
-        else:
-            # Fallback case - should not happen with current FileHandler logic
-            logging.warning(
-                f"Unexpected status for tabular file {file_info['filename']}: {result.get('status')}"
-            )
+    # Augment document files with migration context if present
+    document_files = _augment_document_files_with_migration(document_files, username)
 
     # Process document files in parallel if there are multiple
     if len(document_files) > 1:
-        # Pass background_tasks to enable non-blocking GCS uploads after local embedding creation
-        # Note: process_document_files_parallel should determine is_image per file internally
         await process_document_files_parallel(
             document_files, username, is_image, background_tasks
         )
@@ -766,7 +881,14 @@ async def process_files_by_type(
 
         # Determine is_image based on file extension for this specific file
         file_extension = os.path.splitext(file_info["filename"])[1].lower()
-        is_image = file_extension in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
+        is_image = file_extension in [
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".bmp",
+            ".webp",
+        ]
 
         await process_document_type_file(
             background_tasks,
@@ -1096,6 +1218,7 @@ async def recreate_embeddings_for_existing_file(
     username_list = result.get("username_list", [username])
 
     # Ensure current usernames are preserved
+    # TODO: This is not correct. We should not be appending usernames. We should be replacing the username list.
     for current_user in current_username_list:
         if current_user not in username_list:
             username_list.append(current_user)
@@ -1225,14 +1348,10 @@ async def upload_file(
 
         # ===== MIGRATION DECISION LOGIC - ONLY FOR MULTI-FILE SCENARIOS =====
         from rtl_rag_chatbot_api.chatbot.migration_handler import (
-            handle_migration_for_upload,
+            plan_upload_with_migration,
         )
 
-        (
-            is_multi_file_scenario,
-            migration_result,
-            detailed_info,
-        ) = await handle_migration_for_upload(
+        is_multi_file_scenario, plan = await plan_upload_with_migration(
             all_files, parsed_existing_file_ids, configs
         )
 
@@ -1246,180 +1365,33 @@ async def upload_file(
                 background_tasks,
             )
 
-        if is_multi_file_scenario:
-            # Check if migration is actually needed (has existing files)
-            migration_decision = (
-                migration_result.get("migration_decision", {})
-                if migration_result
-                else {}
-            )
-            has_existing_files = (
-                len(migration_decision.get("files_to_migrate", [])) > 0
-                or len(migration_decision.get("existing_files_no_migration", [])) > 0
-            )
+        # Multi-file: act on plan
+        action = plan.get("action")
+        if action == "error":
+            return JSONResponse(status_code=400, content=plan.get("error", {}))
 
-            if migration_result and has_existing_files:
-                # ===== MIGRATION FALL-THROUGH LOGIC =====
-                logging.info("=== PREPARING MIGRATION DATA FOR EXISTING LOGIC ===")
+        if action == "fallthrough":
+            # Store migration context globally for downstream logic to augment document files
+            globals()["current_migration_context"] = plan.get("migration_context", {})
 
-                # Extract migration decision data
-                migration_decision = migration_result.get("migration_decision", {})
-                files_to_migrate = migration_decision.get("files_to_migrate", [])
-                existing_files_no_migration = migration_decision.get(
-                    "existing_files_no_migration", []
-                )
-
-                # Get detailed file information
-                detailed_info = detailed_info or {}
-                files_to_migrate_details = detailed_info.get("files_to_migrate", [])
-
-                # Check if all files needing migration are available
-                missing_files = []
-                available_migration_files = []
-
-                for file_detail in files_to_migrate_details:
-                    file_id = file_detail["file_id"]
-
-                    # Check if file is available (uploaded or downloaded from GCS)
-                    is_uploaded = any(
-                        f.filename and file_id.replace("temp_", "") in f.filename
-                        for f in all_files
-                    )
-
-                    # Check if file was downloaded during migration (temp file exists)
-                    temp_file_path = f"temp_files/{file_id}"
-                    is_downloaded = os.path.exists(temp_file_path)
-
-                    if is_uploaded or is_downloaded:
-                        available_migration_files.append(file_detail)
-                        logging.info(
-                            f"File {file_id} available for migration "
-                            f"(uploaded: {is_uploaded}, downloaded: {is_downloaded})"
-                        )
-                    else:
-                        missing_files.append(file_detail)
-                        logging.warning(f"File {file_id} not available for migration")
-
-                # If any files are missing, block the operation
-                if missing_files:
-                    missing_file_ids = [f["file_id"] for f in missing_files]
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "message": (
-                                "Mixed embedding types detected. "
-                                "Some files need migration but are not available."
-                            ),
-                            "details": (
-                                "Files with legacy embeddings need to be "
-                                "re-uploaded to create new embeddings."
-                            ),
-                            "missing_files": missing_file_ids,
-                            "action_required": (
-                                "Please upload the missing files "
-                                "again to proceed with migration."
-                            ),
-                        },
-                    )
-
-                # All files available - prepare data for existing logic
-                logging.info(
-                    "All migration files available. Preparing data for existing logic."
-                )
-
-                # Get new files information
-                new_files = migration_decision.get("new_files", [])
-
-                # Set migration context
-                migration_context = {
-                    "is_migration": True,
-                    "files_to_migrate": files_to_migrate,
-                    "files_to_migrate_details": available_migration_files,
-                    "existing_files_no_migration": existing_files_no_migration,
-                    "new_files": new_files,
-                }
-
-                # Prepare data for existing logic - only migration and existing files go to existing IDs
-                parsed_existing_file_ids = (
-                    files_to_migrate + existing_files_no_migration
-                )
-
-                # Filter uploaded files to avoid double processing
-                # Remove files that are being handled as migration (existing file IDs)
-                migration_filenames = set()
-                for file_detail in available_migration_files:
-                    if file_detail.get("source") == "uploaded_file":
-                        original_filename = file_detail.get("original_filename", "")
-                        if original_filename != "N/A":
-                            migration_filenames.add(original_filename)
-
-                # Keep only files that are NOT being handled by migration logic
-                # This ensures new files are processed normally without duplication
-                # Also exclude uploaded files that are already recognized as existing and need no migration
-                all_files = _exclude_uploaded_files_already_handled(
-                    all_files, detailed_info, available_migration_files
-                )
-
-                logging.info(
-                    "Migration context: %s files to migrate, %s existing files no migration",
-                    len(files_to_migrate),
-                    len(existing_files_no_migration),
-                )
-                logging.info(
-                    "Prepared for existing logic: %s existing file IDs, %s files",
-                    len(parsed_existing_file_ids),
-                    len(all_files),
-                )
-
-                # Store migration context for use in existing logic
-                globals()["current_migration_context"] = migration_context
-
-                # Fall through to existing logic (don't return here)
-            else:
-                # Pure new files scenario - skip migration logic entirely
-                logging.info(
-                    "=== PURE NEW FILES SCENARIO - SKIPPING MIGRATION LOGIC ==="
-                )
-                logging.info(f"Processing {len(all_files)} new files normally")
-
-                # Ensure parsed_existing_file_ids is empty for pure new files
-                parsed_existing_file_ids = []
-
-                # Clear any existing migration context
-                if "current_migration_context" in globals():
-                    del globals()["current_migration_context"]
-
-                # Fall through to normal logic (don't return here)
-
-            # ===== normal multifile logic =====
-
-            # Check if we're in migration context
-            migration_context = globals().get("current_migration_context", {})
-            is_migration = migration_context.get("is_migration", False)
-
-            response = await _process_normal_upload_flow(
-                all_files,
-                parsed_existing_file_ids,
-                is_image,
-                username,
-                background_tasks,
-                is_migration=is_migration,
-                migration_context=migration_context,
-            )
-
-            # Clear migration context after processing
-            if "current_migration_context" in globals():
-                del globals()["current_migration_context"]
-
-            return response
-
-        # No files or file IDs provided case
-        return JSONResponse(
-            status_code=400,
-            content={
-                "message": "No files provided in either 'file', 'files', 'urls', or 'existing_file_ids' parameters."
-            },
+        # Proceed with normal flow using possibly filtered files and updated existing IDs
+        response = await _process_normal_upload_flow(
+            plan.get("all_files", all_files),
+            plan.get("parsed_existing_file_ids", parsed_existing_file_ids),
+            is_image,
+            username,
+            background_tasks,
+            is_migration=(plan.get("migration_context", {}) or {}).get(
+                "is_migration", False
+            ),
+            migration_context=plan.get("migration_context", {}),
         )
+
+        # Clear migration context after processing
+        if "current_migration_context" in globals():
+            del globals()["current_migration_context"]
+
+        return response
 
     except HTTPException as http_ex:
         # Re-raise HTTPException with proper status codes (these are expected API errors)
@@ -1646,6 +1618,115 @@ async def process_existing_file_ids_in_parallel(
         )
 
 
+async def _handle_migration_file_id(
+    file_id: str,
+    username: str,
+    migration_details_map: dict,
+) -> tuple:
+    """Handle a single file_id that requires migration by preparing it for the pipeline.
+
+    Returns a tuple of (file_id, original_filename, is_tabular_flag) on success,
+    or ("error", file_id, error_message) on failure.
+    """
+    try:
+        logging.info(f"Processing file {file_id} for migration (new embeddings)")
+
+        # Get migration details
+        file_detail = migration_details_map.get(file_id, {})
+        preserved_usernames = file_detail.get("usernames", [])
+        original_filename = file_detail.get("original_filename", f"file_{file_id}")
+
+        # Determine temp file path (downloaded/persisted during migration)
+        preferred_temp_path = None
+        if original_filename and original_filename != f"file_{file_id}":
+            import os as _os
+
+            base_name = _os.path.basename(original_filename)
+            preferred_temp_path = f"temp_files/{file_id}_{base_name}"
+        legacy_temp_path = f"temp_files/{file_id}"
+        temp_file_path = (
+            preferred_temp_path
+            if preferred_temp_path and os.path.exists(preferred_temp_path)
+            else legacy_temp_path
+        )
+
+        if os.path.exists(temp_file_path):
+            logging.info(
+                f"Using downloaded/uploaded file for migration: {temp_file_path}"
+            )
+            # Use helper function to prepare migration file for standard pipeline
+            return await _prepare_migration_file_for_pipeline(
+                file_id=file_id,
+                original_filename=original_filename,
+                temp_file_path=temp_file_path,
+                preserved_usernames=preserved_usernames,
+                username=username,
+                gcs_handler=gcs_handler,
+                configs=configs,
+                embedding_handler=embedding_handler,
+            )
+
+        error_msg = f"Migration file {file_id} not found in temp directory"
+        logging.error(error_msg)
+        return ("error", file_id, error_msg)
+
+    except Exception as e:
+        logging.error(f"Error processing migration file ID {file_id}: {str(e)}")
+        return ("error", file_id, f"Error processing file ID {file_id}: {str(e)}")
+
+
+async def _handle_existing_no_migration_file_id(
+    file_id: str,
+    username: str,
+    background_tasks: BackgroundTasks,
+) -> tuple:
+    """Handle a single file_id that does not require migration using existing logic.
+
+    Returns a tuple of (file_id, original_filename, is_tabular_flag) on success,
+    or ("error", file_id, error_message) on failure.
+    """
+    try:
+        logging.info(f"Processing file {file_id} (no migration needed)")
+
+        # Check embeddings
+        results = await _check_file_embeddings_safe([file_id], "gpt_4o_mini")
+        result = results[0]
+
+        if not result.get("embeddings_exist", False):
+            logging.warning(f"Embeddings not found for file ID: {file_id}")
+            return ("error", file_id, f"Embeddings not found for file {file_id}")
+
+        # Get file info
+        file_info = gcs_handler.get_file_info(file_id)
+        if not file_info:
+            return ("error", file_id, f"File info not found for file {file_id}")
+
+        original_filename = file_info.get("original_filename", f"file_{file_id}")
+        is_tabular = file_info.get("file_type") in ["tabular", "database"]
+
+        # Ensure local embeddings are present
+        local_embeddings_exist = embedding_handler.has_local_embeddings(file_id)
+        if not local_embeddings_exist:
+            logging.info(f"Downloading embeddings for file {file_id}")
+            gcs_handler.download_files_from_folder_by_id(file_id)
+
+        # Update username (normal existing file logic)
+        background_tasks.add_task(
+            update_username_for_existing_file,
+            file_id,
+            username,
+            file_info.get("username", []),
+        )
+
+        return (file_id, original_filename, is_tabular)
+
+    except Exception as e:
+        logging.error(
+            f"Error processing existing (no migration) file ID {file_id}: {str(e)}"
+        )
+        return ("error", file_id, f"Error processing file ID {file_id}: {str(e)}")
+
+
 async def process_migration_file_ids_in_parallel(
     file_ids: List[str],
     username: str,
@@ -1675,105 +1756,24 @@ async def process_migration_file_ids_in_parallel(
         detail["file_id"]: detail for detail in files_to_migrate_details
     }
 
-    async def process_single_migration_file_id(file_id: str) -> tuple:
-        """Process a single file ID in migration context"""
+    async def _process_single_migration_file_id(file_id: str) -> tuple:
+        """Thin wrapper that routes to the appropriate handler based on context lists."""
         try:
             if file_id in files_to_migrate:
-                # This file needs migration - create new embeddings
-                logging.info(
-                    f"Processing file {file_id} for migration (new embeddings)"
+                return await _handle_migration_file_id(
+                    file_id=file_id,
+                    username=username,
+                    migration_details_map=migration_details_map,
                 )
-
-                # Get migration details
-                file_detail = migration_details_map.get(file_id, {})
-                preserved_usernames = file_detail.get("usernames", [])
-                original_filename = file_detail.get(
-                    "original_filename", f"file_{file_id}"
+            if file_id in existing_files_no_migration:
+                return await _handle_existing_no_migration_file_id(
+                    file_id=file_id,
+                    username=username,
+                    background_tasks=background_tasks,
                 )
-
-                # Combine preserved usernames with current username (Option A)
-                combined_usernames = list(set(preserved_usernames + [username]))
-
-                # Check for temp file (downloaded during migration)
-                temp_file_path = f"temp_files/{file_id}"
-                if os.path.exists(temp_file_path):
-                    logging.info(
-                        f"Using downloaded file for migration: {temp_file_path}"
-                    )
-
-                    # Get file info to determine type
-                    file_info = gcs_handler.get_file_info(file_id)
-                    is_tabular = (
-                        file_info.get("file_type") in ["tabular", "database"]
-                        if file_info
-                        else False
-                    )
-
-                    # Create new embeddings with preserved usernames
-                    background_tasks.add_task(
-                        create_embeddings_background,
-                        file_id,
-                        temp_file_path,
-                        embedding_handler,
-                        configs,
-                        SessionLocal,
-                        combined_usernames,  # Use combined usernames
-                    )
-
-                    return (file_id, original_filename, is_tabular)
-                else:
-                    # File should have been downloaded during migration but wasn't found
-                    error_msg = f"Migration file {file_id} not found in temp directory"
-                    logging.error(error_msg)
-                    return ("error", file_id, error_msg)
-
-            elif file_id in existing_files_no_migration:
-                # This file doesn't need migration - process normally
-                logging.info(f"Processing file {file_id} (no migration needed)")
-
-                # Use existing logic for non-migration files
-                results = await _check_file_embeddings_safe([file_id], "gpt_4o_mini")
-                result = results[0]
-
-                if not result.get("embeddings_exist", False):
-                    logging.warning(f"Embeddings not found for file ID: {file_id}")
-                    return (
-                        "error",
-                        file_id,
-                        f"Embeddings not found for file {file_id}",
-                    )
-
-                # Get file info
-                file_info = gcs_handler.get_file_info(file_id)
-                if not file_info:
-                    return ("error", file_id, f"File info not found for file {file_id}")
-
-                original_filename = file_info.get(
-                    "original_filename", f"file_{file_id}"
-                )
-                is_tabular = file_info.get("file_type") in ["tabular", "database"]
-
-                # Download embeddings if needed
-                local_embeddings_exist = embedding_handler.has_local_embeddings(file_id)
-                if not local_embeddings_exist:
-                    logging.info(f"Downloading embeddings for file {file_id}")
-                    gcs_handler.download_files_from_folder_by_id(file_id)
-
-                # Update username (normal existing file logic)
-                background_tasks.add_task(
-                    update_username_for_existing_file,
-                    file_id,
-                    username,
-                    file_info.get("username", []),
-                )
-
-                return (file_id, original_filename, is_tabular)
-            else:
-                # Shouldn't happen but handle gracefully
-                error_msg = f"File {file_id} not found in migration context"
-                logging.error(error_msg)
-                return ("error", file_id, error_msg)
-
+            error_msg = f"File {file_id} not found in migration context"
+            logging.error(error_msg)
+            return ("error", file_id, error_msg)
         except Exception as e:
             logging.error(f"Error processing migration file ID {file_id}: {str(e)}")
             return ("error", file_id, f"Error processing file ID {file_id}: {str(e)}")
@@ -1781,7 +1781,7 @@ async def process_migration_file_ids_in_parallel(
     # Process all file IDs in parallel
     try:
         results = await asyncio.gather(
-            *[process_single_migration_file_id(file_id) for file_id in file_ids],
+            *[_process_single_migration_file_id(file_id) for file_id in file_ids],
             return_exceptions=True,
         )
 
@@ -2007,6 +2007,15 @@ async def initialize_file_metadata(
         # Ensure embeddings_status is set
         if "embeddings_status" not in file_metadata:
             file_metadata["embeddings_status"] = "in_progress"
+        # Merge provided username_list into existing metadata (preserve and deduplicate)
+        if username_list:
+            current_usernames = file_metadata.get("username", [])
+            if not isinstance(current_usernames, list):
+                current_usernames = [current_usernames] if current_usernames else []
+            for u in username_list:
+                if u not in current_usernames:
+                    current_usernames.append(u)
+            file_metadata["username"] = current_usernames
     else:
         logging.info(f"Creating new metadata for {file_id}")
         file_metadata = {
@@ -2107,10 +2116,26 @@ async def create_embeddings_background(
                     try:
                         # Import database function and store hash directly
                         from rtl_rag_chatbot_api.common.db import (
+                            delete_file_info_by_file_id,
                             insert_file_info_record,
                         )
 
                         with get_db_session() as db_session:
+                            # Always delete old entry for this file_id before insert (covers migration)
+                            try:
+                                del_result = delete_file_info_by_file_id(
+                                    db_session, file_id
+                                )
+                                if del_result.get("status") == "success":
+                                    deleted_count = del_result.get("deleted_count", 0)
+                                    logging.info(
+                                        f"Deleted {deleted_count} old FileInfo records for file_id: {file_id}"
+                                    )
+                            except Exception as del_err:
+                                logging.warning(
+                                    f"Failed to delete existing FileInfo for {file_id}: {del_err}"
+                                )
+
                             result = insert_file_info_record(
                                 db_session,
                                 file_id,
@@ -4338,3 +4363,153 @@ def _exclude_uploaded_files_already_handled(
         )
 
     return filtered_files
+
+
+async def _prepare_migration_file_for_pipeline(
+    file_id: str,
+    original_filename: str,
+    temp_file_path: str,
+    preserved_usernames: list,
+    username: str,
+    gcs_handler: GCSHandler,
+    configs: dict,
+    embedding_handler,
+) -> tuple[str, str, bool]:
+    """Prepare a migration file to follow the standard pipeline.
+
+    - Compute file_hash
+    - Ensure encryption uploaded under the SAME file_id
+    - Seed file_info with in_progress and essential flags
+
+    Returns: (file_id, original_filename, is_tabular_flag)
+    """
+    # Combine usernames (duplicates allowed for frequency tracking)
+    combined_usernames = (
+        preserved_usernames.copy() if isinstance(preserved_usernames, list) else []
+    )
+    combined_usernames.append(username)
+
+    # Detect tabular/image flags
+    import os as _os
+
+    base_name = _os.path.basename(original_filename)
+    ext = _os.path.splitext(base_name)[1].lower()
+    is_image_flag = ext in [
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".bmp",
+        ".webp",
+    ]
+    is_tabular_flag = ext in [
+        ".csv",
+        ".xlsx",
+        ".xls",
+        ".db",
+        ".sqlite",
+        ".sqlite3",
+    ]
+
+    # Compute file hash
+    file_hash = None
+    try:
+        import hashlib as _hashlib
+
+        with open(temp_file_path, "rb") as _f:
+            file_hash = _hashlib.md5(_f.read()).hexdigest()
+    except Exception as _hash_err:
+        logging.warning(
+            f"Failed to compute file hash for migration file {file_id}: {_hash_err}"
+        )
+
+    # Ensure encryption under the same file_id (no-op for tabular)
+    try:
+        from rtl_rag_chatbot_api.chatbot.utils.file_encryption_manager import (
+            FileEncryptionManager,
+        )
+
+        _enc_mgr = FileEncryptionManager(gcs_handler)
+        await _enc_mgr.ensure_file_encryption(
+            file_id=file_id,
+            original_filename=base_name,
+            temp_file_path=temp_file_path,
+            is_tabular=is_tabular_flag,
+            is_database=False,
+        )
+    except Exception as _enc_err:
+        logging.warning(
+            f"Failed to ensure encryption for migration file {file_id}: {_enc_err}"
+        )
+    # Create embeddings for migration file (same as original code)
+    try:
+        from rtl_rag_chatbot_api.app import SessionLocal, create_embeddings_background
+
+        initial_metadata = {
+            "file_id": file_id,
+            "original_filename": base_name,
+            "username": combined_usernames,
+            "file_hash": file_hash,
+            "is_image": is_image_flag,
+            "is_tabular": is_tabular_flag,
+            "embeddings_status": "in_progress",
+            "embedding_type": "azure-03-small",
+        }
+        # Create embeddings in background (non-blocking)
+        asyncio.create_task(
+            create_embeddings_background(
+                file_id,
+                temp_file_path,
+                embedding_handler,
+                configs,
+                SessionLocal,
+                combined_usernames,
+                initial_metadata,
+            )
+        )
+        logging.info(
+            f"Started background embedding creation for migration file {file_id}"
+        )
+
+        # Remove this line - it's redundant:
+        # gcs_handler.update_file_info(file_id, initial_metadata)
+
+    except Exception as _emb_err:
+        logging.warning(
+            f"Failed to start embedding creation for migration file {file_id}: {_emb_err}"
+        )
+
+    # DB maintenance: delete old row and insert new
+    try:
+        from rtl_rag_chatbot_api.common.db import (
+            delete_file_info_by_file_id,
+            insert_file_info_record,
+        )
+
+        if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
+            with get_db_session() as db_session:
+                try:
+                    del_result = delete_file_info_by_file_id(db_session, file_id)
+                    if del_result.get("status") == "success":
+                        deleted_count = del_result.get("deleted_count", 0)
+                        logging.info(
+                            f"Deleted {deleted_count} old FileInfo records for file_id: {file_id}"
+                        )
+                except Exception as del_err:
+                    logging.warning(
+                        f"Failed to delete existing FileInfo for {file_id}: {del_err}"
+                    )
+                # insert new
+                if file_hash:
+                    _ = insert_file_info_record(
+                        db_session,
+                        file_id,
+                        file_hash,
+                        base_name,
+                        "azure-03-small",
+                    )
+    except Exception as _db_err:
+        logging.warning(
+            f"Failed to refresh FileInfo DB record for {file_id}: {_db_err}"
+        )
+    return file_id, original_filename, is_tabular_flag

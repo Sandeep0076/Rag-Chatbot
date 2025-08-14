@@ -11,7 +11,6 @@ embeddings based on the flowchart logic. It provides functionality to:
 
 import asyncio
 import logging
-import os
 from typing import Any, Dict, List, Optional, Tuple
 
 # Import existing handlers and utilities
@@ -511,6 +510,7 @@ async def get_detailed_migration_file_info(
                     "embedding_type": file_info.get("embedding_type", "N/A"),
                     "original_filename": original_filename,
                     "source": source,
+                    "file_hash": file_info.get("file_hash"),
                 }
                 result["files_to_migrate"].append(detailed_info)
 
@@ -562,6 +562,7 @@ async def get_detailed_migration_file_info(
                     "embedding_type": file_info.get("embedding_type", "N/A"),
                     "original_filename": original_filename,
                     "source": source,
+                    "file_hash": file_info.get("file_hash"),
                 }
                 result["existing_files_no_migration"].append(detailed_info)
 
@@ -658,7 +659,12 @@ async def _prepare_file_contents_for_migration(all_files: List) -> Tuple[List, D
     return file_contents_for_migration, file_objects_map
 
 
-async def _download_migration_files(files_to_migrate: List[str], configs: dict) -> None:
+async def _download_migration_files(
+    files_to_migrate: List[str],
+    configs: dict,
+    file_objects_map: Optional[dict] = None,
+    detailed_info: Optional[Dict[str, Any]] = None,
+) -> None:
     """Download and decrypt files that need migration."""
     if not files_to_migrate:
         return
@@ -667,18 +673,72 @@ async def _download_migration_files(files_to_migrate: List[str], configs: dict) 
         "Starting migration for existing files - downloading and decrypting files from GCS"
     )
 
+    # Build a quick lookup for original_filename per file_id when available
+    file_id_to_original: Dict[str, str] = {}
+    try:
+        if detailed_info and isinstance(detailed_info, dict):
+            for item in detailed_info.get("files_to_migrate", []):
+                f_id = item.get("file_id")
+                orig = item.get("original_filename")
+                if f_id and orig:
+                    file_id_to_original[f_id] = orig
+    except Exception:
+        # Non-fatal, we'll fallback to GCS metadata lookup
+        pass
+
     for file_id in files_to_migrate:
         try:
             logger.info(f"Processing migration for file_id: {file_id}")
             gcs_handler = GCSHandler(configs)
-            decrypted_file_path = gcs_handler.download_encrypted_file_by_id(file_id)
+            # Decide the preferred original filename
+            original_filename = file_id_to_original.get(file_id)
+            if not original_filename:
+                info = gcs_handler.get_file_info(file_id) or {}
+                original_filename = info.get("original_filename")
 
-            if decrypted_file_path and os.path.exists(decrypted_file_path):
-                logger.info(
-                    f"Successfully downloaded and decrypted file for {file_id} to {decrypted_file_path}"
+            # Fallback filename if metadata is missing
+            if not original_filename:
+                original_filename = f"{file_id}.bin"
+
+            # Always use basename for safety
+            import os as _os
+
+            original_filename = _os.path.basename(original_filename)
+            destination_path = _os.path.join(
+                "temp_files", f"{file_id}_{original_filename}"
+            )
+
+            # If user uploaded this file in the same request, use that instead of downloading
+            used_uploaded = False
+            if file_objects_map and original_filename in file_objects_map:
+                try:
+                    uploaded_file = file_objects_map[original_filename]
+                    content = await uploaded_file.read()
+                    await uploaded_file.seek(0)
+                    _os.makedirs(_os.path.dirname(destination_path), exist_ok=True)
+                    with open(destination_path, "wb") as out_f:
+                        out_f.write(content)
+                    logger.info(
+                        f"Used uploaded file for {file_id}; saved to {destination_path} (no download)"
+                    )
+                    used_uploaded = True
+                except Exception as write_err:
+                    logger.warning(
+                        f"Failed to persist uploaded file for {file_id}: {write_err}; will attempt download"
+                    )
+
+            if not used_uploaded:
+                # Download and decrypt as fallback
+                decrypted_file_path = gcs_handler.download_encrypted_file_by_id(
+                    file_id, destination_path=destination_path
                 )
-            else:
-                logger.error(f"Failed to download or decrypt file for {file_id}")
+
+                if decrypted_file_path and _os.path.exists(decrypted_file_path):
+                    logger.info(
+                        f"Successfully downloaded and decrypted file for {file_id} to {decrypted_file_path}"
+                    )
+                else:
+                    logger.error(f"Failed to download or decrypt file for {file_id}")
 
         except Exception as e:
             logger.error(f"Error processing migration for file {file_id}: {str(e)}")
@@ -793,7 +853,12 @@ async def handle_migration_for_upload(
             parsed_existing_file_ids,
         )
 
-        await _download_migration_files(migration_decision["files_to_migrate"], configs)
+        await _download_migration_files(
+            migration_decision["files_to_migrate"],
+            configs,
+            file_objects_map,
+            detailed_info,
+        )
         await _delete_old_embeddings(detailed_info["files_to_migrate"], configs)
 
         return (
@@ -819,3 +884,213 @@ async def handle_migration_for_upload(
             "Continuing with normal file processing due to migration check error"
         )
         return True, None, None
+
+
+async def plan_upload_with_migration(
+    all_files: List,
+    parsed_existing_file_ids: List[str],
+    configs: dict,
+) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Plan how to proceed with an upload considering migration needs.
+
+    Returns a tuple (is_multi_file_scenario, plan) where plan contains:
+    - action: "normal" | "fallthrough" | "error"
+    - all_files: possibly filtered list of files to process
+    - parsed_existing_file_ids: possibly updated list of existing IDs to process
+    - migration_context: dict with migration data when action == "fallthrough"
+    - error: dict with error payload when action == "error"
+    - detailed_info: dict with detailed migration info (for visibility)
+    """
+    try:
+        (
+            is_multi_file_scenario,
+            migration_result,
+            detailed_info,
+        ) = await handle_migration_for_upload(
+            all_files, parsed_existing_file_ids, configs
+        )
+
+        if not is_multi_file_scenario:
+            # Single-file or simple case; proceed as normal
+            return False, {
+                "action": "normal",
+                "all_files": all_files,
+                "parsed_existing_file_ids": parsed_existing_file_ids,
+                "migration_context": None,
+                "error": None,
+                "detailed_info": None,
+            }
+
+        # Multi-file case
+        migration_decision = (
+            migration_result.get("migration_decision", {}) if migration_result else {}
+        )
+        files_to_migrate = migration_decision.get("files_to_migrate", [])
+        existing_files_no_migration = migration_decision.get(
+            "existing_files_no_migration", []
+        )
+        has_existing_files = bool(files_to_migrate or existing_files_no_migration)
+
+        if migration_result and has_existing_files:
+            # Confirm availability of files-to-migrate in temp or uploaded set
+            missing_files = []
+            available_migration_files = []
+
+            # Build list from detailed_info if available
+            files_to_migrate_details = (
+                (detailed_info or {}).get("files_to_migrate", [])
+                if detailed_info
+                else []
+            )
+
+            import os as _os
+
+            for file_detail in files_to_migrate_details:
+                file_id = file_detail.get("file_id")
+                if not file_id:
+                    continue
+
+                # Check if file is uploaded in this request
+                is_uploaded = any(
+                    getattr(f, "filename", None)
+                    and file_id.replace("temp_", "") in f.filename
+                    for f in all_files
+                )
+
+                # Check temp path availability
+                preferred_temp_path = None
+                original_filename = file_detail.get("original_filename")
+                if original_filename and original_filename != "N/A":
+                    base_name = _os.path.basename(original_filename)
+                    preferred_temp_path = f"temp_files/{file_id}_{base_name}"
+
+                legacy_temp_path = f"temp_files/{file_id}"
+                temp_file_path = (
+                    preferred_temp_path
+                    if preferred_temp_path and _os.path.exists(preferred_temp_path)
+                    else legacy_temp_path
+                )
+
+                if is_uploaded or _os.path.exists(temp_file_path):
+                    available_migration_files.append(file_detail)
+                    logger.info(
+                        "File %s available for migration (uploaded: %s, downloaded: %s)",
+                        file_id,
+                        is_uploaded,
+                        _os.path.exists(temp_file_path),
+                    )
+                else:
+                    missing_files.append(file_detail)
+                    logger.warning(f"File {file_id} not available for migration")
+
+            if missing_files:
+                missing_file_ids = [
+                    f.get("file_id") for f in missing_files if f.get("file_id")
+                ]
+                return True, {
+                    "action": "error",
+                    "all_files": all_files,
+                    "parsed_existing_file_ids": parsed_existing_file_ids,
+                    "migration_context": None,
+                    "detailed_info": detailed_info,
+                    "error": {
+                        "message": (
+                            "Mixed embedding types detected. Some files need migration but are not available."
+                        ),
+                        "details": (
+                            "Files with legacy embeddings need to be re-uploaded to create new embeddings."
+                        ),
+                        "missing_files": missing_file_ids,
+                        "action_required": (
+                            "Please upload the missing files again to proceed with migration."
+                        ),
+                    },
+                }
+
+            # All files available - prepare migration context and filter files
+            new_files = migration_decision.get("new_files", [])
+            migration_context = {
+                "is_migration": True,
+                "files_to_migrate": files_to_migrate,
+                "files_to_migrate_details": available_migration_files,
+                "existing_files_no_migration": existing_files_no_migration,
+                "new_files": new_files,
+            }
+
+            # Build updated parsed_existing_file_ids for fall-through
+            updated_existing_ids = files_to_migrate + existing_files_no_migration
+
+            # Filter uploaded files already handled by migration/no-migration logic
+            def _exclude_uploaded_files_already_handled(
+                all_files_local, detailed_info_local, available_mig_files_local
+            ):
+                migration_filenames = set()
+                for fd in available_mig_files_local:
+                    if fd.get("source") == "uploaded_file":
+                        original_filename = fd.get("original_filename", "")
+                        if original_filename and original_filename != "N/A":
+                            migration_filenames.add(original_filename)
+
+                existing_no_migration_details = (detailed_info_local or {}).get(
+                    "existing_files_no_migration", []
+                )
+                existing_no_migration_uploaded_filenames = set(
+                    d.get("original_filename")
+                    for d in existing_no_migration_details
+                    if (
+                        d.get("source") == "uploaded_file"
+                        and d.get("original_filename")
+                        and d.get("original_filename") != "N/A"
+                    )
+                )
+                filenames_to_exclude = migration_filenames.union(
+                    existing_no_migration_uploaded_filenames
+                )
+                filtered = [
+                    f
+                    for f in all_files_local
+                    if getattr(f, "filename", None) not in filenames_to_exclude
+                ]
+
+                if len(filtered) != len(all_files_local):
+                    logger.info(
+                        "Filtered %s uploaded file(s) already handled by migration/no-migration logic",
+                        len(all_files_local) - len(filtered),
+                    )
+                return filtered
+
+            filtered_files = _exclude_uploaded_files_already_handled(
+                all_files, detailed_info, available_migration_files
+            )
+
+            return True, {
+                "action": "fallthrough",
+                "all_files": filtered_files,
+                "parsed_existing_file_ids": updated_existing_ids,
+                "migration_context": migration_context,
+                "detailed_info": detailed_info,
+                "error": None,
+            }
+
+        # Pure new files scenario (no existing files to process)
+        return True, {
+            "action": "normal",
+            "all_files": all_files,
+            "parsed_existing_file_ids": [],  # ensure empty for pure new
+            "migration_context": None,
+            "detailed_info": detailed_info,
+            "error": None,
+        }
+
+    except Exception as e:
+        logger.error(f"Error planning upload with migration: {str(e)}")
+        # Fail-open: proceed with normal logic
+        return False, {
+            "action": "normal",
+            "all_files": all_files,
+            "parsed_existing_file_ids": parsed_existing_file_ids,
+            "migration_context": None,
+            "detailed_info": None,
+            "error": None,
+        }
