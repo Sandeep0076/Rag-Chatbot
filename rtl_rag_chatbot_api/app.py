@@ -1838,7 +1838,7 @@ def combine_upload_results(
     Returns:
         JSONResponse with combined results
     """
-    # Combine all results
+    # Combine all results (existing first to preserve expected ordering)
     all_results = existing_results + new_file_results
 
     if not all_results:
@@ -1847,10 +1847,17 @@ def combine_upload_results(
             content={"message": "No valid files or file IDs were processed."},
         )
 
-    # Extract data from combined results
-    all_file_ids = [result[0] for result in all_results]
-    all_filenames = [result[1] for result in all_results]
-    all_is_tabular_flags = [result[2] for result in all_results]
+    # Deduplicate while preserving order and keeping the first occurrence's metadata
+    # Each tuple is (file_id, original_filename, is_tabular)
+    unique_map: Dict[str, tuple] = {}
+    for file_id, filename, is_tabular in all_results:
+        if file_id not in unique_map:
+            unique_map[file_id] = (filename, is_tabular)
+
+    # Extract data from deduplicated results
+    all_file_ids = list(unique_map.keys())
+    all_filenames = [unique_map[fid][0] for fid in all_file_ids]
+    all_is_tabular_flags = [unique_map[fid][1] for fid in all_file_ids]
 
     # Use existing format_upload_response function for consistency
     return format_upload_response(all_file_ids, all_filenames, all_is_tabular_flags)
