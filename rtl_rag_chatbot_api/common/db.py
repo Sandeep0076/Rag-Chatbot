@@ -433,4 +433,5 @@ def export_gcs_file_info_to_sql_text(
         }
 
 
-# export_gcs_file_info_to_sql_text(output_file_path="./gcs_file_info_inserts.text")
+if __name__ == "__main__":
+    export_gcs_file_info_to_sql_text(output_file_path="./gcs_file_info_inserts.text")

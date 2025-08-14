@@ -621,6 +621,7 @@ async def get_detailed_migration_file_info(
         f"=== SUMMARY: {len(files_to_migrate)} files need migration, "
         f"{len(existing_files_no_migration)} existing files don't need migration, "
         f"{len(new_files)} new files to process (Total: {total_files}) ==="
+        "========================================================================================"
     )
 
     return result
@@ -665,12 +666,16 @@ async def _download_migration_files(
     file_objects_map: Optional[dict] = None,
     detailed_info: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Download and decrypt files that need migration."""
+    """
+    Prepare files for migration by reusing uploaded files when available.
+    Otherwise, download and decrypt from GCS (e.g., for existing file IDs).
+    """
     if not files_to_migrate:
         return
 
     logger.info(
-        "Starting migration for existing files - downloading and decrypting files from GCS"
+        "Preparing migration files: will reuse uploaded files when available; "
+        "will download/decrypt from GCS only when necessary"
     )
 
     # Build a quick lookup for original_filename per file_id when available
@@ -824,7 +829,9 @@ async def handle_migration_for_upload(
     if not _is_multi_file_scenario(all_files, parsed_existing_file_ids):
         return False, None, None
 
-    logger.info("=== MULTI-FILE SCENARIO DETECTED - RUNNING MIGRATION CHECK ===")
+    logger.info(
+        "=== MULTI-FILE SCENARIO DETECTED - RUNNING MIGRATION CHECK === ================================="
+    )
     logger.info(
         f"New files: {len(all_files)}, Existing file IDs: {len(parsed_existing_file_ids)}"
     )

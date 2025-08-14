@@ -830,6 +830,7 @@ def _augment_document_files_with_migration(document_files, username):
                     "is_image": is_image_flag,
                     "is_tabular": is_tabular_flag,
                     "file_hash": file_hash,
+                    "migrated": True,  # This file is being migrated
                 }
                 document_files.append(
                     {
@@ -2007,6 +2008,9 @@ async def initialize_file_metadata(
         # Ensure embeddings_status is set
         if "embeddings_status" not in file_metadata:
             file_metadata["embeddings_status"] = "in_progress"
+        # Ensure migrated flag is present (preserve existing value)
+        if "migrated" not in file_metadata:
+            file_metadata["migrated"] = False
         # Merge provided username_list into existing metadata (preserve and deduplicate)
         if username_list:
             current_usernames = file_metadata.get("username", [])
@@ -2022,6 +2026,7 @@ async def initialize_file_metadata(
             "file_id": file_id,
             "username": username_list if username_list else [],
             "embeddings_status": "in_progress",
+            "migrated": False,  # New files are not migrated
         }
 
     # Add file hash if calculated
@@ -4394,14 +4399,6 @@ async def _prepare_migration_file_for_pipeline(
 
     base_name = _os.path.basename(original_filename)
     ext = _os.path.splitext(base_name)[1].lower()
-    is_image_flag = ext in [
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".gif",
-        ".bmp",
-        ".webp",
-    ]
     is_tabular_flag = ext in [
         ".csv",
         ".xlsx",
@@ -4441,43 +4438,9 @@ async def _prepare_migration_file_for_pipeline(
         logging.warning(
             f"Failed to ensure encryption for migration file {file_id}: {_enc_err}"
         )
-    # Create embeddings for migration file (same as original code)
-    try:
-        from rtl_rag_chatbot_api.app import SessionLocal, create_embeddings_background
 
-        initial_metadata = {
-            "file_id": file_id,
-            "original_filename": base_name,
-            "username": combined_usernames,
-            "file_hash": file_hash,
-            "is_image": is_image_flag,
-            "is_tabular": is_tabular_flag,
-            "embeddings_status": "in_progress",
-            "embedding_type": "azure-03-small",
-        }
-        # Create embeddings in background (non-blocking)
-        asyncio.create_task(
-            create_embeddings_background(
-                file_id,
-                temp_file_path,
-                embedding_handler,
-                configs,
-                SessionLocal,
-                combined_usernames,
-                initial_metadata,
-            )
-        )
-        logging.info(
-            f"Started background embedding creation for migration file {file_id}"
-        )
-
-        # Remove this line - it's redundant:
-        # gcs_handler.update_file_info(file_id, initial_metadata)
-
-    except Exception as _emb_err:
-        logging.warning(
-            f"Failed to start embedding creation for migration file {file_id}: {_emb_err}"
-        )
+    # Note: Do not start embedding creation here. Migration files will be
+    # embedded exactly once by the standard parallel document processing flow.
 
     # DB maintenance: delete old row and insert new
     try:

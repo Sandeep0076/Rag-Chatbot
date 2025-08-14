@@ -226,6 +226,7 @@ class FileHandler:
             "is_image": False,
             "username": [username],  # Store username as an array
             "embeddings_status": "completed",  # CSV files don't need embeddings
+            "migrated": False,  # New tabular files are not migrated
         }
 
         # Create data directory and prepare SQLite database
@@ -1090,6 +1091,7 @@ class FileHandler:
             "username": [username],  # Store username as an array
             "original_filename": original_filename,
             "file_id": file_id,  # Always use the actual file_id (existing or new)
+            "migrated": False,  # New files are not migrated
         }
 
         # Add extracted text and word count if available and feature is enabled

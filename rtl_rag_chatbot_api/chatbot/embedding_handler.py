@@ -1295,6 +1295,10 @@ class EmbeddingHandler:
             "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
         }
 
+        # Ensure migrated flag is present (default to False if not in temp_metadata)
+        if "migrated" not in file_info:
+            file_info["migrated"] = False
+
         # Ensure critical fields are present
         # If we're missing file_hash but have it in GCS, retrieve it from there
         if "file_hash" not in file_info:

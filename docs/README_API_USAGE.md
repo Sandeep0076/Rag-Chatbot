@@ -825,6 +825,20 @@ The API supports uploading and chatting with multiple files:
 - Use the `file_ids` parameter in `/file/chat` to chat with multiple files
 - The `session_id` field helps track related files in a session
 
+#### Advanced Multi-File Features
+
+**Legacy Embedding Migration**: The API automatically detects and migrates legacy embeddings when uploading files with mixed embedding types:
+- **Automatic Detection**: System identifies files with different embedding models
+- **Parallel Migration**: Legacy files migrated concurrently for optimal performance
+- **Data Preservation**: All usernames and metadata preserved during migration
+- **Seamless Integration**: Migration happens automatically without user intervention
+
+**Parallel Processing**: Multi-file uploads are processed concurrently:
+- **Concurrent Embedding Creation**: Multiple files processed simultaneously
+- **Resource Optimization**: Efficient use of system resources with configurable limits
+- **Background Operations**: Non-blocking operations for better user experience
+- **Scalability**: Designed to handle hundreds of concurrent users efficiently
+
 ### Image Generation Models
 
 The API supports multiple image generation models:
