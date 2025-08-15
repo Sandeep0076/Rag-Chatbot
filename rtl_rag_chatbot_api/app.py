@@ -1347,14 +1347,38 @@ async def upload_file(
         # Combine files from both parameters
         all_files = prepare_file_list(file, files)
 
+        # Validate existing file IDs early
+        if parsed_existing_file_ids:
+            validation_response = await validate_existing_file_ids(
+                parsed_existing_file_ids, configs
+            )
+            if validation_response:
+                return validation_response
+
         # ===== MIGRATION DECISION LOGIC - ONLY FOR MULTI-FILE SCENARIOS =====
         from rtl_rag_chatbot_api.chatbot.migration_handler import (
             plan_upload_with_migration,
         )
 
-        is_multi_file_scenario, plan = await plan_upload_with_migration(
-            all_files, parsed_existing_file_ids, configs
-        )
+        try:
+            is_multi_file_scenario, plan = await plan_upload_with_migration(
+                all_files, parsed_existing_file_ids, configs
+            )
+        except ValueError as e:
+            # Handle validation errors (e.g., invalid existing file IDs)
+            error_message = str(e)
+            if "Invalid file ID" in error_message:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "detail": {
+                            "message": error_message,
+                            "errors": [{"error": error_message}],
+                        }
+                    },
+                )
+            else:
+                raise
 
         # If NOT a multi-file scenario, run the normal processing flow directly (single-file or simple case)
         if not is_multi_file_scenario:
@@ -1823,6 +1847,50 @@ async def process_migration_file_ids_in_parallel(
         raise HTTPException(
             status_code=500, detail=f"Migration processing error: {str(e)}"
         )
+
+
+async def validate_existing_file_ids(
+    parsed_existing_file_ids: List[str], configs: dict
+):
+    """
+    Validate that all existing file IDs are valid and accessible.
+
+    Returns:
+        JSONResponse with error details if any file IDs are invalid, None if all valid
+    """
+    from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
+
+    gcs_handler = GCSHandler(configs)
+
+    invalid_file_ids = []
+    for file_id in parsed_existing_file_ids:
+        try:
+            file_info = gcs_handler.get_file_info(file_id)
+            if not file_info:
+                invalid_file_ids.append(file_id)
+        except Exception:
+            invalid_file_ids.append(file_id)
+
+    if invalid_file_ids:
+        invalid_count = len(invalid_file_ids)
+        total_count = len(parsed_existing_file_ids)
+        error_message = (
+            f"Found {invalid_count} invalid file ID(s) out of {total_count} total."
+        )
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": {
+                    "message": error_message,
+                    "errors": [
+                        {"file_id": fid, "error": "File not found"}
+                        for fid in invalid_file_ids
+                    ],
+                }
+            },
+        )
+
+    return None
 
 
 def combine_upload_results(
@@ -3504,10 +3572,6 @@ async def delete_resources(
                         )
                     else:
                         # When database is disabled, just clean up ChromaDB and GCS
-                        from rtl_rag_chatbot_api.common.cleanup_coordinator import (
-                            CleanupCoordinator,
-                        )
-
                         cleanup_coordinator = CleanupCoordinator(
                             configs, None, gcs_handler
                         )
