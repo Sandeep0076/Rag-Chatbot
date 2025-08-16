@@ -1293,6 +1293,44 @@ async def _process_normal_upload_flow(
             zip(processed_file_ids, original_filenames, is_tabular_flags)
         )
 
+    # Fallback: If this is a migration scenario and there are no uploaded files left after filtering,
+    # ensure migration files are embedded now using the migration context.
+    try:
+        if is_migration and migration_context and len(all_files) == 0:
+            # Reuse augmentation helper to build document files from migration context
+            document_files = _augment_document_files_with_migration([], username)
+            if document_files:
+                if len(document_files) > 1:
+                    await process_document_files_parallel(
+                        document_files, username, is_image, background_tasks
+                    )
+                else:
+                    file_info = document_files[0]
+                    # Determine is_image for this specific file
+                    file_extension = os.path.splitext(file_info["filename"])[1].lower()
+                    file_is_image = file_extension in [
+                        ".jpg",
+                        ".jpeg",
+                        ".png",
+                        ".gif",
+                        ".bmp",
+                        ".webp",
+                    ]
+                    await process_document_type_file(
+                        background_tasks,
+                        file_info["file_id"],
+                        file_info["temp_file_path"],
+                        file_info["filename"],
+                        file_info["result"],
+                        username,
+                        file_is_image,
+                    )
+    except Exception as mig_err:
+        logging.error(
+            f"Migration fallback embedding processing failed: {str(mig_err)}",
+            exc_info=True,
+        )
+
     return combine_upload_results(existing_results, new_file_results)
 
 
