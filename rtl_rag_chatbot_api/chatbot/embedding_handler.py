@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
+# Import removed - gcs_handler should be passed as parameter to EmbeddingHandler constructor
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot
 from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
@@ -1369,3 +1370,233 @@ class EmbeddingHandler:
                 f"Error retrieving embeddings info for file_id {file_id}: {str(e)}"
             )
             return None
+
+    async def migrate_embeddings_to_new_format(
+        self,
+        file_id: str,
+        username: str | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Encapsulated migration: delete old artifacts and recreate fresh ones for the given file_id.
+
+        Steps:
+        - Optionally append username to file's username list
+        - Download and decrypt original source to a temp path (first!)
+        - Delete previous embeddings/artifacts (local + GCS + DB when enabled)
+        - Recreate: for tabular, rebuild SQLite DB and upload; for others, recreate embeddings
+        - For embeddings, schedule background upload to GCS
+
+        Returns the standard creation result dict (ready_for_chat/completed on success).
+        """
+        try:
+            # 1) Fetch file info and basic flags
+            file_info = self.gcs_handler.get_file_info(file_id) or {}
+            original_filename = file_info.get("original_filename")
+            file_type = file_info.get("file_type")
+            is_image = bool(file_info.get("is_image", False))
+
+            # 2) Update username list if provided
+            if username:
+                try:
+                    self.gcs_handler.update_username_list(file_id, [username])
+                    logging.info(
+                        f"Updated username list for {file_id} with user {username}"
+                    )
+                except Exception as e:
+                    logging.warning(
+                        f"Failed to update username list for {file_id}: {str(e)}"
+                    )
+
+            # 3) Download and decrypt original file to temp path (must happen BEFORE deletion)
+            import os as _os
+
+            base_name = (
+                _os.path.basename(original_filename) if original_filename else None
+            )
+            preferred_temp_path = (
+                f"temp_files/{file_id}_{base_name}"
+                if base_name
+                else f"temp_files/{file_id}"
+            )
+            decrypted_path = self.gcs_handler.download_encrypted_file_by_id(
+                file_id, destination_path=preferred_temp_path
+            )
+            temp_file_path = (
+                decrypted_path
+                if decrypted_path and _os.path.exists(decrypted_path)
+                else None
+            )
+            if not temp_file_path:
+                legacy_temp = f"temp_files/{file_id}"
+                if _os.path.exists(legacy_temp):
+                    temp_file_path = legacy_temp
+            if not temp_file_path:
+                raise RuntimeError(
+                    f"Unable to obtain decrypted source file for migration of {file_id}"
+                )
+
+            # 4) Delete old embeddings/artifacts (local + GCS + DB when enabled)
+            try:
+                from rtl_rag_chatbot_api.common.cleanup_coordinator import (
+                    CleanupCoordinator,
+                )
+
+                cleanup = CleanupCoordinator(self.configs, None, self.gcs_handler)
+                await asyncio.to_thread(cleanup.cleanup_chroma_instance, file_id, True)
+                logging.info(f"Deleted old embeddings for {file_id}")
+            except Exception as e:
+                logging.error(f"Error deleting old embeddings for {file_id}: {str(e)}")
+                raise
+
+            # 5) Determine handling based on type: tabular vs non-tabular
+            ext = _os.path.splitext(base_name)[1].lower() if base_name else ""
+            is_tabular = file_type in ["tabular", "database"] or ext in [
+                ".csv",
+                ".xlsx",
+                ".xls",
+                ".db",
+                ".sqlite",
+                ".sqlite3",
+            ]
+
+            if is_tabular:
+                # Rebuild SQLite DB for tabular files (same as new-file path)
+                try:
+                    from rtl_rag_chatbot_api.chatbot.utils.encryption import (
+                        encrypt_file,
+                    )
+                    from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
+                        PrepareSQLFromTabularData,
+                    )
+
+                    data_dir = f"./chroma_db/{file_id}"
+                    os.makedirs(data_dir, exist_ok=True)
+
+                    # Create/refresh SQLite DB
+                    preparer = PrepareSQLFromTabularData(temp_file_path, data_dir)
+                    success = preparer.run_pipeline()
+                    if not success:
+                        raise ValueError("Failed to prepare database from input file")
+
+                    # Encrypt and upload DB
+                    db_path = os.path.join(data_dir, "tabular_data.db")
+                    encrypted_db_path = encrypt_file(db_path)
+                    try:
+                        self.gcs_handler.upload_to_gcs(
+                            self.configs.gcp_resource.bucket_name,
+                            source=encrypted_db_path,
+                            destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db.encrypted",
+                        )
+                    finally:
+                        if os.path.exists(encrypted_db_path):
+                            os.remove(encrypted_db_path)
+
+                    # Update file_info.json
+                    tab_file_type = (
+                        "database" if ext in [".db", ".sqlite"] else "tabular"
+                    )
+                    metadata = {
+                        "embeddings_status": "completed",
+                        "file_type": tab_file_type,
+                        "processing_status": "success",
+                        "migrated": True,
+                        "file_id": file_id,
+                    }
+                    # Preserve usernames if present
+                    usernames = file_info.get("username", [])
+                    if usernames:
+                        metadata["username"] = usernames
+
+                    self.gcs_handler.upload_to_gcs(
+                        self.configs.gcp_resource.bucket_name,
+                        {
+                            "metadata": (
+                                metadata,
+                                f"file-embeddings/{file_id}/file_info.json",
+                            )
+                        },
+                    )
+
+                    return {
+                        "file_id": file_id,
+                        "status": "completed",
+                        "is_tabular": True,
+                        "message": "Tabular database prepared and uploaded",
+                    }
+                except Exception as e:
+                    logging.error(f"Tabular migration failed for {file_id}: {str(e)}")
+                    return {
+                        "file_id": file_id,
+                        "status": "error",
+                        "message": str(e),
+                        "is_tabular": True,
+                    }
+
+            # 6) For non-tabular: recreate embeddings and schedule upload
+            file_metadata = (
+                dict(file_info) if isinstance(file_info, dict) else {"file_id": file_id}
+            )
+            file_metadata["file_id"] = file_id
+            file_metadata["migrated"] = True
+            file_metadata["embedding_type"] = "azure-03-small"
+
+            result = await self.create_embeddings(
+                file_id=file_id,
+                temp_file_path=temp_file_path,
+                is_image=is_image,
+                file_metadata=file_metadata,
+            )
+            if result.get("status") == "ready_for_chat":
+                asyncio.create_task(self.upload_embeddings(file_id))
+                logging.info(f"Scheduled background upload for migrated file {file_id}")
+            return result
+
+        except Exception as e:
+            logging.error(f"Migration failed for {file_id}: {str(e)}", exc_info=True)
+            return {
+                "file_id": file_id,
+                "status": "error",
+                "message": str(e),
+                "can_chat": False,
+            }
+
+
+# Only run when this file is executed directly
+if __name__ == "__main__":
+    import sys
+
+    # Add parent directory to path to import configs
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
+    async def test_migration():
+        """Test the migration function when run directly"""
+        try:
+            # Import configs
+            from configs.app_config import Config
+            from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
+
+            # Initialize configs and handlers
+            configs = Config()
+            gcs_handler = GCSHandler(configs)
+
+            # Create embedding handler
+            embedding_handler = EmbeddingHandler(configs, gcs_handler)
+
+            # Test parameters (you can modify these)
+            test_file_id = "test_file_123"
+            test_username = "test_user"
+
+            print(f"Testing migration for file_id: {test_file_id}")
+            result = await embedding_handler.migrate_embeddings_to_new_format(
+                test_file_id, test_username
+            )
+            print(f"Migration result: {result}")
+
+        except Exception as e:
+            print(f"Error testing migration: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
+
+    # Run the test
+    asyncio.run(test_migration())
