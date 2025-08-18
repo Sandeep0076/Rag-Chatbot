@@ -35,24 +35,24 @@ class BaseRAGHandler:
         self.chroma_manager = chroma_manager or ChromaDBManager()
 
         # Model-specific token limits for response generation (not chunking)
-        self.MODEL_TOKEN_LIMITS = {
-            "gpt_4": 32000,
+        self.model_token_limits = {
+            "gpt_4o": 128000,
             "gpt_4o_mini": 128000,
             "gpt_4_omni": 128000,
             "gpt_4_1": 200000,  # GPT-4.1 token limit
             "gpt_4_1_nano": 50000,  # GPT-4.1-nano token limit
+            "gpt_5": 200000,  # GPT-5 token limit
             "o3": 100000,  # O3 token limit
-            "o3_mini": 100000,  # O3-mini token limit
             "o4_mini": 100000,  # O4-mini token limit
             "gemini-2.5-pro": 2097152,  # 2M tokens for Gemini 2.5 Pro
             "gemini-2.5-flash": 1048576,  # 1M tokens for Gemini 2.5 Flash
         }
 
-        self.AZURE_MAX_TOKENS = self.MODEL_TOKEN_LIMITS.get(
+        self.AZURE_MAX_TOKENS = self.model_token_limits.get(
             "gpt_4o_mini",
             128000,  # Default to gpt_4o_mini's limit for Azure if not specified elsewhere
         )
-        self.GEMINI_MAX_TOKENS = self.MODEL_TOKEN_LIMITS.get(
+        self.GEMINI_MAX_TOKENS = self.model_token_limits.get(
             "gemini-2.5-flash", 15000
         )  # Use Gemini Flash limit
         self.BATCH_SIZE = 5
@@ -584,7 +584,7 @@ class BaseRAGHandler:
 
     def get_model_token_limit(self, model_name: str) -> int:
         """Get the token limit for a specific model."""
-        return self.MODEL_TOKEN_LIMITS.get(model_name.lower(), 2000)
+        return self.model_token_limits.get(model_name.lower(), 2000)
 
     def truncate_text(self, text: str, max_tokens: int) -> str:
         """Truncates text to a maximum number of tokens, preserving whole words if possible."""
