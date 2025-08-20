@@ -893,8 +893,6 @@ class TabularDataHandler:
             formatted_question = format_result["formatted_question"]
             needs_sql = format_result["needs_sql"]
             classification = format_result.get("classification", {})
-
-            logging.info(f"Formatted question: {formatted_question}")
             logging.info(f"Needs SQL: {needs_sql}")
             if not needs_sql:
                 # Direct answer from database summary - return as-is
@@ -905,10 +903,10 @@ class TabularDataHandler:
             logging.info(
                 "No direct answer provided from database summary. Using langchain agent.."
             )
+            logging.info(f"Formatted question: {formatted_question}")
             query_type = classification.get("category", "unknown")
             language = classification.get("language", "en")
             logging.info(f"Query type for response formatting: {query_type}")
-            logging.info(f"Detected language: {language}")
 
             # Execute SQL query through agent
             logging.info("Executing query through SQL agent")

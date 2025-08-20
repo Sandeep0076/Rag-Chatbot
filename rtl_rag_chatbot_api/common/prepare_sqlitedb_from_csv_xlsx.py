@@ -339,6 +339,10 @@ class PrepareSQLFromTabularData:
             if table_name[0].isdigit():
                 table_name = "table_" + table_name
 
+            # Always append '_table' suffix to avoid reserved keywords and ambiguity
+            if not table_name.endswith("_table"):
+                table_name = f"{table_name}_table"
+
             inspector = inspect(self.engine)
             if not inspector.has_table(table_name):
                 logging.info(f"Creating table '{table_name}' with {len(df)} rows")

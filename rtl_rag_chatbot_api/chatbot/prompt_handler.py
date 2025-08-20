@@ -278,7 +278,7 @@ def classify_question_intent(
     Classify into ONE category:
 
     1. **DIRECT_SUMMARY**: Can be answered from database structure alone
-       - Examples: "what's this about", "key insights", "how many records", "what columns"
+       - Examples: "what's this about", "key insights", "summarize", "column names",  "attributes", "sample Data"
        - SET needs_sql: false (answered from metadata, no SQL execution needed)
 
     2. **TIME_SERIES**: Requesting data over time periods
@@ -341,18 +341,45 @@ def classify_question_intent(
         cleaned_response = cleaned_response.strip()
 
         # Try to parse JSON response
+        parsed = None
         if cleaned_response.startswith("{"):
-            return json.loads(cleaned_response)
-        else:
+            try:
+                parsed = json.loads(cleaned_response)
+            except Exception:
+                parsed = None
+        if not parsed:
             # Fallback parsing if LLM doesn't return valid JSON
             logging.warning(f"Non-JSON classification response: {response}")
-            return {
+            parsed = {
                 "category": "SIMPLE_AGGREGATION",
                 "needs_sql": True,
                 "optimization_strategy": "none",
                 "reasoning": "Fallback classification due to parsing error",
                 "language": "en",
             }
+
+        # Override: if user asks for full/overall dataset, force SQL
+        try:
+            q = (user_question or "").lower()
+            full_scope_terms = [
+                "overall",
+                "entire",
+                "all",
+                "full",
+                "complete",
+                # German equivalents
+                "gesamt",
+                "gesamte",
+                "alle",
+                "vollständige",
+                "vollstaendige",
+            ]
+            if any(term in q for term in full_scope_terms):
+                parsed["needs_sql"] = True
+        except Exception:
+            pass
+
+        return parsed
     except Exception as e:
         logging.error(f"Error in question classification: {str(e)}")
         return {
