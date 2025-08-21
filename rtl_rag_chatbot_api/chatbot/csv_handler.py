@@ -141,6 +141,8 @@ class TabularDataHandler:
                 )
                 self.sessions["default"] = sessionmaker(bind=self.engines["default"])
                 self.dbs["default"] = SQLDatabase(engine=self.engines["default"])
+                # Ensure default db.run is also patched
+                self._patch_db_run_for_file("default")
 
         # For backward compatibility, set these attributes for the primary file
         if self.file_id:
@@ -195,6 +197,9 @@ class TabularDataHandler:
         )
         self.sessions[file_id] = sessionmaker(bind=self.engines[file_id])
         self.dbs[file_id] = SQLDatabase(engine=self.engines[file_id])
+
+        # Ensure db.run uses our robust cleaner for this file
+        self._patch_db_run_for_file(file_id)
 
         # Get database info - check if we already have a pre-loaded summary first
         try:
@@ -335,35 +340,65 @@ class TabularDataHandler:
 
     def _clean_sql_query(self, query: str) -> str:
         """
-        Cleans SQL query by removing markdown formatting characters.
+        Cleans SQL query by removing markdown/code-fence formatting and stray wrappers.
 
         Args:
-            query (str): The SQL query that might contain markdown formatting.
+            query (str): The SQL query that might contain markdown formatting or backticks.
 
         Returns:
-            str: Cleaned SQL query without markdown formatting.
+            str: Cleaned SQL query without markdown/backticks/wrappers.
         """
-        # Remove single backticks that wrap the entire query (common LLM output format)
-        if (
-            query.startswith("`")
-            and query.endswith("`")
-            and not query.startswith("```")
+        if query is None:
+            return query
+
+        cleaned = str(query).strip()
+
+        # Normalize newlines
+        cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+        # Remove all code-fence openings like ``` or ```sql (any language)
+        import re
+
+        cleaned = re.sub(r"```[a-zA-Z0-9_\-]*\n?", "", cleaned)
+        # Remove any remaining closing fences
+        cleaned = cleaned.replace("```", "")
+
+        # Remove leading inline backticks that wrap the entire query
+        if cleaned.startswith("`") and cleaned.endswith("`"):
+            cleaned = cleaned[1:-1].strip()
+
+        # Remove any stray inline backticks left anywhere
+        cleaned = cleaned.replace("`", "")
+
+        # If the first line is a language hint like 'sql', 'mysql', 'sqlite', drop it
+        lines = cleaned.split("\n")
+        if lines and lines[0].strip().lower() in {"sql", "mysql", "sqlite"}:
+            cleaned = "\n".join(lines[1:]).strip()
+
+        # Trim surrounding quotes if the whole string is quoted
+        if (cleaned.startswith('"') and cleaned.endswith('"')) or (
+            cleaned.startswith("'") and cleaned.endswith("'")
         ):
-            query = query[1:-1].strip()
+            cleaned = cleaned[1:-1].strip()
 
-        # Remove markdown code block delimiters
-        if query.startswith("```") and query.endswith("```"):
-            # Remove starting and ending backticks
-            query = query[3:].strip()
-            if query.endswith("```"):
-                query = query[:-3].strip()
+        # Strip trailing semicolon (not required for execution)
+        if cleaned.endswith(";"):
+            cleaned = cleaned[:-1].strip()
 
-        # If query starts with 'sql' or other language identifier, remove it
-        lines = query.split("\n")
-        if lines and lines[0].lower().strip() in ["sql", "mysql", "sqlite"]:
-            query = "\n".join(lines[1:]).strip()
+        # As a final guard, try to extract the SQL starting at a known keyword
+        # to handle any leading commentary that slipped through
+        keyword_match = re.search(
+            r"\b("
+            r"SELECT|WITH|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|PRAGMA|"
+            r"EXPLAIN|REPLACE|VACUUM|ATTACH|DETACH|BEGIN|COMMIT|ROLLBACK"
+            r")\b",
+            cleaned,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if keyword_match:
+            cleaned = cleaned[keyword_match.start() :].strip()
 
-        return query
+        return cleaned
 
     def _initialize_agent_for_file(self, file_id: str):
         """Initializes the SQL agent for a specific file's database.
@@ -436,6 +471,33 @@ class TabularDataHandler:
                 "early_stopping_method": "generate",
             },
         )
+
+    def _patch_db_run_for_file(self, file_id: str) -> None:
+        """
+        Patch the SQLDatabase.run for a specific file so that every execution is cleaned.
+        """
+        if file_id not in self.dbs or not self.dbs[file_id]:
+            return
+
+        db = self.dbs[file_id]
+
+        # Avoid double-patching
+        if getattr(db, "_run_is_patched", False):
+            return
+
+        original_run = db.run
+
+        def wrapped_run(command: str, fetch: str = "all", **kwargs):
+            try:
+                cleaned_command = self._clean_sql_query(command)
+                return original_run(cleaned_command, fetch)
+            except Exception:
+                # If cleaning or execution fails, bubble up the original exception
+                raise
+
+        db.run = wrapped_run
+        setattr(db, "_run_is_patched", True)
+        logging.info(f"Patched db.run for file_id: {file_id}")
 
     def debug_database(self):
         """
@@ -912,6 +974,25 @@ class TabularDataHandler:
             logging.info("Executing query through SQL agent")
             try:
                 response = self.agent.invoke({"input": formatted_question})
+
+                # Try to extract and execute SQL directly to return structured table data
+                sql_query = self._extract_sql_from_formatted_question(
+                    formatted_question
+                )
+                if sql_query and hasattr(self, "engine") and self.engine:
+                    try:
+                        with self.engine.connect() as connection:
+                            cleaned_sql = self._clean_sql_query(sql_query)
+                            result = connection.execute(text(cleaned_sql))
+                            headers = list(result.keys())
+                            rows = [list(row) for row in result.fetchall()]
+                            # Return in [headers, *rows] format so the API formats a table with correct headers
+                            return [headers, *rows]
+                    except Exception as direct_sql_error:
+                        logging.warning(
+                            f"Direct SQL execution failed, falling back to LLM formatting: {str(direct_sql_error)}"
+                        )
+
                 return self._process_agent_response(
                     response, question, query_type, language
                 )
@@ -1023,8 +1104,22 @@ class TabularDataHandler:
                     formatted_question
                 )
                 if sql_query:
+                    # Prefer engine-based execution to capture accurate headers
+                    if hasattr(self, "engine") and self.engine is not None:
+                        try:
+                            with self.engine.connect() as connection:
+                                cleaned_sql = self._clean_sql_query(sql_query)
+                                result = connection.execute(text(cleaned_sql))
+                                headers = list(result.keys())
+                                rows = [list(row) for row in result.fetchall()]
+                                return [headers, *rows]
+                        except Exception as engine_exec_error:
+                            logging.warning(
+                                f"Engine execution failed in fallback, trying db.run: {str(engine_exec_error)}"
+                            )
+
                     raw_result = self.db.run(sql_query)
-                    logging.info(f"Direct SQL result: {raw_result[:500]}...")
+                    logging.info(f"Direct SQL result: {str(raw_result)[:500]}...")
 
                     # Format the raw result
                     base_prompt = PromptBuilder.build_forced_answer_prompt(

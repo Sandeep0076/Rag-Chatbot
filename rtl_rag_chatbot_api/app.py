@@ -2482,8 +2482,13 @@ async def _format_chat_response(
     Returns:
         Formatted response dictionary
     """
+    # If the model returned a table-like structure [headers, *rows], format it
     if isinstance(response, list):
-        return format_table_response(response)
+        try:
+            if response and isinstance(response[0], (list, tuple)):
+                return format_table_response(response)
+        except Exception:
+            pass
 
     if generate_visualization:
         return handle_visualization(response, query, is_tabular, configs, temperature)
