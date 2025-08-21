@@ -10,62 +10,72 @@ configs = Config()
 examples = [
     {
         "query": "Find employee Sandeep's salary",
-        "answer": (
-            "Find employee details where the name matches 'Sandeep' "
-            "case-insensitively (LOWER(name) = LOWER('Sandeep'))"
-        ),
+        "answer": "SELECT * FROM employees WHERE LOWER(name) = LOWER('Sandeep')",
     },
     {
-        "query": "Show me all employees  named John",
-        "answer": "List all people where LOWER(employee_name) LIKE LOWER('%john%')",
+        "query": "Show me all employees named John",
+        "answer": "SELECT * FROM employees WHERE LOWER(employee_name) LIKE LOWER('%john%')",
     },
     {
         "query": "What's the salary of employee SMITH",
-        "answer": "Show salary details where LOWER(last_name) = LOWER('SMITH')",
+        "answer": "SELECT salary FROM employees WHERE LOWER(last_name) = LOWER('SMITH')",
     },
     {
         "query": "Name cities with population more than 10000",
-        "answer": "List all distinct cities that have a population greater than 10,000.",
+        "answer": "SELECT DISTINCT city FROM locations WHERE population > 10000",
     },
     {
         "query": "What are the key metrics or statistics in this Excel document?",
         "answer": (
-            "How many total records are in the table? + "
-            "What are all the distinct values in the [x] column? + "
-            "What is the average, minimum, maximum, and sum of the [x] column? + "
-            "What is the total [x] for each [y] + "
-            "What are the top 5 [Customers] by [Order Value]?"
+            "SELECT COUNT(*) as total_records, "
+            "AVG(numeric_column) as avg_value, "
+            "MIN(numeric_column) as min_value, "
+            "MAX(numeric_column) as max_value "
+            "FROM table_name"
         ),
     },
     {
         "query": "Identify outliers",
-        "answer": "Which [Products] have sales more than two standard deviations above the mean?",
+        "answer": (
+            "SELECT * FROM products WHERE sales > "
+            "(SELECT AVG(sales) + 2 * (SELECT SQRT(AVG((sales - sub.avg_sales) * (sales - sub.avg_sales)))) "
+            "FROM (SELECT AVG(sales) as avg_sales FROM products) sub)"
+        ),
     },
     {
-        "query": "how is Data Quality of document ",
-        "answer": "Is there any missing or inconsistent data in this Excel document or tables?",
+        "query": "how is Data Quality of document",
+        "answer": (
+            "SELECT column_name, "
+            "COUNT(*) as total_rows, "
+            "COUNT(column_name) as non_null_rows, "
+            "COUNT(*) - COUNT(column_name) as null_rows "
+            "FROM table_name GROUP BY 1"
+        ),
     },
     # Examples for context-aware optimization
     {
         "query": "orders per day for 2 years",
         "answer": (
-            "Show weekly order counts grouped by week since daily data over 2 years "
-            "would be too detailed (730+ rows). Include weekly totals."
+            "SELECT DATE_TRUNC('week', order_date) as week, "
+            "COUNT(*) as weekly_orders "
+            "FROM orders "
+            "WHERE order_date >= DATE('now', '-2 years') "
+            "GROUP BY week ORDER BY week"
         ),
     },
     {
         "query": "orders per day for 1 month",
         "answer": (
-            "Show daily order counts grouped by date since 1 month of daily data "
-            "is manageable (~30 rows)."
+            "SELECT DATE(order_date) as order_day, "
+            "COUNT(*) as daily_orders "
+            "FROM orders "
+            "WHERE order_date >= DATE('now', '-1 month') "
+            "GROUP BY order_day ORDER BY order_day"
         ),
     },
     {
         "query": "employees named Mark",
-        "answer": (
-            "Find all employees where LOWER(name) LIKE LOWER('%mark%') and show "
-            "full details since this is a filtered search."
-        ),
+        "answer": "SELECT * FROM employees WHERE LOWER(name) LIKE LOWER('%mark%')",
     },
 ]
 
@@ -123,12 +133,16 @@ User Question: {user_question}
 
 **RESPONSE RULES:**
 - For DIRECT_SUMMARY: Provide answer directly from database_info
-- For SQL-requiring queries: Generate optimized natural language query
+- For SQL-requiring queries: Generate ONLY the SQL statement, no explanations
 - Always use case-insensitive comparisons for text searches
 - Include aggregation strategy in the query when needed
 - Never include disclaimers or technical explanations
 - **CRITICAL**: Use the actual table names from database_info - NEVER use "your_table_name" or similar placeholders
 - If multiple tables exist, choose the most appropriate one based on the question context
+- **HARD CAP RULE**: The final SELECT must end with LIMIT 25.
+If a LIMIT is present and >25, reduce it to 25.
+If using LIMIT offset,count, cap count to 25 while preserving the offset.
+Preserve OFFSET when present. Do NOT include markdown, comments, or code fences.
 
 **TABLE NAME EXTRACTION:**
 - Look for "table_names" array in database_info
@@ -141,10 +155,11 @@ Examples:
 
 **OUTPUT FORMAT:**
 - If DIRECT_SUMMARY: Provide direct answer from database_info, NO SQL needed
-- If SQL needed: Single optimized natural language query with context-aware aggregation
-- No explanations or multiple options
-- Focus on actionable, properly-sized results
+- If SQL needed: Return ONLY the SQL statement, starting with SELECT
+- No explanations, no multiple options, no markdown formatting
+- Just the clean SQL statement
 - **MUST use actual table names from database_info**
+- **MUST end with LIMIT 25 (respecting the hard cap rule above)**
 """
 
 
@@ -496,9 +511,14 @@ def enhance_query_with_context(
         - If asking for daily data over >3 months: Aggregate by week
         - If asking for daily data over >1 year: Aggregate by month
         - If asking for hourly data over >7 days: Aggregate by day
-        IMPORTANT: Start your response with "SELECT", "FIND", "LIST", "SHOW", "CALCULATE" to ensure SQL execution.
+
+        Return ONLY the SQL statement, starting with SELECT.
         Use the actual table names from the available tables above.
-        Return an enhanced natural language query that includes the appropriate aggregation level.
+        No explanations, no markdown formatting, just the SQL statement.
+        STRICT: The final SQL must include LIMIT 25.
+        If there is an existing LIMIT larger than 25, reduce it to 25.
+        If using LIMIT offset,count, cap the count to 25 and preserve the offset.
+        Preserve OFFSET if present.
         """
 
     elif category == "CATEGORICAL_LISTING" and optimization == "top_n_summary":
@@ -515,9 +535,14 @@ def enhance_query_with_context(
         enhance this query to show:
         - Top 20-30 most relevant items (by sales, count, or other meaningful metric)
         - Summary statistics for the remaining items
-        IMPORTANT: Start your response with "SELECT", "FIND", "LIST", "SHOW", "CALCULATE" to ensure SQL execution.
+
+        Return ONLY the SQL statement, starting with SELECT.
         Use the actual table names from the available tables above.
-        Return an enhanced natural language query with the top-N approach.
+        No explanations, no markdown formatting, just the SQL statement.
+        STRICT: The final SQL must include LIMIT 25.
+        If there is an existing LIMIT larger than 25, reduce it to 25.
+        If using LIMIT offset,count, cap the count to 25 and preserve the offset.
+        Preserve OFFSET if present.
         """
 
     else:
@@ -527,27 +552,38 @@ def enhance_query_with_context(
 
         {table_info_str}
 
-        IMPORTANT: Start your response with "SELECT", "FIND", "LIST", "SHOW", "CALCULATE" to ensure SQL execution.
-        Convert this to a clear, natural language database query.
+        Convert this to a SQL statement.
         Use case-insensitive comparisons for text searches.
         Preserve full detail as requested.
         Use the actual table names from the available tables above.
+
+        Return ONLY the SQL statement, starting with SELECT.
+        No explanations, no markdown formatting, just the SQL statement.
+        STRICT: The final SQL must include LIMIT 25.
+        If there is an existing LIMIT larger than 25, reduce it to 25.
+        If using LIMIT offset,count, cap the count to 25 and preserve the offset.
+        Preserve OFFSET if present.
 """
 
     try:
         # Ensure prompt is within 120 characters per line for lint compliance
         prompt = (
             enhancement_prompt
-            + " - use accurate table name from context to make sql query"
+            + "\nSQL OUTPUT RULES:\n"
+            + "- Use the accurate table name from context.\n"
+            + "- Return only raw SQL (no markdown or comments).\n"
+            + "- Statement must end with LIMIT 25; if a LIMIT exists >25, reduce to 25;\n"
+            + "  when OFFSET is present, preserve it.\n"
         )
         if model_choice.startswith("gemini"):
             from rtl_rag_chatbot_api.chatbot.gemini_handler import (
                 get_gemini_non_rag_response,
             )
 
-            return get_gemini_non_rag_response(configs, prompt, model_choice)
+            result = get_gemini_non_rag_response(configs, prompt, model_choice)
         else:
-            return get_azure_non_rag_response(configs, prompt)
+            result = get_azure_non_rag_response(configs, prompt)
+        return result
     except Exception as e:
         logging.error(f"Error enhancing query: {str(e)}")
         return user_question  # Fallback to original question
@@ -608,11 +644,13 @@ def format_question(
                 )
             else:
                 # Standard query formatting
+                # CRITICAL: CONTEXT-AWARE ANALYSIS prompt
                 formatted_prompt = special_prompt.format(
                     database_info=database_info,
                     user_question=user_question,
                     examples=examples,
                 )
+
                 # Use the appropriate model based on model_choice
                 if model_choice.startswith("gemini"):
                     from rtl_rag_chatbot_api.chatbot.gemini_handler import (

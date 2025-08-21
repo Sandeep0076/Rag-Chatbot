@@ -53,7 +53,9 @@ class PromptBuilder:
                 "   - For rows: 'Include headers and Use markdown tables for structured data: | Column | Column |\n"
                 "   |--------|--------|\n"
                 "   | Data   | Data   |\n"
-                "   - Keep it simple and factual\n\n"
+                "   - Keep it simple and factual\n"
+                "   - **CRITICAL**: If column headers are provided, use EXACTLY those headers\n"
+                "   - Look for 'Column Headers:' in the context and use those exact names\n\n"
                 "Provide only the direct, factual answer without additional commentary."
             )
         else:
@@ -61,6 +63,7 @@ class PromptBuilder:
             instructions = (
                 "**COMPREHENSIVE RESPONSE INSTRUCTIONS:**\n"
                 "1. You are a business analyst providing clean, professional answers\n"
+                "   - If rows are given as output show the whole data\n"
                 "2. NEVER include:\n"
                 "   - SQL queries, code, or technical syntax of any kind\n"
                 "   - Database terminology (table, query, SQL, database, etc.)\n"
@@ -74,17 +77,26 @@ class PromptBuilder:
                 "   - Proper formatting using markdown tables when appropriate\n"
                 "4. For large result sets (>50 rows):\n"
                 "   - Provide summary with key insights first\n"
-                "   - Show top 10-20 most relevant/important results in table format\n"
-                "   - Include totals, averages, and aggregated statistics\n"
-                "   - Group similar items for better readability\n"
-                "5. Format guidelines:\n"
+                "   - Show top 25 most relevant/important results in table format\n"
+                "5. For large result sets (<26 rows):\n"
+                "   - show the whole data including headers in markdown tabular form\n"
+                "6. When showing a subset of rows (>50 rows):\n"
+                "   - Begin with an explicit statement like: 'Showing the first N rows (out of total available)'.\n"
+                "   - If only a sample is displayed, include: '*Note: Showing a sample of the data.*'\n"
+                "   - Do NOT state an incorrect number of rows.\n"
+                "     If you cannot determine N exactly, say 'Showing a subset of rows'.\n"
+                "7. Format guidelines:\n"
                 "   - Use markdown tables for structured data: | Column | Column |\n"
-                "   - Use bullet points for simple lists\n"
-                "   - Include percentages, totals, and context where relevant\n"
-                "   - For rows: 'Include headers and Use markdown tables for structured data: | Column | Column |\n"
                 "   |--------|--------|\n"
                 "   | Data   | Data   |\n"
-                "Provide a clean, professional response with actual data that directly answers the question."
+                "   - Use bullet points for simple lists\n"
+                "   - Include percentages, totals, and context where relevant\n"
+                "   - Provide clean, professional responses with actual data\n"
+                "8. **CRITICAL**: If column headers are provided in the context, use EXACTLY those headers\n"
+                "   - Do not invent or modify column names\n"
+                "   - Use the exact column names as provided\n"
+                "   - Ensure table headers match the data structure exactly\n"
+                "   - Look for 'Column Headers:' in the context and use those exact names"
             )
 
         # Add language instruction
@@ -93,9 +105,19 @@ class PromptBuilder:
             "language to match the user's question language."
         )
 
+        # Check if column headers are mentioned in the context
+        header_emphasis = ""
+        if "Column Headers:" in truncated_answer:
+            header_emphasis = (
+                "\n\n**IMPORTANT: COLUMN HEADERS DETECTED**\n"
+                "The context contains specific column headers. Use these EXACT names as table headers.\n"
+                "Do not invent, modify, or abbreviate column names.\n\n"
+            )
+
         return (
             f"User Question: {question}\n\n"
             f"Query Results and Context: {truncated_answer}\n\n"
+            f"{header_emphasis}"
             f"{language_instruction}\n\n"
             f"{instructions}"
         )
@@ -117,7 +139,8 @@ class PromptBuilder:
             "5. Use business-friendly language throughout\n"
             "6. For large datasets, provide intelligent summaries with top results\n"
             "7. Focus on actionable information and business value\n"
-            "8. Write as if presenting to an executive or business stakeholder\n\n"
+            "8. Write as if presenting to an executive or business stakeholder\n"
+            "9. **CRITICAL**: If column headers are provided, use EXACTLY those headers\n\n"
             "Provide a clean, executive-ready response with actual data and insights."
         )
 

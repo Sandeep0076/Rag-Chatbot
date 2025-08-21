@@ -398,6 +398,60 @@ class TabularDataHandler:
         if keyword_match:
             cleaned = cleaned[keyword_match.start() :].strip()
 
+        # ENFORCE: cap result size to 25 rows for safety and consistency
+        try:
+            # Handle patterns:
+            # 1) LIMIT count
+            # 2) LIMIT count OFFSET offset
+            # 3) LIMIT offset, count
+            # Use case-insensitive matching and preserve OFFSET when present
+            limit_count_pattern = re.compile(
+                r"(?is)\bLIMIT\s+(\d+)\s*(?!,|OFFSET)(?:\b|$)"
+            )
+            limit_with_offset_pattern = re.compile(
+                r"(?is)\bLIMIT\s+(\d+)\s+OFFSET\s+(\d+)\b"
+            )
+            limit_offset_count_pattern = re.compile(
+                r"(?is)\bLIMIT\s+(\d+)\s*,\s*(\d+)\b"
+            )
+
+            def replace_limit_count(m):
+                count = int(m.group(1))
+                new_count = min(count, 25)
+                return f"LIMIT {new_count}"
+
+            def replace_limit_with_offset(m):
+                count = int(m.group(1))
+                offset = int(m.group(2))
+                new_count = min(count, 25)
+                return f"LIMIT {new_count} OFFSET {offset}"
+
+            def replace_limit_offset_count(m):
+                offset = int(m.group(1))
+                count = int(m.group(2))
+                new_count = min(count, 25)
+                return f"LIMIT {offset}, {new_count}"
+
+            original_cleaned = cleaned
+            # Apply patterns; order matters to avoid partial overlaps
+            cleaned = limit_with_offset_pattern.sub(replace_limit_with_offset, cleaned)
+            cleaned = limit_offset_count_pattern.sub(
+                replace_limit_offset_count, cleaned
+            )
+            cleaned = limit_count_pattern.sub(replace_limit_count, cleaned)
+
+            # If no LIMIT found at all, append LIMIT 25 (try before final semicolon if present)
+            if re.search(r"(?is)\bLIMIT\b", cleaned) is None:
+                cleaned = f"{cleaned} LIMIT 25"
+
+            if original_cleaned != cleaned:
+                logging.debug(
+                    f"SQL limit normalized to 25 rows. Before: {original_cleaned[:200]} | After: {cleaned[:200]}"
+                )
+        except Exception:
+            # If limit enforcement fails for any reason, still proceed with cleaned query
+            pass
+
         return cleaned
 
     def _initialize_agent_for_file(self, file_id: str):
@@ -968,7 +1022,6 @@ class TabularDataHandler:
             logging.info(f"Formatted question: {formatted_question}")
             query_type = classification.get("category", "unknown")
             language = classification.get("language", "en")
-            logging.info(f"Query type for response formatting: {query_type}")
 
             # Execute SQL query through agent
             logging.info("Executing query through SQL agent")
@@ -976,22 +1029,22 @@ class TabularDataHandler:
                 response = self.agent.invoke({"input": formatted_question})
 
                 # Try to extract and execute SQL directly to return structured table data
-                sql_query = self._extract_sql_from_formatted_question(
-                    formatted_question
-                )
-                if sql_query and hasattr(self, "engine") and self.engine:
-                    try:
-                        with self.engine.connect() as connection:
-                            cleaned_sql = self._clean_sql_query(sql_query)
-                            result = connection.execute(text(cleaned_sql))
-                            headers = list(result.keys())
-                            rows = [list(row) for row in result.fetchall()]
-                            # Return in [headers, *rows] format so the API formats a table with correct headers
-                            return [headers, *rows]
-                    except Exception as direct_sql_error:
-                        logging.warning(
-                            f"Direct SQL execution failed, falling back to LLM formatting: {str(direct_sql_error)}"
-                        )
+                # sql_query = self._extract_sql_from_formatted_question(
+                #     formatted_question
+                # )
+                # if sql_query and hasattr(self, "engine") and self.engine:
+                #     try:
+                #         with self.engine.connect() as connection:
+                #             cleaned_sql = self._clean_sql_query(sql_query)
+                #             result = connection.execute(text(cleaned_sql))
+                #             headers = list(result.keys())
+                #             rows = [list(row) for row in result.fetchall()]
+                #             # Return in [headers, *rows] format so the API formats a table with correct headers
+                #             return [headers, *rows]
+                #     except Exception as direct_sql_error:
+                #         logging.warning(
+                #             f"Direct SQL execution failed, falling back to LLM formatting: {str(direct_sql_error)}"
+                #         )
 
                 return self._process_agent_response(
                     response, question, query_type, language
@@ -1029,6 +1082,16 @@ class TabularDataHandler:
         truncated_context = self._truncate_intermediate_steps(
             intermediate_steps, final_answer
         )
+
+        # Get column headers from database info for better formatting
+        column_headers = self._get_column_headers_for_prompt()
+        logging.info(f"Column headers: {column_headers}")
+
+        # Add column headers on the next line after truncated context
+        if column_headers:
+            truncated_context = (
+                f"{truncated_context}\n\nColumn Headers: {column_headers}"
+            )
 
         base_prompt = PromptBuilder.build_forced_answer_prompt(
             question, truncated_context, query_type, language
@@ -1121,10 +1184,19 @@ class TabularDataHandler:
                     raw_result = self.db.run(sql_query)
                     logging.info(f"Direct SQL result: {str(raw_result)[:500]}...")
 
-                    # Format the raw result
+                    # Format the raw result with column headers if available
+                    column_headers = self._get_column_headers_for_prompt()
+
+                    # Add column headers on the next line if available
+                    context_with_headers = (
+                        f"SQL Query: {sql_query}\nResult: {raw_result}"
+                    )
+                    if column_headers:
+                        context_with_headers = f"{context_with_headers}\n\nColumn Headers: {column_headers}"
+
                     base_prompt = PromptBuilder.build_forced_answer_prompt(
                         question,
-                        f"SQL Query: {sql_query}\nResult: {raw_result}",
+                        context_with_headers,
                         query_type,
                         language,
                     )
@@ -1147,6 +1219,39 @@ class TabularDataHandler:
         # If all else fails, raise the original error
         raise agent_error
 
+    def _get_column_headers_for_prompt(self) -> Optional[str]:
+        """
+        Extract column headers from the database information for inclusion in prompts.
+
+        Returns:
+            Optional[str]: Comma-separated column headers or None if not available
+        """
+        try:
+            if not self.file_id or self.file_id not in self.database_summaries:
+                return None
+
+            db_summary = self.database_summaries[self.file_id]
+            if not db_summary or "tables" not in db_summary:
+                return None
+
+            # Get the first table (assuming single table for now)
+            table = db_summary["tables"][0] if db_summary["tables"] else None
+            if not table or "columns" not in table:
+                return None
+
+            # Extract column names
+            column_names = [
+                col.get("name", "") for col in table["columns"] if isinstance(col, dict)
+            ]
+            if not column_names:
+                return None
+
+            return ", ".join(column_names)
+
+        except Exception as e:
+            logging.warning(f"Error extracting column headers: {str(e)}")
+            return None
+
     def get_forced_answer(
         self, question: str, answer: str, language: str = "en"
     ) -> str:
@@ -1162,10 +1267,31 @@ class TabularDataHandler:
             str: An extracted answer or "Cannot find answer" if no suitable answer is found.
         """
         try:
+            # Get column headers if available for better formatting
+            column_headers = self._get_column_headers_for_prompt()
+
+            # Add column headers on the next line if available
+            answer_with_headers = answer
+            if column_headers:
+                answer_with_headers = f"{answer}\n\nColumn Headers: {column_headers}"
+
             base_prompt = PromptBuilder.build_forced_answer_prompt(
-                question, answer, "unknown", language
+                question, answer_with_headers, "unknown", language
             )
-            return get_azure_non_rag_response(self.config, base_prompt)
+
+            # Use the appropriate model based on model_choice
+            if self.model_choice.startswith("gemini"):
+                try:
+                    return get_gemini_non_rag_response(
+                        self.config, base_prompt, self.model_choice
+                    )
+                except GeminiSafetyFilterError as e:
+                    logging.warning(
+                        f"Safety filter blocked response in get_forced_answer: {str(e)}"
+                    )
+                    return f"I apologize, but I cannot provide a response to this question. {str(e)}"
+            else:
+                return get_azure_non_rag_response(self.config, base_prompt)
         except Exception as e:
             logging.error(f"Error in get_forced_answer: {str(e)}")
             return f"An error occurred while processing your question: {str(e)}"
