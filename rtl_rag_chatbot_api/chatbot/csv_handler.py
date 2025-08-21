@@ -1080,12 +1080,11 @@ class TabularDataHandler:
 
         logging.info("Formatting result from intermediate steps and final answer")
         truncated_context = self._truncate_intermediate_steps(
-            intermediate_steps, final_answer
+            intermediate_steps, final_answer, 50000, query_type
         )
 
         # Get column headers from database info for better formatting
         column_headers = self._get_column_headers_for_prompt()
-        logging.info(f"Column headers: {column_headers}")
 
         # Add column headers on the next line after truncated context
         if column_headers:
@@ -1301,6 +1300,7 @@ class TabularDataHandler:
         intermediate_steps: list,
         final_answer: str,
         max_context_tokens: int = 50000,
+        query_type: str = "unknown",
     ) -> str:
         """
         Intelligently truncate intermediate steps to prevent token overflow while preserving key information.
@@ -1309,6 +1309,7 @@ class TabularDataHandler:
             intermediate_steps: List of intermediate steps from agent execution
             final_answer: The final answer from the agent
             max_context_tokens: Maximum estimated tokens for context (roughly 4 chars per token)
+            query_type: Type of query to determine truncation strategy
 
         Returns:
             str: Truncated context that fits within token limits
@@ -1321,27 +1322,45 @@ class TabularDataHandler:
         final_answer_str = str(final_answer)
         final_tokens = estimate_tokens(final_answer_str)
 
-        # If final answer itself is extremely large, truncate it first
-        if (
-            final_tokens > max_context_tokens * 0.8
-        ):  # If final answer uses >80% of tokens
-            logging.warning(
-                f"Final answer is too large ({final_tokens} tokens), truncating"
+        # Special handling for FILTERED_SEARCH queries - preserve complete data
+        if query_type == "FILTERED_SEARCH":
+            logging.info(
+                "FILTERED_SEARCH query detected - preserving complete final answer"
             )
-            # Keep the most important part of the final answer
-            max_final_chars = int(max_context_tokens * 0.8 * 4)
-            final_answer_str = (
-                final_answer_str[:max_final_chars] + "... [truncated due to length]"
-            )
-            final_tokens = estimate_tokens(final_answer_str)
+            # For filtered search, prioritize preserving the complete final answer
+            # Only truncate intermediate steps, never the final answer
+            buffer_size = 1000  # Smaller buffer for FILTERED_SEARCH
+            max_step_chars = 300  # More aggressive truncation of intermediate steps
+            max_steps_to_check = 3  # Check fewer steps
+        else:
+            # Standard handling for other query types
+            buffer_size = 2000  # Standard buffer
+            max_step_chars = 500  # Less aggressive truncation
+            max_steps_to_check = 5  # Check more steps
+
+            # If final answer itself is extremely large, truncate it first
+            if final_tokens > max_context_tokens * 0.8:
+                logging.warning(
+                    f"Final answer is too large ({final_tokens} tokens), truncating"
+                )
+                # Keep the most important part of the final answer
+                max_final_chars = int(max_context_tokens * 0.8 * 4)
+                final_answer_str = (
+                    final_answer_str[:max_final_chars] + "... [truncated due to length]"
+                )
+                final_tokens = estimate_tokens(final_answer_str)
 
         # Reserve tokens for final answer and prompt structure
-        available_tokens = max_context_tokens - final_tokens - 2000  # Buffer for prompt
+        available_tokens = max_context_tokens - final_tokens - buffer_size
 
-        if available_tokens <= 1000:  # Need reasonable space for context
-            # If very little space available, return minimal context
-            logging.warning("Very limited tokens available, returning minimal context")
-            return "Query executed with large results. " + final_answer_str
+        if available_tokens <= 500:  # Very limited space
+            logging.warning(
+                f"Very limited tokens available ({available_tokens}), returning minimal context"
+            )
+            if query_type == "FILTERED_SEARCH":
+                return "Query executed successfully. " + final_answer_str
+            else:
+                return "Query executed with large results. " + final_answer_str
 
         # Convert intermediate steps to string and get essential parts
         intermediate_str = str(intermediate_steps)
@@ -1351,50 +1370,20 @@ class TabularDataHandler:
             return intermediate_str + "\n" + final_answer_str
 
         # Need to truncate - extract key information
-        essential_info = []
+        essential_info = self._extract_essential_info_from_steps(
+            intermediate_steps, available_tokens, max_steps_to_check, max_step_chars
+        )
 
-        # Look for SQL queries and their results in intermediate steps
-        if isinstance(intermediate_steps, list):
-            for step in intermediate_steps[
-                -5:
-            ]:  # Only check last 5 steps for efficiency
-                step_str = str(step)
-                # Extract SQL queries (usually contain SELECT, FROM, WHERE)
-                if any(
-                    keyword in step_str.upper()
-                    for keyword in ["SELECT", "FROM", "WHERE", "GROUP BY", "ORDER BY"]
-                ):
-                    # Keep SQL queries as they're essential for understanding
-                    current_length = estimate_tokens("\n".join(essential_info))
-                    if current_length + estimate_tokens(step_str) < available_tokens:
-                        essential_info.append(
-                            f"SQL Query executed: {step_str[:500]}..."
-                        )  # Limit individual steps
-                    else:
-                        # If adding this would exceed limit, truncate the step
-                        remaining_tokens = available_tokens - current_length
-                        if (
-                            remaining_tokens > 50
-                        ):  # Only add if we have reasonable space
-                            truncated_step = (
-                                step_str[: remaining_tokens * 2] + "... [truncated]"
-                            )
-                            essential_info.append(f"SQL Query: {truncated_step}")
-                        break
-
-        # If no essential info found or still too long, use a summary approach
-        if (
-            not essential_info
-            or estimate_tokens("\n".join(essential_info)) > available_tokens
-        ):
-            # Create a minimal summary
-            summary = (
-                "Database query executed successfully. Results processed and formatted."
-            )
-            if estimate_tokens(summary) < available_tokens:
-                essential_info = [summary]
+        # If no essential info found, use a summary approach
+        if not essential_info:
+            if query_type == "FILTERED_SEARCH":
+                essential_info = [
+                    "Database query executed successfully with filtered search results."
+                ]
             else:
-                essential_info = []
+                essential_info = [
+                    "Database query executed successfully. Results processed and formatted."
+                ]
 
         # Combine with final answer
         context = "\n".join(essential_info)
@@ -1402,6 +1391,59 @@ class TabularDataHandler:
             return context + "\n\n" + final_answer_str
         else:
             return final_answer_str
+
+    def _extract_essential_info_from_steps(
+        self,
+        intermediate_steps: list,
+        available_tokens: int,
+        max_steps: int,
+        max_chars: int,
+    ) -> list:
+        """
+        Extract essential information from intermediate steps within token limits.
+
+        Args:
+            intermediate_steps: List of intermediate steps
+            available_tokens: Available tokens for context
+            max_steps: Maximum number of steps to check
+            max_chars: Maximum characters per step
+
+        Returns:
+            list: List of essential information strings
+        """
+        essential_info = []
+
+        # Look for SQL queries and their results in intermediate steps
+        if isinstance(intermediate_steps, list):
+            for step in intermediate_steps[-max_steps:]:  # Check last N steps
+                step_str = str(step)
+                # Extract SQL queries (usually contain SELECT, FROM, WHERE)
+                if any(
+                    keyword in step_str.upper()
+                    for keyword in ["SELECT", "FROM", "WHERE", "GROUP BY", "ORDER BY"]
+                ):
+                    # Keep SQL queries as they're essential for understanding
+                    # Use the estimate_tokens function from the parent method
+                    current_length = len("\n".join(essential_info)) // 4
+                    if current_length + len(step_str) // 4 < available_tokens:
+                        essential_info.append(
+                            f"SQL Query executed: {step_str[:max_chars]}..."
+                        )
+                    else:
+                        # If adding this would exceed limit, truncate the step
+                        remaining_tokens = available_tokens - current_length
+                        if (
+                            remaining_tokens > 50
+                        ):  # Only add if we have reasonable space
+                            # Ensure remaining_tokens is an integer for string slicing
+                            remaining_chars = int(remaining_tokens * 2)
+                            truncated_step = (
+                                step_str[:remaining_chars] + "... [truncated]"
+                            )
+                            essential_info.append(f"SQL Query: {truncated_step}")
+                        break
+
+        return essential_info
 
     def _extract_sql_from_formatted_question(
         self, formatted_question: str
