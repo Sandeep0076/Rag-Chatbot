@@ -77,6 +77,14 @@ examples = [
         "query": "employees named Mark",
         "answer": "SELECT * FROM employees WHERE LOWER(name) LIKE LOWER('%mark%')",
     },
+    {
+        "query": ("What is the employee name in the second row of the dataset?"),
+        "answer": "SELECT employee_name FROM in_table LIMIT 1 OFFSET 1",
+    },
+    {
+        "query": "Show me the first 3 rows of the dataset",
+        "answer": "SELECT * FROM in_table LIMIT 3",
+    },
 ]
 
 # Enhanced prompt with intelligent context analysis
@@ -139,10 +147,14 @@ User Question: {user_question}
 - Never include disclaimers or technical explanations
 - **CRITICAL**: Use the actual table names from database_info - NEVER use "your_table_name" or similar placeholders
 - If multiple tables exist, choose the most appropriate one based on the question context
-- **HARD CAP RULE**: The final SELECT must end with LIMIT 25.
-If a LIMIT is present and >25, reduce it to 25.
-If using LIMIT offset,count, cap count to 25 while preserving the offset.
-Preserve OFFSET when present. Do NOT include markdown, comments, or code fences.
+- **HARD CAP RULE**: Apply LIMIT 25 intelligently based on query intent:
+- For specific row requests (e.g., "second row", "row 5", "first 3 rows"):
+  Use the exact LIMIT requested, do NOT override with LIMIT 25
+- For general queries without specific row limits: Add LIMIT 25 if not present
+- If a LIMIT is present and >25, reduce it to 25
+- If using LIMIT offset,count, cap count to 25 while preserving the offset
+- Preserve OFFSET when present
+- Do NOT include markdown, comments, or code fences.
 
 **TABLE NAME EXTRACTION:**
 - Look for "table_names" array in database_info
@@ -159,7 +171,7 @@ Examples:
 - No explanations, no multiple options, no markdown formatting
 - Just the clean SQL statement
 - **MUST use actual table names from database_info**
-- **MUST end with LIMIT 25 (respecting the hard cap rule above)**
+- **MUST follow the intelligent LIMIT rules (respecting the hard cap rule above)**
 """
 
 
@@ -515,10 +527,12 @@ def enhance_query_with_context(
         Return ONLY the SQL statement, starting with SELECT.
         Use the actual table names from the available tables above.
         No explanations, no markdown formatting, just the SQL statement.
-        STRICT: The final SQL must include LIMIT 25.
-        If there is an existing LIMIT larger than 25, reduce it to 25.
-        If using LIMIT offset,count, cap the count to 25 and preserve the offset.
-        Preserve OFFSET if present.
+        STRICT: Apply LIMIT intelligently based on query intent:
+        - For specific row requests (e.g., "second row", "row 5", "first 3 rows"): Use the exact LIMIT requested
+        - For general queries: Add LIMIT 25 if not present
+        - If there is an existing LIMIT larger than 25, reduce it to 25
+        - If using LIMIT offset,count, cap the count to 25 and preserve the offset
+        - Preserve OFFSET if present
         """
 
     elif category == "CATEGORICAL_LISTING" and optimization == "top_n_summary":
@@ -539,10 +553,12 @@ def enhance_query_with_context(
         Return ONLY the SQL statement, starting with SELECT.
         Use the actual table names from the available tables above.
         No explanations, no markdown formatting, just the SQL statement.
-        STRICT: The final SQL must include LIMIT 25.
-        If there is an existing LIMIT larger than 25, reduce it to 25.
-        If using LIMIT offset,count, cap the count to 25 and preserve the offset.
-        Preserve OFFSET if present.
+        STRICT: Apply LIMIT intelligently based on query intent:
+        - For specific row requests (e.g., "second row", "row 5", "first 3 rows"): Use the exact LIMIT requested
+        - For general queries: Add LIMIT 25 if not present
+        - If there is an existing LIMIT larger than 25, reduce it to 25
+        - If using LIMIT offset,count, cap the count to 25 and preserve the offset
+        - Preserve OFFSET if present
         """
 
     else:
@@ -559,10 +575,12 @@ def enhance_query_with_context(
 
         Return ONLY the SQL statement, starting with SELECT.
         No explanations, no markdown formatting, just the SQL statement.
-        STRICT: The final SQL must include LIMIT 25.
-        If there is an existing LIMIT larger than 25, reduce it to 25.
-        If using LIMIT offset,count, cap the count to 25 and preserve the offset.
-        Preserve OFFSET if present.
+        STRICT: Apply LIMIT intelligently based on query intent:
+        - For specific row requests (e.g., "second row", "row 5", "first 3 rows"): Use the exact LIMIT requested
+        - For general queries: Add LIMIT 25 if not present
+        - If there is an existing LIMIT larger than 25, reduce it to 25
+        - If using LIMIT offset,count, cap the count to 25 and preserve the offset
+        - Preserve OFFSET if present
 """
 
     try:
@@ -572,7 +590,7 @@ def enhance_query_with_context(
             + "\nSQL OUTPUT RULES:\n"
             + "- Use the accurate table name from context.\n"
             + "- Return only raw SQL (no markdown or comments).\n"
-            + "- Statement must end with LIMIT 25; if a LIMIT exists >25, reduce to 25;\n"
+            + "- Apply LIMIT intelligently: preserve specific row requests, add LIMIT 25 for general queries;\n"
             + "  when OFFSET is present, preserve it.\n"
         )
         if model_choice.startswith("gemini"):
