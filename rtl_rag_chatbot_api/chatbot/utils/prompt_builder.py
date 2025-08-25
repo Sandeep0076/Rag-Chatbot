@@ -40,10 +40,11 @@ class PromptBuilder:
                 "2. NEVER include:\n"
                 "   - SQL queries, code, or technical syntax\n"
                 "   - Business advice, insights, or recommendations\n"
-                "   - Long explanations or context\n"
+                "   - Long explanations or context beyond what is present in 'FINAL ANSWER'\n"
                 "   - Database terminology or technical details\n"
                 "3. ALWAYS provide:\n"
-                "   - Just the direct answer to the question\n"
+                "   - The final answer as stated under 'FINAL ANSWER'\n"
+                "     (include its brief explanation if present; do NOT drop it)\n"
                 "   - The actual number/value with appropriate units\n"
                 "   - Clean, simple formatting\n"
                 "4. Format:\n"
@@ -59,10 +60,11 @@ class PromptBuilder:
                 "5. **IMPORTANT**: After formatting your response, count the actual data rows "
                 "(excluding headers and separators)\n"
                 "   - If you count EXACTLY 25 data rows, append this note at the bottom:\n"
-                "     *Note: Results are limited to 25 rows for readability.*\n"
+                "     *Results limited to 25 rows for readability.*\n"
                 "   - If you count fewer than 25 rows, do NOT add this note\n"
                 "   - Only add the note when you are certain there are exactly 25 data rows\n\n"
-                "Provide only the direct, factual answer without additional commentary."
+                "6. Optionally append ONE concise clarification sentence only if it improves clarity.\n"
+                "   If not needed, do not append anything.\n"
             )
         elif query_type == "FILTERED_SEARCH":
             # For filtered search queries, ALWAYS show complete data when ≤25 rows
@@ -161,11 +163,31 @@ class PromptBuilder:
                 "Do not invent, modify, or abbreviate column names.\n\n"
             )
 
+        final_answer_priority = (
+            "**CRITICAL CONTEXT USAGE RULES:**\n"
+            "1. First, read the 'User Question' and analyze the 'FINAL ANSWER' section deeply.\n"
+            "2. If and only if the 'FINAL ANSWER' does not fully answer the question (incomplete/ambiguous),\n"
+            "   then consult 'INTERMEDIATE_STEPS' to complete the answer.\n"
+            "3. If the 'FINAL ANSWER' answers the question but can be made clearer, you may append ONE concise\n"
+            "   clarification sentence to improve understanding. If not needed, do not add anything.\n"
+            "4. When presenting tabular data, explicitly count the data rows (exclude headers/separators).\n"
+            "   Append the note '*Results limited to 25 rows for readability.*' ONLY if the count is EXACTLY 25.\n"
+            "   If the count is not exactly 25, do not include this note.\n"
+            "5. After presenting any table, determine whether the question expects a direct conclusion.\n"
+            "   If yes, append ONE explicit sentence that directly answers (e.g., name the entity, yes/no, trend).\n"
+            "   If not necessary, do not add anything.\n"
+            "6. For questions about relationship/correlation, state clearly whether the relationship appears\n"
+            "   positive, negative, or no clear relationship. Include approximate strength ONLY if present\n"
+            "   in the provided context. Do not invent new metrics.\n\n"
+        )
+
         return (
             f"User Question: {question}\n\n"
-            f"Query Results and Context: {truncated_answer}\n\n"
+            f"Query Results and Context:\n"
+            f"{truncated_answer}\n\n"
             f"{header_emphasis}"
             f"{language_instruction}\n\n"
+            f"{final_answer_priority}"
             f"{instructions}"
         )
 

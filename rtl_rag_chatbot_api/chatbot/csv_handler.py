@@ -1076,6 +1076,7 @@ class TabularDataHandler:
         """
         # Extract the final answer and intermediate steps
         final_answer = response.get("output", "No final answer found")
+        logging.info(f"Final answer: {final_answer}")
         intermediate_steps = response.get("intermediate_steps", [])
 
         logging.info("Formatting result from intermediate steps and final answer")
@@ -1331,12 +1332,12 @@ class TabularDataHandler:
             # Only truncate intermediate steps, never the final answer
             buffer_size = 1000  # Smaller buffer for FILTERED_SEARCH
             max_step_chars = 300  # More aggressive truncation of intermediate steps
-            max_steps_to_check = 3  # Check fewer steps
+            max_steps_to_check = 2  # Check fewer steps
         else:
             # Standard handling for other query types
             buffer_size = 2000  # Standard buffer
             max_step_chars = 500  # Less aggressive truncation
-            max_steps_to_check = 5  # Check more steps
+            max_steps_to_check = 3  # Check more steps
 
             # If final answer itself is extremely large, truncate it first
             if final_tokens > max_context_tokens * 0.8:
@@ -1357,17 +1358,20 @@ class TabularDataHandler:
             logging.warning(
                 f"Very limited tokens available ({available_tokens}), returning minimal context"
             )
-            if query_type == "FILTERED_SEARCH":
-                return "Query executed successfully. " + final_answer_str
-            else:
-                return "Query executed with large results. " + final_answer_str
+            return (
+                "FINAL ANSWER:\n" + final_answer_str + "\n\n"
+                "INTERMEDIATE_STEPS:\n[omitted due to token limits]"
+            )
 
         # Convert intermediate steps to string and get essential parts
         intermediate_str = str(intermediate_steps)
 
         if estimate_tokens(intermediate_str) <= available_tokens:
             # If it fits, return everything
-            return intermediate_str + "\n" + final_answer_str
+            return (
+                "FINAL ANSWER:\n" + final_answer_str + "\n\n"
+                "INTERMEDIATE_STEPS:\n" + intermediate_str
+            )
 
         # Need to truncate - extract key information
         essential_info = self._extract_essential_info_from_steps(
@@ -1388,9 +1392,15 @@ class TabularDataHandler:
         # Combine with final answer
         context = "\n".join(essential_info)
         if context:
-            return context + "\n\n" + final_answer_str
+            return (
+                "FINAL ANSWER:\n" + final_answer_str + "\n\n"
+                "INTERMEDIATE_STEPS (essential):\n" + context
+            )
         else:
-            return final_answer_str
+            return (
+                "FINAL ANSWER:\n" + final_answer_str + "\n\n"
+                "INTERMEDIATE_STEPS:\n[not required]"
+            )
 
     def _extract_essential_info_from_steps(
         self,
