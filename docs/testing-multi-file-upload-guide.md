@@ -83,6 +83,32 @@ Upload → Process → Chat → Multi-Upload → Multi-Chat → Delete
 - `test_generate_dalle3_images()` - Generate images using DALL-E 3
 - `test_generate_imagen3_images()` - Generate images using Imagen 3
 
+### 3. Migration System Tests
+
+#### **TestMigrationSystem Class**
+Tests for the legacy embedding migration system:
+
+**Migration Detection Tests:**
+- `test_migration_detection_mixed_types()` - Detect mixed embedding types
+- `test_migration_detection_all_current()` - Skip migration when all files current
+- `test_migration_detection_all_legacy()` - Handle all legacy files appropriately
+
+**Migration Execution Tests:**
+- `test_migration_execution_parallel()` - Execute migration with parallel processing
+- `test_migration_context_preservation()` - Preserve migration context across pipeline
+- `test_migration_username_preservation()` - Preserve all usernames during migration
+- `test_migration_file_id_consistency()` - Maintain file ID consistency
+
+**Migration Error Handling Tests:**
+- `test_migration_missing_files_error()` - Handle missing files for migration
+- `test_migration_partial_failure()` - Handle partial migration failures
+- `test_migration_rollback_on_error()` - Rollback changes on migration failure
+
+**Migration Performance Tests:**
+- `test_migration_parallel_performance()` - Measure parallel processing performance
+- `test_migration_resource_usage()` - Monitor resource usage during migration
+- `test_migration_concurrent_users()` - Test migration with multiple concurrent users
+
 ### 2. Advanced Error Handling Tests (`test_api_advanced.py`)
 
 #### **TestAdvancedMultiFileScenarios Class**

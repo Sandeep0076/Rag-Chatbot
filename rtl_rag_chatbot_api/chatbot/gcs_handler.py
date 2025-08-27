@@ -117,6 +117,77 @@ class GCSHandler:
 
         logging.info(f"Finished downloading all files for file ID: {file_id}")
 
+    def download_encrypted_file_by_id(
+        self, file_id: str, destination_path: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Download and decrypt an encrypted file by file ID.
+
+        Args:
+            file_id (str): The file ID to download
+            destination_path (Optional[str]): Custom destination path. If None, uses default local_data structure
+
+        Returns:
+            Optional[str]: Path to the decrypted file if successful, None otherwise
+        """
+        prefix = f"file-embeddings/{file_id}/"
+        blobs = list(self.bucket.list_blobs(prefix=prefix))
+
+        if not blobs:
+            logging.warning(f"No files found for file ID: {file_id}")
+            return None
+
+        encrypted_files = [blob for blob in blobs if blob.name.endswith(".encrypted")]
+
+        if not encrypted_files:
+            logging.warning(f"No encrypted files found for file ID: {file_id}")
+            return None
+
+        # For now, we'll handle the first encrypted file found
+        # In the future, this could be extended to handle multiple encrypted files
+        encrypted_blob = encrypted_files[0]
+        relative_path = encrypted_blob.name[len(prefix) :]
+
+        # Determine destination path - use local_data/ directory like the file upload endpoint
+        if destination_path is None:
+            # Use local_data/ directory like the file upload endpoint
+            encrypted_temp_path = os.path.join(
+                "local_data", f"{file_id}_{relative_path}"
+            )
+        else:
+            encrypted_temp_path = destination_path + ".encrypted"
+
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(encrypted_temp_path), exist_ok=True)
+
+        try:
+            # Download the encrypted file
+            encrypted_blob.download_to_filename(encrypted_temp_path)
+            logging.info(
+                f"Downloaded encrypted file {encrypted_blob.name} to {encrypted_temp_path}"
+            )
+
+            # Decrypt the file
+            decrypted_path = decrypt_file(encrypted_temp_path)
+            logging.info(f"Decrypted file to {decrypted_path}")
+
+            return decrypted_path
+
+        except Exception as e:
+            logging.error(
+                f"Error downloading/decrypting file for file ID {file_id}: {str(e)}"
+            )
+            # Clean up encrypted temp file if it exists
+            if os.path.exists(encrypted_temp_path):
+                os.remove(encrypted_temp_path)
+            return None
+
+        finally:
+            # Clean up encrypted file
+            if os.path.exists(encrypted_temp_path):
+                os.remove(encrypted_temp_path)
+                logging.info(f"Cleaned up encrypted file {encrypted_temp_path}")
+
     def cleanup_local_files(self, exclude=[]):
         folders_to_clean = ["chroma_db", "local_data", "processed_data"]
         for folder in folders_to_clean:
@@ -276,9 +347,44 @@ class GCSHandler:
             # Single upload case
             self._upload_single_item(bucket, source, destination_blob_name)
 
-    def find_existing_file_by_hash(self, file_hash):
+    def find_existing_file_by_hash(self, file_hash, db_session=None, use_db=False):
+        """
+        Find existing file by hash from either database or GCS.
+
+        Args:
+            file_hash: The file hash to search for
+            db_session: Database session (required if use_db=True)
+            use_db: Whether to use database lookup instead of GCS
+
+        Returns:
+            file_id if found, None otherwise
+        """
         try:
             logging.info(f"Searching for existing file with hash: {file_hash}")
+
+            # Use database lookup if enabled
+            if use_db:
+                try:
+                    from rtl_rag_chatbot_api.app import get_db_session
+                    from rtl_rag_chatbot_api.common.db import find_file_by_hash_db
+
+                    with get_db_session() as db_session:
+                        result = find_file_by_hash_db(db_session, file_hash)
+                        if result:
+                            file_id, embedding_type = result
+                            logging.info(f"File found in database with ID: {file_id}")
+                            return file_id, embedding_type
+                        else:
+                            logging.info(
+                                f"No file found in database with hash: {file_hash}"
+                            )
+                            return None, None
+                except Exception as e:
+                    logging.error(f"Error in database lookup: {str(e)}")
+                    # Fall through to GCS lookup on database error
+                    pass
+
+            # Fallback to GCS lookup
             blobs = self._storage_client.list_blobs(
                 self.bucket_name, prefix="file-embeddings/"
             )
@@ -287,13 +393,14 @@ class GCSHandler:
                 if blob.name.endswith("/file_info.json"):
                     file_info = json.loads(blob.download_as_bytes().decode("utf-8"))
                     if file_info.get("file_hash") == file_hash:
-                        return file_info.get("file_id")
-
+                        return file_info.get("file_id"), file_info.get(
+                            "embedding_type", "azure-03-small"
+                        )
             logging.info(f"No file found with hash: {file_hash}")
-            return None
+            return None, None
         except Exception as e:
             logging.error(f"Error in find_existing_file_by_hash: {str(e)}")
-            return None
+            return None, None
 
     def get_file_info(self, file_id: str):
         blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
@@ -465,7 +572,7 @@ class GCSHandler:
 
     def delete_embeddings(self, file_id: str):
         """
-        Deletes all embeddings associated with a file_id from GCS.
+        Deletes all embeddings associated with a file_id from GCS and database.
 
         Args:
             file_id (str): The ID of the file whose embeddings should be deleted
@@ -484,11 +591,49 @@ class GCSHandler:
                 except Exception as e:
                     logging.error(f"Error deleting blob {blob.name}: {str(e)}")
 
+            # Clean up database records if database usage is enabled
+            if (
+                hasattr(self.configs, "use_file_hash_db")
+                and self.configs.use_file_hash_db
+            ):
+                self._cleanup_database_records(file_id)
+
             logging.info(f"Successfully deleted all embeddings for file_id: {file_id}")
 
         except Exception as e:
             logging.error(f"Error in delete_embeddings: {str(e)}", exc_info=True)
             raise
+
+    def _cleanup_database_records(self, file_id: str):
+        """
+        Clean up database records for a given file_id.
+
+        Args:
+            file_id (str): The ID of the file to clean up from database
+        """
+        try:
+            from rtl_rag_chatbot_api.app import get_db_session
+            from rtl_rag_chatbot_api.common.db import delete_file_info_by_file_id
+
+            with get_db_session() as db_session:
+                result = delete_file_info_by_file_id(db_session, file_id)
+
+                if result["status"] == "success" and result["deleted"]:
+                    logging.info(
+                        f"Successfully deleted {result['deleted_count']} database records for file_id: {file_id}"
+                    )
+                elif result["status"] == "success" and not result["deleted"]:
+                    logging.info(f"No database records found for file_id: {file_id}")
+                else:
+                    logging.error(
+                        f"Error deleting database records for file_id {file_id}: {result['message']}"
+                    )
+
+        except Exception as e:
+            logging.error(
+                f"Error cleaning up database records for file_id {file_id}: {str(e)}"
+            )
+            # Don't raise exception here as database cleanup shouldn't block GCS cleanup
 
     # Removed delete_google_embeddings method as part of unified Azure embeddings approach
 

@@ -21,6 +21,26 @@ os.environ["azure_embedding"] = json.dumps(
     }
 )
 
+os.environ["azure_embedding_03_small"] = json.dumps(
+    {
+        "azure_embedding_03_small_api_key": os.getenv(
+            "AZURE_EMBEDDING_03_SMALL_API_KEY"
+        ),
+        "azure_embedding_03_small_endpoint": os.getenv(
+            "AZURE_EMBEDDING_03_SMALL_ENDPOINT"
+        ),
+        "azure_embedding_03_small_api_version": os.getenv(
+            "AZURE_EMBEDDING_03_SMALL_API_VERSION"
+        ),
+        "azure_embedding_03_small_deployment": os.getenv(
+            "AZURE_EMBEDDING_03_SMALL_DEPLOYMENT"
+        ),
+        "azure_embedding_03_small_model_name": os.getenv(
+            "AZURE_EMBEDDING_03_SMALL_MODEL_NAME"
+        ),
+    }
+)
+
 os.environ["chatbot"] = json.dumps(
     {
         "system_prompt_plain_llm": os.getenv("SYSTEM_PROMPT_PLAIN_LLM"),

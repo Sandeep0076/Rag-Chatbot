@@ -27,6 +27,13 @@ This document details the automatic cleanup system implemented in the RAG applic
    - Prevents too frequent cleanups even if requested
 
 
+### Database Integration Configuration
+The cleanup system now supports automatic database cleanup when `use_file_hash_db` is enabled:
+- **Environment Variable**: `USE_FILE_HASH_DB=true`
+- **Behavior**: When enabled, file deletions will also remove corresponding database records
+- **Safety**: Database cleanup failures won't block GCS cleanup operations
+- **Logging**: Detailed logs track database cleanup success/failure
+
 ### Example
 Time 0:00 -> Application starts
              ↓
@@ -35,7 +42,7 @@ Time 1:00 -> First scheduler wake-up
              Checks last_cleanup time
 
              If (current_time - last_cleanup) ≥ 30 mins
-                → Performs cleanup
+                → Performs cleanup (including database if enabled)
              Updates last_cleanup timestamp
              ↓
 
@@ -47,6 +54,8 @@ Time 2:00 -> Next scheduler wake-up
 ### Core Components
 - **CleanupCoordinator**: Main class managing cleanup operations
 - **ChromaDBManager**: Manages database connections and cleanup
+- **GCSHandler**: Handles GCS operations and database cleanup integration
+- **Database Layer**: FileInfo table for tracking file hashes and metadata
 - **Scheduler**: Handles automatic cleanup timing
 - **Logging System**: Tracks cleanup operations and errors
 
@@ -144,3 +153,52 @@ Deletes files and their associated embeddings from **both local storage and Goog
 
 3. **GCS Cleanup**
    - Removes all blobs with prefix `file-embeddings/{file_id}/`
+
+4. **Database Cleanup** (NEW)
+   - Automatically removes file records from the database when `use_file_hash_db` is enabled
+   - Deletes all FileInfo records associated with the file_id
+   - Provides detailed logging of deletion results
+   - Non-blocking: Database cleanup failures won't prevent GCS cleanup
+
+## Cleanup Process
+
+### Types of Cleanup
+
+1. **Regular Cleanup**
+   - Automatic cleanup of stale files based on access timestamps
+   - Resource optimization and memory management
+   - Database record cleanup when enabled
+
+2. **Migration Cleanup**
+   - **Legacy Embedding Cleanup**: Removes old embeddings after successful migration
+   - **Migration Artifacts**: Cleans up temporary files and migration metadata
+   - **Rollback Support**: Handles cleanup of failed migration attempts
+   - **Context Cleanup**: Removes migration context after processing completion
+
+3. **Manual Cleanup**
+   - User-initiated cleanup through API endpoints
+   - Selective file deletion with detailed feedback
+   - Batch cleanup operations for multiple files
+
+### Cleanup Operations
+
+1. **ChromaDB Cleanup**
+   - Cleans up ChromaDB instances from memory
+   - Removes initialized models
+   - **Migration Support**: Handles cleanup of migrated embedding collections
+
+2. **Local Storage Cleanup**
+   - Deletes the ChromaDB directory for each file
+   - Path pattern: `./chroma_db/{file_id}`
+   - **Migration Artifacts**: Removes temporary migration files and metadata
+
+3. **GCS Cleanup**
+   - Removes all blobs with prefix `file-embeddings/{file_id}/`
+   - **Migration Metadata**: Cleans up migration-related metadata files
+
+4. **Database Cleanup** (NEW)
+   - Automatically removes file records from the database when `use_file_hash_db` is enabled
+   - Deletes all FileInfo records associated with the file_id
+   - **Migration Tracking**: Removes migration history records after successful cleanup
+   - Provides detailed logging of deletion results
+   - Non-blocking: Database cleanup failures won't prevent GCS cleanup

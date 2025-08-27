@@ -147,15 +147,27 @@ class GeminiHandler(BaseRAGHandler):
             "textembedding-gecko@latest"
         )
 
-        # Initialize Azure OpenAI client for embeddings
+        # Initialize Azure OpenAI clients for embeddings
         # This is critical for our unified embedding approach
-        self.azure_client = AzureOpenAI(
+
+        # Legacy ada-002 client
+        self.azure_client_ada002 = AzureOpenAI(
             api_key=configs.azure_embedding.azure_embedding_api_key,
             azure_endpoint=configs.azure_embedding.azure_embedding_endpoint,
             api_version=configs.azure_embedding.azure_embedding_api_version,
         )
+
+        # New 03-small client
+        self.azure_client_03_small = AzureOpenAI(
+            api_key=configs.azure_embedding_03_small.azure_embedding_03_small_api_key,
+            azure_endpoint=configs.azure_embedding_03_small.azure_embedding_03_small_endpoint,
+            api_version=configs.azure_embedding_03_small.azure_embedding_03_small_api_version,
+        )
+
+        # Default to 03-small for new embeddings
+        self.azure_client = self.azure_client_03_small
         self.azure_embedding_deployment = (
-            configs.azure_embedding.azure_embedding_deployment
+            configs.azure_embedding_03_small.azure_embedding_03_small_deployment
         )
 
         self.generative_model = None
@@ -265,6 +277,86 @@ class GeminiHandler(BaseRAGHandler):
             self.active_file_ids = [file_id]
             self.is_multi_file = False
 
+    def _get_embedding_config_for_file(self, file_id: str = None):
+        """Get the appropriate embedding client and deployment based on file's embedding_type"""
+        # Default to new embedding for new files
+        default_client = self.azure_client_03_small
+        default_deployment = (
+            self.configs.azure_embedding_03_small.azure_embedding_03_small_deployment
+        )
+
+        if not file_id:
+            return default_client, default_deployment
+
+        # Check file_info to determine embedding type
+        try:
+            # First check if we have it in all_file_infos
+            if (
+                hasattr(self, "all_file_infos")
+                and self.all_file_infos
+                and file_id in self.all_file_infos
+            ):
+                file_info_data = self.all_file_infos[file_id]
+                embedding_type = file_info_data.get("embedding_type", "azure-03-small")
+                # For tabular files (no embedding_type), explicitly use new embedding
+                if file_info_data.get("is_tabular", False):
+                    embedding_type = "azure-03-small"
+                    import logging
+
+                    logging.info(
+                        f"Tabular file {file_id} detected, using text-embedding-3-small"
+                    )
+            else:
+                # Check local file_info.json
+                import json
+                import os
+
+                local_info_path = os.path.join("./chroma_db", file_id, "file_info.json")
+                if os.path.exists(local_info_path):
+                    with open(local_info_path, "r") as f:
+                        file_info_data = json.load(f)
+                        embedding_type = file_info_data.get(
+                            "embedding_type", "azure-03-small"
+                        )
+                        # For tabular files (no embedding_type), explicitly use new embedding
+                        if file_info_data.get("is_tabular", False):
+                            embedding_type = "azure-03-small"
+                            import logging
+
+                            logging.info(
+                                f"Tabular file {file_id} detected, using text-embedding-3-small"
+                            )
+                else:
+                    # Default to new embedding for files without info
+                    embedding_type = "azure-03-small"
+
+            # Return appropriate client and deployment based on embedding_type
+            import logging
+
+            logging.info(f"File {file_id} has embedding_type: '{embedding_type}'")
+
+            if embedding_type == "azure":
+                logging.info(f"Using legacy ada-002 embeddings for file {file_id}")
+                return (
+                    self.azure_client_ada002,
+                    self.configs.azure_embedding.azure_embedding_deployment,
+                )
+            else:  # "azure-03-small" or any other value (including tabular files) defaults to new embedding
+                logging.info(
+                    f"Using text-embedding-3-small for file {file_id} (embedding_type: '{embedding_type}')"
+                )
+                return (
+                    self.azure_client_03_small,
+                    self.configs.azure_embedding_03_small.azure_embedding_03_small_deployment,
+                )
+        except Exception as e:
+            import logging
+
+            logging.warning(
+                f"Error getting embedding config for file {file_id}: {e}, using default"
+            )
+            return default_client, default_deployment
+
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Get embeddings for texts, using Azure embeddings for unified approach.
 
@@ -282,6 +374,18 @@ class GeminiHandler(BaseRAGHandler):
         try:
             # Use Azure embeddings (to match dimensionality with stored embeddings)
             if self.use_azure_embeddings:
+                # For query-time, check the first active file to determine embedding type
+                file_id_for_config = None
+                if hasattr(self, "active_file_ids") and self.active_file_ids:
+                    file_id_for_config = self.active_file_ids[0]
+                elif hasattr(self, "file_id") and self.file_id:
+                    file_id_for_config = self.file_id
+
+                # Get appropriate client and deployment
+                azure_client, azure_deployment = self._get_embedding_config_for_file(
+                    file_id_for_config
+                )
+
                 logger.info(
                     f"Getting Azure embeddings for {len(texts)} texts (for unified embedding approach)"
                 )
@@ -297,9 +401,9 @@ class GeminiHandler(BaseRAGHandler):
 
                     while attempt < max_retries:
                         try:
-                            # Use Azure OpenAI embedding API
-                            response = self.azure_client.embeddings.create(
-                                input=batch, model=self.azure_embedding_deployment
+                            # Use Azure OpenAI embedding API with appropriate client and deployment
+                            response = azure_client.embeddings.create(
+                                input=batch, model=azure_deployment
                             )
 
                             # Extract embeddings from response

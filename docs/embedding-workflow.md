@@ -14,6 +14,16 @@ As of June 2025, the system has been optimized to use a unified embedding approa
 - Ensures consistent vector dimensions (1536) across all models
 - Improves performance and reduces API calls
 
+### Legacy Embedding Migration
+
+The system now includes an advanced migration system for handling legacy embeddings:
+
+- **Automatic Detection**: Detects files with mixed embedding types during multi-file uploads
+- **Parallel Migration**: Migrates legacy embeddings concurrently for optimal performance
+- **Data Preservation**: Maintains all usernames and metadata during migration
+- **Seamless Integration**: Migration happens automatically without user intervention
+- **Context Management**: Maintains migration context across the processing pipeline
+
 ## Embedding Status States
 
 Embeddings for a document can be in one of the following states:

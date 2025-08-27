@@ -999,8 +999,6 @@ def process_multiple_files(uploaded_files, is_image):
 
                     st.session_state.uploaded_files[file_id] = {
                         "name": filename,
-                        "type": st.session_state.file_type,
-                        "session_id": session_id,  # Track which session this file belongs to
                     }
                     st.session_state.file_names[file_id] = filename
 
@@ -1053,8 +1051,6 @@ def process_multiple_files(uploaded_files, is_image):
 
                     st.session_state.uploaded_files[file_id] = {
                         "name": filename,
-                        "type": st.session_state.file_type,
-                        "session_id": session_id,  # Track which session this file belongs to
                     }
                     st.session_state.file_names[file_id] = filename
 
@@ -1147,8 +1143,6 @@ def process_single_file(uploaded_file_obj, is_image):
             st.session_state.uploaded_files = {}
         st.session_state.uploaded_files[file_id] = {
             "name": file_name,
-            "type": st.session_state.file_type,
-            "session_id": session_id,  # Track which session this file belongs to
         }
         st.session_state.file_names[file_id] = file_name
 
@@ -1162,12 +1156,7 @@ def process_single_file(uploaded_file_obj, is_image):
         st.session_state.processed_file_map[file_name] = file_id
 
         if upload_result.get("status") == "success":
-            if st.session_state.file_type == "Database":
-                st.success(
-                    "Database processed successfully. You can now chat with its contents."
-                )
-            else:
-                st.success(f"{uploaded_file_obj.name} processed successfully.")
+            st.success(f"{uploaded_file_obj.name} processed successfully.")
         elif upload_result.get("status") == "partial":
             st.warning(f"{uploaded_file_obj.name}: {upload_result['message']}")
         else:
@@ -1185,23 +1174,31 @@ def process_single_file(uploaded_file_obj, is_image):
 
 
 def _get_file_types_for_upload():
-    """Get file types based on current file type selection."""
-    return {
-        "Image": ["jpg", "png"],
-        "CSV/Excel": ["xlsx", "xls", "csv"],
-        "Database": ["db", "sqlite"],
-        "PDF": ["pdf"],
-        "Text": ["txt", "doc", "docx"],
-        "URL": [],
-    }[st.session_state.file_type]
+    """Get allowed file types for mixed uploads."""
+    return [
+        "pdf",
+        "txt",
+        "doc",
+        "docx",
+        "csv",
+        "xls",
+        "xlsx",
+        "db",
+        "sqlite",
+        "jpg",
+        "jpeg",
+        "png",
+        "gif",
+        "bmp",
+        "webp",
+    ]
 
 
 def _display_file_type_info():
-    """Display information based on the selected file type."""
-    if st.session_state.file_type == "Database":
-        st.info(
-            "Upload SQLite database files (.db or .sqlite) to chat with their contents."
-        )
+    """Display information for supported files."""
+    st.info(
+        "Supported: PDF, TXT/DOC/DOCX, CSV/XLS/XLSX, DB/SQLITE, and common images (JPG/PNG/GIF/BMP/WEBP)."
+    )
 
 
 def _handle_url_input():
@@ -1230,7 +1227,7 @@ def _setup_file_uploader(file_types):
 
     st.markdown("### Upload New Files")
     _ = st.file_uploader(
-        f"Select or Add {st.session_state.file_type} file(s)",
+        "Select files",
         type=file_types,
         accept_multiple_files=True,
         key="multi_file_uploader_static",
@@ -1380,9 +1377,8 @@ def _handle_file_processing(
 
 
 def _display_uploaded_image():
-    """Display uploaded image if it's an image file type."""
-    is_image = st.session_state.file_type == "Image"
-    if is_image and st.session_state.uploaded_image is not None:
+    """Display uploaded image if present (optional)."""
+    if st.session_state.uploaded_image is not None:
         st.markdown('<div class="file-info">', unsafe_allow_html=True)
         st.subheader("Uploaded Image:")
         img = Image.open(st.session_state.uploaded_image)
@@ -1398,19 +1394,15 @@ def handle_file_upload():
         st.warning("Please enter a username before uploading files")
         return
 
-    is_image = st.session_state.file_type == "Image"
+    # Mixed uploads allowed; image preview shown only when a single image is uploaded for display
+    is_image = False
     file_types = _get_file_types_for_upload()
 
     _display_file_type_info()
 
-    if st.session_state.file_type == "URL":
-        urls_input = _handle_url_input()
-        existing_file_ids_input = _get_existing_file_ids_input()
-        _handle_file_processing(None, existing_file_ids_input, False, urls_input)
-    else:
-        uploaded_files = _setup_file_uploader(file_types)
-        existing_file_ids_input = _get_existing_file_ids_input()
-        _handle_file_processing(uploaded_files, existing_file_ids_input, is_image)
+    uploaded_files = _setup_file_uploader(file_types)
+    existing_file_ids_input = _get_existing_file_ids_input()
+    _handle_file_processing(uploaded_files, existing_file_ids_input, is_image)
 
     _display_uploaded_image()
 
@@ -1427,7 +1419,7 @@ def display_chat_interface():
             st.session_state.file_id, st.session_state.file_id
         )
         st.markdown(
-            f"<small>File: {file_name} ({st.session_state.file_type})</small>",
+            f"<small>File: {file_name}</small>",
             unsafe_allow_html=True,
         )
 
@@ -1690,8 +1682,6 @@ def setup_fallback_models():
 
 def initialize_ui_state():
     """Initialize UI related state variables."""
-    if "file_type" not in st.session_state:
-        st.session_state.file_type = "PDF"
     if "uploaded_image" not in st.session_state:
         st.session_state.uploaded_image = None
     if "nav_option" not in st.session_state:
@@ -2091,7 +2081,6 @@ def process_file_upload(uploaded_file, is_image):
             # Add to uploaded files list for multi-file chat
             st.session_state.uploaded_files[file_id] = {
                 "name": file_name,
-                "type": st.session_state.file_type,
             }
             st.session_state.file_names[file_id] = file_name
 
@@ -2101,12 +2090,7 @@ def process_file_upload(uploaded_file, is_image):
                 logging.info(f"Added file {file_id} to available files list")
 
             if upload_result.get("status") == "success":
-                if st.session_state.file_type == "Database":
-                    st.success(
-                        "Database processed successfully. You can now chat with its contents."
-                    )
-                else:
-                    st.success(f"{uploaded_file.name} processed successfully.")
+                st.success(f"{uploaded_file.name} processed successfully.")
             elif upload_result.get("status") == "partial":
                 st.warning(f"{uploaded_file.name}: {upload_result['message']}")
             else:
@@ -2149,7 +2133,6 @@ def render_sidebar():
     """Render the sidebar components."""
     _render_model_selection()
     _render_new_chat_button()
-    _render_file_type_selection()
 
     if st.session_state.nav_option == "Chat":
         _render_chat_file_interface()
@@ -2386,37 +2369,35 @@ def _render_new_chat_button():
 
 
 def _render_file_type_selection():
-    """Render file type selection for Chat mode with modern styling."""
-    if st.session_state.nav_option == "Chat":
-        st.markdown(
-            '<div class="sidebar-header">File Type</div>', unsafe_allow_html=True
-        )
-        st.session_state.file_type = st.selectbox(
-            "Select file type:",
-            ["PDF", "Text", "CSV/Excel", "Database", "Image", "URL"],
-            key="file_type_select",
-            label_visibility="collapsed",
-        )
+    """Deprecated: file type selection removed."""
+    pass
 
 
 def _get_file_types_config():
     """Get file types configuration."""
-    return {
-        "Image": ["jpg", "png"],
-        "CSV/Excel": ["xlsx", "xls", "csv"],
-        "Database": ["db", "sqlite"],
-        "PDF": ["pdf"],
-        "Text": ["txt", "doc", "docx"],
-        "URL": [],
-    }[st.session_state.file_type]
+    return [
+        "pdf",
+        "txt",
+        "doc",
+        "docx",
+        "csv",
+        "xls",
+        "xlsx",
+        "db",
+        "sqlite",
+        "jpg",
+        "jpeg",
+        "png",
+        "gif",
+        "bmp",
+        "webp",
+    ]
 
 
 def _render_database_info():
     """Render database file information."""
-    if st.session_state.file_type == "Database":
-        st.info(
-            "Upload SQLite database files (.db or .sqlite) to chat with their contents. "
-        )
+    # No-op: file type selection removed; info covered in _display_file_type_info
+    pass
 
 
 def _process_url_and_file_ids(url_input, existing_file_ids_input):
@@ -2516,7 +2497,7 @@ def _render_url_interface():
             _process_url_and_file_ids(url_input, existing_file_ids_input)
 
 
-def _render_file_uploader_interface():
+def _render_file_uploader_interface(existing_file_ids_input=None):
     """Render the file uploader and process sidebar uploads."""
     with st.form("sidebar_file_uploader_form"):
         uploaded_files = st.file_uploader(
@@ -2527,18 +2508,29 @@ def _render_file_uploader_interface():
         )
         submitted = st.form_submit_button("Upload")
 
-        if submitted and uploaded_files:
-            with st.spinner("Uploading files..."):
-                upload_response = enhanced_batch_upload(
-                    uploaded_files, None, is_image=False, urls_input=None
-                )
-                _process_sidebar_upload_response(upload_response)
+        if submitted:
+            # Check if we have files to upload or existing file IDs to process
+            has_files = uploaded_files and len(uploaded_files) > 0
+            has_existing_file_ids = (
+                existing_file_ids_input and existing_file_ids_input.strip()
+            )
+
+            if has_files or has_existing_file_ids:
+                with st.spinner("Processing files and file IDs..."):
+                    upload_response = enhanced_batch_upload(
+                        uploaded_files,
+                        existing_file_ids_input,
+                        is_image=False,
+                        urls_input=None,
+                    )
+                    _process_sidebar_upload_response(upload_response)
+            else:
+                st.warning("Please upload files or enter existing file IDs")
 
 
 def _render_uploaded_image_sidebar():
     """Render uploaded image in sidebar."""
-    is_image = st.session_state.file_type == "Image"
-    if is_image and st.session_state.uploaded_image is not None:
+    if st.session_state.uploaded_image is not None:
         st.markdown('<div class="file-info">', unsafe_allow_html=True)
         st.subheader("Uploaded Image:")
         img = Image.open(st.session_state.uploaded_image)
@@ -2550,12 +2542,16 @@ def _render_chat_file_interface():
     """Render file interface for Chat mode with modern styling."""
     st.markdown('<div class="sidebar-header">File Upload</div>', unsafe_allow_html=True)
 
-    _render_database_info()
+    # Always show file ID input field
+    st.markdown("**Existing File IDs:**")
+    existing_file_ids_input = st.text_input(
+        "Enter existing File IDs (comma-separated)",
+        placeholder="file-id-1, file-id-2",
+        label_visibility="collapsed",
+        key="sidebar_file_ids",
+    )
 
-    if st.session_state.file_type == "URL":
-        _render_url_interface()
-    else:
-        _render_file_uploader_interface()
+    _render_file_uploader_interface(existing_file_ids_input)
 
     _render_uploaded_image_sidebar()
 
