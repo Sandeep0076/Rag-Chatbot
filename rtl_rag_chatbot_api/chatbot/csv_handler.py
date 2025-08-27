@@ -141,6 +141,8 @@ class TabularDataHandler:
                 )
                 self.sessions["default"] = sessionmaker(bind=self.engines["default"])
                 self.dbs["default"] = SQLDatabase(engine=self.engines["default"])
+                # Ensure default db.run is also patched
+                self._patch_db_run_for_file("default")
 
         # For backward compatibility, set these attributes for the primary file
         if self.file_id:
@@ -195,6 +197,9 @@ class TabularDataHandler:
         )
         self.sessions[file_id] = sessionmaker(bind=self.engines[file_id])
         self.dbs[file_id] = SQLDatabase(engine=self.engines[file_id])
+
+        # Ensure db.run uses our robust cleaner for this file
+        self._patch_db_run_for_file(file_id)
 
         # Get database info - check if we already have a pre-loaded summary first
         try:
@@ -335,35 +340,119 @@ class TabularDataHandler:
 
     def _clean_sql_query(self, query: str) -> str:
         """
-        Cleans SQL query by removing markdown formatting characters.
+        Cleans SQL query by removing markdown/code-fence formatting and stray wrappers.
 
         Args:
-            query (str): The SQL query that might contain markdown formatting.
+            query (str): The SQL query that might contain markdown formatting or backticks.
 
         Returns:
-            str: Cleaned SQL query without markdown formatting.
+            str: Cleaned SQL query without markdown/backticks/wrappers.
         """
-        # Remove single backticks that wrap the entire query (common LLM output format)
-        if (
-            query.startswith("`")
-            and query.endswith("`")
-            and not query.startswith("```")
+        if query is None:
+            return query
+
+        cleaned = str(query).strip()
+
+        # Normalize newlines
+        cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+        # Remove all code-fence openings like ``` or ```sql (any language)
+        import re
+
+        cleaned = re.sub(r"```[a-zA-Z0-9_\-]*\n?", "", cleaned)
+        # Remove any remaining closing fences
+        cleaned = cleaned.replace("```", "")
+
+        # Remove leading inline backticks that wrap the entire query
+        if cleaned.startswith("`") and cleaned.endswith("`"):
+            cleaned = cleaned[1:-1].strip()
+
+        # Remove any stray inline backticks left anywhere
+        cleaned = cleaned.replace("`", "")
+
+        # If the first line is a language hint like 'sql', 'mysql', 'sqlite', drop it
+        lines = cleaned.split("\n")
+        if lines and lines[0].strip().lower() in {"sql", "mysql", "sqlite"}:
+            cleaned = "\n".join(lines[1:]).strip()
+
+        # Trim surrounding quotes if the whole string is quoted
+        if (cleaned.startswith('"') and cleaned.endswith('"')) or (
+            cleaned.startswith("'") and cleaned.endswith("'")
         ):
-            query = query[1:-1].strip()
+            cleaned = cleaned[1:-1].strip()
 
-        # Remove markdown code block delimiters
-        if query.startswith("```") and query.endswith("```"):
-            # Remove starting and ending backticks
-            query = query[3:].strip()
-            if query.endswith("```"):
-                query = query[:-3].strip()
+        # Strip trailing semicolon (not required for execution)
+        if cleaned.endswith(";"):
+            cleaned = cleaned[:-1].strip()
 
-        # If query starts with 'sql' or other language identifier, remove it
-        lines = query.split("\n")
-        if lines and lines[0].lower().strip() in ["sql", "mysql", "sqlite"]:
-            query = "\n".join(lines[1:]).strip()
+        # As a final guard, try to extract the SQL starting at a known keyword
+        # to handle any leading commentary that slipped through
+        keyword_match = re.search(
+            r"\b("
+            r"SELECT|WITH|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|PRAGMA|"
+            r"EXPLAIN|REPLACE|VACUUM|ATTACH|DETACH|BEGIN|COMMIT|ROLLBACK"
+            r")\b",
+            cleaned,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if keyword_match:
+            cleaned = cleaned[keyword_match.start() :].strip()
 
-        return query
+        # ENFORCE: cap result size to 25 rows for safety and consistency
+        try:
+            # Handle patterns:
+            # 1) LIMIT count
+            # 2) LIMIT count OFFSET offset
+            # 3) LIMIT offset, count
+            # Use case-insensitive matching and preserve OFFSET when present
+            limit_count_pattern = re.compile(
+                r"(?is)\bLIMIT\s+(\d+)\s*(?!,|OFFSET)(?:\b|$)"
+            )
+            limit_with_offset_pattern = re.compile(
+                r"(?is)\bLIMIT\s+(\d+)\s+OFFSET\s+(\d+)\b"
+            )
+            limit_offset_count_pattern = re.compile(
+                r"(?is)\bLIMIT\s+(\d+)\s*,\s*(\d+)\b"
+            )
+
+            def replace_limit_count(m):
+                count = int(m.group(1))
+                new_count = min(count, 25)
+                return f"LIMIT {new_count}"
+
+            def replace_limit_with_offset(m):
+                count = int(m.group(1))
+                offset = int(m.group(2))
+                new_count = min(count, 25)
+                return f"LIMIT {new_count} OFFSET {offset}"
+
+            def replace_limit_offset_count(m):
+                offset = int(m.group(1))
+                count = int(m.group(2))
+                new_count = min(count, 25)
+                return f"LIMIT {offset}, {new_count}"
+
+            original_cleaned = cleaned
+            # Apply patterns; order matters to avoid partial overlaps
+            cleaned = limit_with_offset_pattern.sub(replace_limit_with_offset, cleaned)
+            cleaned = limit_offset_count_pattern.sub(
+                replace_limit_offset_count, cleaned
+            )
+            cleaned = limit_count_pattern.sub(replace_limit_count, cleaned)
+
+            # If no LIMIT found at all, append LIMIT 25 (try before final semicolon if present)
+            if re.search(r"(?is)\bLIMIT\b", cleaned) is None:
+                cleaned = f"{cleaned} LIMIT 25"
+
+            if original_cleaned != cleaned:
+                logging.debug(
+                    f"SQL limit normalized to 25 rows. Before: {original_cleaned[:200]} | After: {cleaned[:200]}"
+                )
+        except Exception:
+            # If limit enforcement fails for any reason, still proceed with cleaned query
+            pass
+
+        return cleaned
 
     def _initialize_agent_for_file(self, file_id: str):
         """Initializes the SQL agent for a specific file's database.
@@ -436,6 +525,33 @@ class TabularDataHandler:
                 "early_stopping_method": "generate",
             },
         )
+
+    def _patch_db_run_for_file(self, file_id: str) -> None:
+        """
+        Patch the SQLDatabase.run for a specific file so that every execution is cleaned.
+        """
+        if file_id not in self.dbs or not self.dbs[file_id]:
+            return
+
+        db = self.dbs[file_id]
+
+        # Avoid double-patching
+        if getattr(db, "_run_is_patched", False):
+            return
+
+        original_run = db.run
+
+        def wrapped_run(command: str, fetch: str = "all", **kwargs):
+            try:
+                cleaned_command = self._clean_sql_query(command)
+                return original_run(cleaned_command, fetch)
+            except Exception:
+                # If cleaning or execution fails, bubble up the original exception
+                raise
+
+        db.run = wrapped_run
+        setattr(db, "_run_is_patched", True)
+        logging.info(f"Patched db.run for file_id: {file_id}")
 
     def debug_database(self):
         """
@@ -893,8 +1009,6 @@ class TabularDataHandler:
             formatted_question = format_result["formatted_question"]
             needs_sql = format_result["needs_sql"]
             classification = format_result.get("classification", {})
-
-            logging.info(f"Formatted question: {formatted_question}")
             logging.info(f"Needs SQL: {needs_sql}")
             if not needs_sql:
                 # Direct answer from database summary - return as-is
@@ -905,15 +1019,33 @@ class TabularDataHandler:
             logging.info(
                 "No direct answer provided from database summary. Using langchain agent.."
             )
+            logging.info(f"Formatted question: {formatted_question}")
             query_type = classification.get("category", "unknown")
             language = classification.get("language", "en")
-            logging.info(f"Query type for response formatting: {query_type}")
-            logging.info(f"Detected language: {language}")
 
             # Execute SQL query through agent
             logging.info("Executing query through SQL agent")
             try:
                 response = self.agent.invoke({"input": formatted_question})
+
+                # Try to extract and execute SQL directly to return structured table data
+                # sql_query = self._extract_sql_from_formatted_question(
+                #     formatted_question
+                # )
+                # if sql_query and hasattr(self, "engine") and self.engine:
+                #     try:
+                #         with self.engine.connect() as connection:
+                #             cleaned_sql = self._clean_sql_query(sql_query)
+                #             result = connection.execute(text(cleaned_sql))
+                #             headers = list(result.keys())
+                #             rows = [list(row) for row in result.fetchall()]
+                #             # Return in [headers, *rows] format so the API formats a table with correct headers
+                #             return [headers, *rows]
+                #     except Exception as direct_sql_error:
+                #         logging.warning(
+                #             f"Direct SQL execution failed, falling back to LLM formatting: {str(direct_sql_error)}"
+                #         )
+
                 return self._process_agent_response(
                     response, question, query_type, language
                 )
@@ -944,12 +1076,22 @@ class TabularDataHandler:
         """
         # Extract the final answer and intermediate steps
         final_answer = response.get("output", "No final answer found")
+        logging.info(f"Final answer: {final_answer}")
         intermediate_steps = response.get("intermediate_steps", [])
 
         logging.info("Formatting result from intermediate steps and final answer")
         truncated_context = self._truncate_intermediate_steps(
-            intermediate_steps, final_answer
+            intermediate_steps, final_answer, 50000, query_type
         )
+
+        # Get column headers from database info for better formatting
+        column_headers = self._get_column_headers_for_prompt()
+
+        # Add column headers on the next line after truncated context
+        if column_headers:
+            truncated_context = (
+                f"{truncated_context}\n\nColumn Headers: {column_headers}"
+            )
 
         base_prompt = PromptBuilder.build_forced_answer_prompt(
             question, truncated_context, query_type, language
@@ -1025,13 +1167,36 @@ class TabularDataHandler:
                     formatted_question
                 )
                 if sql_query:
-                    raw_result = self.db.run(sql_query)
-                    logging.info(f"Direct SQL result: {raw_result[:500]}...")
+                    # Prefer engine-based execution to capture accurate headers
+                    if hasattr(self, "engine") and self.engine is not None:
+                        try:
+                            with self.engine.connect() as connection:
+                                cleaned_sql = self._clean_sql_query(sql_query)
+                                result = connection.execute(text(cleaned_sql))
+                                headers = list(result.keys())
+                                rows = [list(row) for row in result.fetchall()]
+                                return [headers, *rows]
+                        except Exception as engine_exec_error:
+                            logging.warning(
+                                f"Engine execution failed in fallback, trying db.run: {str(engine_exec_error)}"
+                            )
 
-                    # Format the raw result
+                    raw_result = self.db.run(sql_query)
+                    logging.info(f"Direct SQL result: {str(raw_result)[:500]}...")
+
+                    # Format the raw result with column headers if available
+                    column_headers = self._get_column_headers_for_prompt()
+
+                    # Add column headers on the next line if available
+                    context_with_headers = (
+                        f"SQL Query: {sql_query}\nResult: {raw_result}"
+                    )
+                    if column_headers:
+                        context_with_headers = f"{context_with_headers}\n\nColumn Headers: {column_headers}"
+
                     base_prompt = PromptBuilder.build_forced_answer_prompt(
                         question,
-                        f"SQL Query: {sql_query}\nResult: {raw_result}",
+                        context_with_headers,
                         query_type,
                         language,
                     )
@@ -1054,6 +1219,39 @@ class TabularDataHandler:
         # If all else fails, raise the original error
         raise agent_error
 
+    def _get_column_headers_for_prompt(self) -> Optional[str]:
+        """
+        Extract column headers from the database information for inclusion in prompts.
+
+        Returns:
+            Optional[str]: Comma-separated column headers or None if not available
+        """
+        try:
+            if not self.file_id or self.file_id not in self.database_summaries:
+                return None
+
+            db_summary = self.database_summaries[self.file_id]
+            if not db_summary or "tables" not in db_summary:
+                return None
+
+            # Get the first table (assuming single table for now)
+            table = db_summary["tables"][0] if db_summary["tables"] else None
+            if not table or "columns" not in table:
+                return None
+
+            # Extract column names
+            column_names = [
+                col.get("name", "") for col in table["columns"] if isinstance(col, dict)
+            ]
+            if not column_names:
+                return None
+
+            return ", ".join(column_names)
+
+        except Exception as e:
+            logging.warning(f"Error extracting column headers: {str(e)}")
+            return None
+
     def get_forced_answer(
         self, question: str, answer: str, language: str = "en"
     ) -> str:
@@ -1069,10 +1267,31 @@ class TabularDataHandler:
             str: An extracted answer or "Cannot find answer" if no suitable answer is found.
         """
         try:
+            # Get column headers if available for better formatting
+            column_headers = self._get_column_headers_for_prompt()
+
+            # Add column headers on the next line if available
+            answer_with_headers = answer
+            if column_headers:
+                answer_with_headers = f"{answer}\n\nColumn Headers: {column_headers}"
+
             base_prompt = PromptBuilder.build_forced_answer_prompt(
-                question, answer, "unknown", language
+                question, answer_with_headers, "unknown", language
             )
-            return get_azure_non_rag_response(self.config, base_prompt)
+
+            # Use the appropriate model based on model_choice
+            if self.model_choice.startswith("gemini"):
+                try:
+                    return get_gemini_non_rag_response(
+                        self.config, base_prompt, self.model_choice
+                    )
+                except GeminiSafetyFilterError as e:
+                    logging.warning(
+                        f"Safety filter blocked response in get_forced_answer: {str(e)}"
+                    )
+                    return f"I apologize, but I cannot provide a response to this question. {str(e)}"
+            else:
+                return get_azure_non_rag_response(self.config, base_prompt)
         except Exception as e:
             logging.error(f"Error in get_forced_answer: {str(e)}")
             return f"An error occurred while processing your question: {str(e)}"
@@ -1082,6 +1301,7 @@ class TabularDataHandler:
         intermediate_steps: list,
         final_answer: str,
         max_context_tokens: int = 50000,
+        query_type: str = "unknown",
     ) -> str:
         """
         Intelligently truncate intermediate steps to prevent token overflow while preserving key information.
@@ -1090,6 +1310,7 @@ class TabularDataHandler:
             intermediate_steps: List of intermediate steps from agent execution
             final_answer: The final answer from the agent
             max_context_tokens: Maximum estimated tokens for context (roughly 4 chars per token)
+            query_type: Type of query to determine truncation strategy
 
         Returns:
             str: Truncated context that fits within token limits
@@ -1102,43 +1323,109 @@ class TabularDataHandler:
         final_answer_str = str(final_answer)
         final_tokens = estimate_tokens(final_answer_str)
 
-        # If final answer itself is extremely large, truncate it first
-        if (
-            final_tokens > max_context_tokens * 0.8
-        ):  # If final answer uses >80% of tokens
-            logging.warning(
-                f"Final answer is too large ({final_tokens} tokens), truncating"
+        # Special handling for FILTERED_SEARCH queries - preserve complete data
+        if query_type == "FILTERED_SEARCH":
+            logging.info(
+                "FILTERED_SEARCH query detected - preserving complete final answer"
             )
-            # Keep the most important part of the final answer
-            max_final_chars = int(max_context_tokens * 0.8 * 4)
-            final_answer_str = (
-                final_answer_str[:max_final_chars] + "... [truncated due to length]"
-            )
-            final_tokens = estimate_tokens(final_answer_str)
+            # For filtered search, prioritize preserving the complete final answer
+            # Only truncate intermediate steps, never the final answer
+            buffer_size = 1000  # Smaller buffer for FILTERED_SEARCH
+            max_step_chars = 300  # More aggressive truncation of intermediate steps
+            max_steps_to_check = 2  # Check fewer steps
+        else:
+            # Standard handling for other query types
+            buffer_size = 2000  # Standard buffer
+            max_step_chars = 500  # Less aggressive truncation
+            max_steps_to_check = 3  # Check more steps
+
+            # If final answer itself is extremely large, truncate it first
+            if final_tokens > max_context_tokens * 0.8:
+                logging.warning(
+                    f"Final answer is too large ({final_tokens} tokens), truncating"
+                )
+                # Keep the most important part of the final answer
+                max_final_chars = int(max_context_tokens * 0.8 * 4)
+                final_answer_str = (
+                    final_answer_str[:max_final_chars] + "... [truncated due to length]"
+                )
+                final_tokens = estimate_tokens(final_answer_str)
 
         # Reserve tokens for final answer and prompt structure
-        available_tokens = max_context_tokens - final_tokens - 2000  # Buffer for prompt
+        available_tokens = max_context_tokens - final_tokens - buffer_size
 
-        if available_tokens <= 1000:  # Need reasonable space for context
-            # If very little space available, return minimal context
-            logging.warning("Very limited tokens available, returning minimal context")
-            return "Query executed with large results. " + final_answer_str
+        if available_tokens <= 500:  # Very limited space
+            logging.warning(
+                f"Very limited tokens available ({available_tokens}), returning minimal context"
+            )
+            return (
+                "FINAL ANSWER:\n" + final_answer_str + "\n\n"
+                "INTERMEDIATE_STEPS:\n[omitted due to token limits]"
+            )
 
         # Convert intermediate steps to string and get essential parts
         intermediate_str = str(intermediate_steps)
 
         if estimate_tokens(intermediate_str) <= available_tokens:
             # If it fits, return everything
-            return intermediate_str + "\n" + final_answer_str
+            return (
+                "FINAL ANSWER:\n" + final_answer_str + "\n\n"
+                "INTERMEDIATE_STEPS:\n" + intermediate_str
+            )
 
         # Need to truncate - extract key information
+        essential_info = self._extract_essential_info_from_steps(
+            intermediate_steps, available_tokens, max_steps_to_check, max_step_chars
+        )
+
+        # If no essential info found, use a summary approach
+        if not essential_info:
+            if query_type == "FILTERED_SEARCH":
+                essential_info = [
+                    "Database query executed successfully with filtered search results."
+                ]
+            else:
+                essential_info = [
+                    "Database query executed successfully. Results processed and formatted."
+                ]
+
+        # Combine with final answer
+        context = "\n".join(essential_info)
+        if context:
+            return (
+                "FINAL ANSWER:\n" + final_answer_str + "\n\n"
+                "INTERMEDIATE_STEPS (essential):\n" + context
+            )
+        else:
+            return (
+                "FINAL ANSWER:\n" + final_answer_str + "\n\n"
+                "INTERMEDIATE_STEPS:\n[not required]"
+            )
+
+    def _extract_essential_info_from_steps(
+        self,
+        intermediate_steps: list,
+        available_tokens: int,
+        max_steps: int,
+        max_chars: int,
+    ) -> list:
+        """
+        Extract essential information from intermediate steps within token limits.
+
+        Args:
+            intermediate_steps: List of intermediate steps
+            available_tokens: Available tokens for context
+            max_steps: Maximum number of steps to check
+            max_chars: Maximum characters per step
+
+        Returns:
+            list: List of essential information strings
+        """
         essential_info = []
 
         # Look for SQL queries and their results in intermediate steps
         if isinstance(intermediate_steps, list):
-            for step in intermediate_steps[
-                -5:
-            ]:  # Only check last 5 steps for efficiency
+            for step in intermediate_steps[-max_steps:]:  # Check last N steps
                 step_str = str(step)
                 # Extract SQL queries (usually contain SELECT, FROM, WHERE)
                 if any(
@@ -1146,43 +1433,27 @@ class TabularDataHandler:
                     for keyword in ["SELECT", "FROM", "WHERE", "GROUP BY", "ORDER BY"]
                 ):
                     # Keep SQL queries as they're essential for understanding
-                    current_length = estimate_tokens("\n".join(essential_info))
-                    if current_length + estimate_tokens(step_str) < available_tokens:
+                    # Use the estimate_tokens function from the parent method
+                    current_length = len("\n".join(essential_info)) // 4
+                    if current_length + len(step_str) // 4 < available_tokens:
                         essential_info.append(
-                            f"SQL Query executed: {step_str[:500]}..."
-                        )  # Limit individual steps
+                            f"SQL Query executed: {step_str[:max_chars]}..."
+                        )
                     else:
                         # If adding this would exceed limit, truncate the step
                         remaining_tokens = available_tokens - current_length
                         if (
                             remaining_tokens > 50
                         ):  # Only add if we have reasonable space
+                            # Ensure remaining_tokens is an integer for string slicing
+                            remaining_chars = int(remaining_tokens * 2)
                             truncated_step = (
-                                step_str[: remaining_tokens * 2] + "... [truncated]"
+                                step_str[:remaining_chars] + "... [truncated]"
                             )
                             essential_info.append(f"SQL Query: {truncated_step}")
                         break
 
-        # If no essential info found or still too long, use a summary approach
-        if (
-            not essential_info
-            or estimate_tokens("\n".join(essential_info)) > available_tokens
-        ):
-            # Create a minimal summary
-            summary = (
-                "Database query executed successfully. Results processed and formatted."
-            )
-            if estimate_tokens(summary) < available_tokens:
-                essential_info = [summary]
-            else:
-                essential_info = []
-
-        # Combine with final answer
-        context = "\n".join(essential_info)
-        if context:
-            return context + "\n\n" + final_answer_str
-        else:
-            return final_answer_str
+        return essential_info
 
     def _extract_sql_from_formatted_question(
         self, formatted_question: str
