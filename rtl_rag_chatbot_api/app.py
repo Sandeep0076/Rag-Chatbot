@@ -352,6 +352,7 @@ async def process_file_with_semaphore(file_handler, file, file_id, is_image, use
         return result
 
 
+# chat with URL is deprecated, but keeping it for backward compatibility
 async def process_url_content(
     file_handler, embedding_handler, urls, username, background_tasks
 ):
@@ -3096,8 +3097,13 @@ async def _format_chat_response(
     Returns:
         Formatted response dictionary
     """
+    # If the model returned a table-like structure [headers, *rows], format it
     if isinstance(response, list):
-        return format_table_response(response)
+        try:
+            if response and isinstance(response[0], (list, tuple)):
+                return format_table_response(response)
+        except Exception:
+            pass
 
     if generate_visualization:
         return handle_visualization(response, query, is_tabular, configs, temperature)

@@ -32,3 +32,4 @@ userinput.py
 temp_files/
 .coverage.*
 .env
+GEMINI.md

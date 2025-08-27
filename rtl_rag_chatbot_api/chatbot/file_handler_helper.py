@@ -10,6 +10,8 @@ from typing import List
 
 import aiofiles
 
+# chat with URL is deprecated, but keeping it for backward compatibility
+
 
 async def process_single_url(
     self, url: str, username: str, background_tasks, embedding_handler

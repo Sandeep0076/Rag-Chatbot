@@ -1597,6 +1597,7 @@ class FileHandler:
                 "temp_file_path": file_path,
             }
 
+    # chat with URL is deprecated, but keeping it for backward compatibility
     async def process_urls(
         self, urls_text, username, temp_file_id, background_tasks, embedding_handler
     ):
