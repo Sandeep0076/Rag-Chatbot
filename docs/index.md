@@ -70,6 +70,9 @@ make test
 - [CSV Workflow](csv-workflow-readme.md) - Tabular data processing
 - [Cleanup Workflow](cleanup-workflow.md) - Resource cleanup procedures
 
+### Migration System
+- [Legacy Embedding Migration](legacy-embedding-migration.md) - **NEW**: Advanced migration system for legacy embeddings with parallel processing
+
 ### Image Generation
 - [Image Generation API](image_generation_api.md) - API for generating images
 - [Image Generation Guide](image_generation.md) - Using DALL-E and Imagen models

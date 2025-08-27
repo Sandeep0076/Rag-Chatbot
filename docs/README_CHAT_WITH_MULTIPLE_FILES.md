@@ -22,6 +22,8 @@ The multi-file chat feature extends the RAG (Retrieval Augmented Generation) sys
 2. **Parallel Embedding Generation**
    - Multiple files are processed concurrently using parallel embedding creation
    - The system automatically detects which files need embeddings vs. which need username updates
+   - **Legacy Embedding Migration**: Automatically detects and migrates legacy embeddings when files have mixed embedding types
+   - **Migration Context Management**: Maintains migration context across the processing pipeline for consistency
    - For each file, embeddings are created using only Azure OpenAI embedding model (1536 dimensions)
    - These unified embeddings are used by all models (including Gemini)
    - Embeddings are stored in ChromaDB with collection path: `./chroma_db/{file_id}/azure`
@@ -32,6 +34,7 @@ The multi-file chat feature extends the RAG (Retrieval Augmented Generation) sys
      - File type
      - Username(s) associated with the file (merged across users automatically)
      - Embedding status (in_progress → ready_for_chat → completed)
+     - Migration status (migrated flag for tracking migration history)
 
 ### Multi-File Chat Workflow
 

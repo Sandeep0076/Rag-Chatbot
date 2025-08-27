@@ -17,7 +17,13 @@ class ModelHandler:
     ):
         """Initialize and return a model based on the specified model choice."""
         try:
-            chroma_db_path = f"./chroma_db/{file_id}/{embedding_type}"
+            # Always use "azure" as folder name for Azure embeddings, regardless of embedding_type metadata
+            storage_folder = (
+                "azure"
+                if embedding_type in ["azure", "azure-03-small"]
+                else embedding_type
+            )
+            chroma_db_path = f"./chroma_db/{file_id}/{storage_folder}"
             os.makedirs(chroma_db_path, exist_ok=True)
 
             if not os.path.exists(chroma_db_path):
@@ -30,7 +36,7 @@ class ModelHandler:
                 model.initialize(
                     model=model_choice,
                     file_id=file_id,
-                    embedding_type=embedding_type,
+                    embedding_type=storage_folder,  # Use consistent storage folder name
                     collection_name=collection_name,
                     user_id=user_id,
                 )
@@ -39,7 +45,7 @@ class ModelHandler:
                 model.initialize(
                     model_choice=model_choice,
                     file_id=file_id,
-                    embedding_type=embedding_type,
+                    embedding_type=storage_folder,  # Use consistent storage folder name
                     collection_name=collection_name,
                     user_id=user_id,
                 )

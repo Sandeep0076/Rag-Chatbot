@@ -15,6 +15,13 @@ if ! command -v poetry &> /dev/null; then
     echo "Poetry not found. Please install Poetry first."
     exit 1
 fi
+# Load environment variables from .env if it exists
+if [ -f .env ]; then
+    echo "Loading environment variables from .env..."
+    set -o allexport
+    source .env
+    set +o allexport
+fi
 
 # Activate Poetry environment and run the multi-worker script
 echo "Activating Poetry environment and loading environment variables..."

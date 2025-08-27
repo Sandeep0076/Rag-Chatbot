@@ -23,30 +23,103 @@ from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
 
 class FileHandler:
     """
-    Handles file processing, encryption, and storage operations.
-
-    This class manages file uploads, calculates file hashes, checks for existing files,
-    encrypts new files, and interacts with Google Cloud Storage for file storage and retrieval.
-
-    Attributes:
-        configs: Configuration object containing necessary settings.
-        gcs_handler: Google Cloud Storage handler for cloud operations.
-        gemini_handler: Gemini model handler for image analysis.
+    Handles file processing operations including upload, download, and metadata management.
+    Supports both local and cloud storage operations.
     """
 
-    def __init__(self, configs, gcs_handler, gemini_handler=None):
+    def __init__(self, configs, gcs_handler, gemini_handler=None, db_session=None):
         """
         Initializes the FileHandler with configurations and handlers.
 
         Args:
-            configs: Configuration object containing necessary settings.
-            gcs_handler: Google Cloud Storage handler for cloud operations.
-            gemini_handler: Optional Gemini handler for image analysis.
+            configs: Application configuration
+            gcs_handler: GCS handler for cloud operations
+            gemini_handler: Optional Gemini handler for AI operations
+            db_session: Optional database session for database operations
         """
         self.configs = configs
         self.gcs_handler = gcs_handler
         self.gemini_handler = gemini_handler
+        self.db_session = db_session
+        self.use_file_hash_db = getattr(configs, "use_file_hash_db", False)
         self.encryption_manager = FileEncryptionManager(gcs_handler)
+        # Temporary storage for extracted text to pass to embedding handler
+        self._extracted_text_storage = {}
+
+    def update_db_session(self, db_session):
+        """
+        Update the database session for this FileHandler instance.
+
+        Args:
+            db_session: New database session
+        """
+        self.db_session = db_session
+
+    def store_extracted_text(self, file_id: str, extracted_text: str):
+        """
+        Store extracted text temporarily for passing to embedding handler.
+
+        Args:
+            file_id: The file ID
+            extracted_text: The extracted text to store
+        """
+        self._extracted_text_storage[file_id] = extracted_text
+        logging.info(
+            f"Stored extracted text for {file_id} (length: {len(extracted_text)})"
+        )
+
+    def get_extracted_text(self, file_id: str) -> str:
+        """
+        Retrieve and remove extracted text for a file.
+
+        Args:
+            file_id: The file ID
+
+        Returns:
+            The extracted text or None if not found
+        """
+        extracted_text = self._extracted_text_storage.pop(file_id, None)
+        if extracted_text:
+            logging.info(
+                f"Retrieved extracted text for {file_id} (length: {len(extracted_text)})"
+            )
+        return extracted_text
+
+    async def store_file_hash_in_db(
+        self,
+        file_id: str,
+        file_hash: str,
+        filename: str = None,
+        embedding_type: str = "azure-03-small",
+    ):
+        """
+        Store file hash and filename in the database if the feature is enabled.
+
+        Args:
+            file_id: The file ID
+            file_hash: The file hash to store
+            filename: The original filename to store (optional)
+            embedding_type: The embedding type to use (default: "azure-03-small")
+        """
+        if self.use_file_hash_db:
+            try:
+                from rtl_rag_chatbot_api.app import get_db_session
+                from rtl_rag_chatbot_api.common.db import insert_file_info_record
+
+                with get_db_session() as db_session:
+                    result = insert_file_info_record(
+                        db_session, file_id, file_hash, filename, embedding_type
+                    )
+                    if result["status"] == "success":
+                        logging.info(
+                            f"Successfully stored file hash and filename in database for file_id: {file_id}"
+                        )
+                    else:
+                        logging.error(
+                            f"Failed to store file hash in database: {result['message']}"
+                        )
+            except Exception as e:
+                logging.error(f"Error storing file hash in database: {str(e)}")
 
     def calculate_file_hash(self, file_content):
         """
@@ -153,6 +226,7 @@ class FileHandler:
             "is_image": False,
             "username": [username],  # Store username as an array
             "embeddings_status": "completed",  # CSV files don't need embeddings
+            "migrated": False,  # New tabular files are not migrated
         }
 
         # Create data directory and prepare SQLite database
@@ -271,6 +345,11 @@ class FileHandler:
         except Exception as e:
             logging.error(f"Error uploading metadata: {str(e)}")
             raise
+
+        # Store file hash and filename in database if enabled for tabular files
+        await self.store_file_hash_in_db(
+            file_id, file_hash, original_filename, "azure-03-small"
+        )
 
         return {
             "file_id": file_id,
@@ -722,18 +801,14 @@ class FileHandler:
 
             # Only create directories and save file if we don't have existing embeddings
             # Create directories and save file
-            if not existing_file_id:
-                temp_file_path = await self._save_file_locally(
-                    file_id, original_filename, file_content
-                )
-            else:
-                temp_file_path = None
-
+            temp_file_path = await self._save_file_locally(
+                file_id, original_filename, file_content
+            )
             del file_content  # Free memory
 
             # Validate text content for document files before encryption
             file_extension = os.path.splitext(original_filename)[1].lower()
-            if file_extension in [".pdf", ".doc", ".docx"] and not is_image:
+            if file_extension in [".pdf", ".doc", ".docx", ".txt"] and not is_image:
                 try:
                     # Create a base handler for text extraction
                     base_handler = BaseRAGHandler(self.configs, self.gcs_handler)
@@ -758,6 +833,18 @@ class FileHandler:
                             "embeddings_exist": False,
                             "temp_file_path": None,
                         }
+
+                    # Calculate word count for extracted text
+                    word_count = len(extracted_text.split())
+                    logging.info(
+                        f"Text extraction completed for {original_filename}: "
+                        f"{len(extracted_text)} characters, {word_count} words"
+                    )
+
+                    # Store extracted text in a temporary variable for metadata
+                    self.extracted_text_cache = extracted_text
+                    # Store extracted text for embedding handler to avoid duplicate extraction
+                    self.store_extracted_text(file_id, extracted_text)
 
                     # Validate text length for document files (minimum 100 characters)
                     cleaned_text = extracted_text.strip()
@@ -933,42 +1020,11 @@ class FileHandler:
         """Check if a file with the same hash already exists and verify it's not a hash collision"""
         azure_result = {"embeddings_exist": False}
 
-        existing_file_id = await self.find_existing_file_by_hash_async(file_hash)
+        existing_file_id, _ = await self.find_existing_file_by_hash_async(file_hash)
         if not existing_file_id:
             return None, azure_result
 
-        # Determine the expected encrypted file path based on file type
-        if is_tabular or is_database:
-            # Tabular files are always saved as tabular_data.db.encrypted
-            expected_encrypted_file = "tabular_data.db.encrypted"
-        else:
-            # Non-tabular files are saved as {original_filename}.encrypted
-            expected_encrypted_file = f"{original_filename}.encrypted"
-
-        gcs_file_path = f"file-embeddings/{existing_file_id}/{expected_encrypted_file}"
-        file_exists = await asyncio.to_thread(
-            self.gcs_handler.check_file_exists, gcs_file_path
-        )
-
-        if not file_exists:
-            # Check if there are other files in this directory
-            prefix = f"file-embeddings/{existing_file_id}/"
-            blobs = list(self.gcs_handler.bucket.list_blobs(prefix=prefix))
-
-            for blob in blobs:
-                if blob.name.endswith(".encrypted"):
-                    # Check if this blob matches the expected encrypted file name
-                    if not blob.name.endswith(expected_encrypted_file):
-                        logging.warning(
-                            f"Found hash match but with different filename: {blob.name}"
-                        )
-                        # Use the new file_id instead to avoid conflicts
-                        logging.info(
-                            f"Treating as new file with ID: {file_id} to avoid conflicts"
-                        )
-                        return None, azure_result
-
-        # If we're still using the existing_file_id, get embedding status
+        # Get embedding status for existing file
         embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
         # Use only Azure embeddings for unified approach
         azure_result = await embedding_handler.check_embeddings_exist(
@@ -1028,14 +1084,36 @@ class FileHandler:
         file_id: str,
     ):
         """Prepare metadata for the processed file"""
-        return {
+        metadata = {
             "is_image": is_image,
             "is_tabular": is_tabular or is_database,
             "file_hash": file_hash,
             "username": [username],  # Store username as an array
             "original_filename": original_filename,
             "file_id": file_id,  # Always use the actual file_id (existing or new)
+            "migrated": False,  # New files are not migrated
         }
+
+        # Add extracted text and word count if available and feature is enabled
+        if (
+            hasattr(self, "extracted_text_cache")
+            and self.extracted_text_cache
+            and getattr(self.configs, "save_extracted_text_in_metadata", False)
+        ):
+            metadata["extracted_text"] = self.extracted_text_cache
+            metadata["word_count"] = len(self.extracted_text_cache.split())
+            logging.info(
+                "Saved extracted text in metadata to avoid duplicate extraction"
+            )
+            # Clear the cache after use
+            self.extracted_text_cache = None
+        elif hasattr(self, "extracted_text_cache") and self.extracted_text_cache:
+            # Just save word count, not the full text
+            metadata["word_count"] = len(self.extracted_text_cache.split())
+            # Clear the cache after use
+            self.extracted_text_cache = None
+
+        return metadata
 
     async def _handle_file_conflicts(
         self,
@@ -1160,9 +1238,34 @@ class FileHandler:
 
     async def find_existing_file_by_hash_async(self, file_hash: str):
         """Asynchronous version of finding existing file by hash."""
-        return await asyncio.to_thread(
-            self.gcs_handler.find_existing_file_by_hash, file_hash
-        )
+        if self.use_file_hash_db:
+            try:
+                # Use the database lookup function
+                from rtl_rag_chatbot_api.app import get_db_session
+                from rtl_rag_chatbot_api.common.db import find_file_by_hash_db
+
+                with get_db_session() as db_session:
+                    result = find_file_by_hash_db(db_session, file_hash)
+                    if result:
+                        file_id, embedding_type = result
+                        logging.info(f"File found in database with ID: {file_id}")
+                        return file_id, embedding_type
+                    else:
+                        logging.info(
+                            f"No file found in database with hash: {file_hash}"
+                        )
+                        return None, None
+
+            except Exception as db_e:
+                logging.error(
+                    f"Error during file_hash_db lookup: {str(db_e)}", exc_info=True
+                )
+                return None, None
+        else:
+            # Fallback to GCS lookup if not using file_hash_db
+            return await asyncio.to_thread(
+                self.gcs_handler.find_existing_file_by_hash, file_hash
+            )
 
     async def process_single_url(
         self,
@@ -1247,7 +1350,7 @@ class FileHandler:
                 content_hash = self.calculate_file_hash(content.encode("utf-8"))
                 logging.info(f"Calculated hash for {url}: {content_hash[:16]}...")
 
-                existing_file_id = await self.find_existing_file_by_hash_async(
+                existing_file_id, _ = await self.find_existing_file_by_hash_async(
                     content_hash
                 )
 
@@ -1494,6 +1597,7 @@ class FileHandler:
                 "temp_file_path": file_path,
             }
 
+    # chat with URL is deprecated, but keeping it for backward compatibility
     async def process_urls(
         self, urls_text, username, temp_file_id, background_tasks, embedding_handler
     ):

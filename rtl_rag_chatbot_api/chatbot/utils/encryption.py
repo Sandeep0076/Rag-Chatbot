@@ -1,3 +1,4 @@
+import logging
 import os
 
 from cryptography.fernet import Fernet
@@ -69,5 +70,5 @@ def decrypt_file(encrypted_file_path):
     )
     with open(decrypted_file_path, "wb") as dec_file:
         dec_file.write(decrypted_data)
-
+    logging.info(f"Decrypted file to {decrypted_file_path}")
     return decrypted_file_path

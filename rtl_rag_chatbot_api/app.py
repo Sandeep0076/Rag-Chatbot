@@ -10,7 +10,7 @@ import os
 import time
 import uuid
 from asyncio import Semaphore
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -21,7 +21,7 @@ from fastapi import Query as QueryParam
 from fastapi import Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
@@ -82,24 +82,33 @@ configs = Config()
 gcs_handler = GCSHandler(configs)
 gemini_handler = GeminiHandler(configs, gcs_handler)
 file_handler = FileHandler(configs, gcs_handler, gemini_handler)
+# Set file hash database flag based on config
+file_handler.use_file_hash_db = configs.use_file_hash_db
+logging.info(
+    f"File hash database lookup {'enabled' if configs.use_file_hash_db else 'disabled'}"
+)
 model_handler = ModelHandler(configs, gcs_handler)
-embedding_handler = EmbeddingHandler(configs, gcs_handler)
+embedding_handler = EmbeddingHandler(configs, gcs_handler, file_handler)
 # Initialize image handlers only once
 dalle_handler = DalleImageGenerator(configs)
 imagen_handler = ImagenGenerator(configs)
 # Pass existing handlers to avoid duplicate initialization
 combined_image_handler = CombinedImageGenerator(configs, dalle_handler, imagen_handler)
 
-# database connection
-if os.getenv("DB_INSTANCE"):
-    logging.info("Using DB_INSTANCE env variable to connect to database")
-    DATABASE_URL = f"postgresql://{os.getenv('DB_USERNAME')}:{os.getenv('DB_PASSWORD')}@127.0.0.1:5432/chatbot_ui"
-    engine = create_engine(DATABASE_URL)
-    SessionLocal = sessionmaker(bind=engine)
+# database connection - only initialize if USE_FILE_HASH_DB is enabled
+if configs.use_file_hash_db:
+    if os.getenv("DB_INSTANCE"):
+        logging.info("Using DB_INSTANCE env variable to connect to database")
+        DATABASE_URL = f"postgresql://{os.getenv('DB_USERNAME')}:{os.getenv('DB_PASSWORD')}@127.0.0.1:5432/chatbot_ui"
+        engine = create_engine(DATABASE_URL)
+        SessionLocal = sessionmaker(bind=engine)
+    else:
+        logging.warning(
+            "USE_FILE_HASH_DB is enabled but no DB_INSTANCE env variable present. Not able to connect to database."
+        )
+        SessionLocal = None
 else:
-    logging.warning(
-        "No DB_INSTANCE env variable present. Not able to connect to database."
-    )
+    logging.info("Database connection disabled - USE_FILE_HASH_DB is set to false")
     SessionLocal = None
 
 title = "RAG PDF API"
@@ -131,39 +140,55 @@ Note: File storage in GCP has been removed from this version.
 
 @asynccontextmanager
 async def start_scheduler(app: FastAPI):
-    cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
-    scheduler = BackgroundScheduler()
-    scheduler.configure(logger=logging.getLogger("apscheduler"))
+    # Only initialize cleanup coordinator if database is enabled and SessionLocal is available
+    if configs.use_file_hash_db and SessionLocal:
+        cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
+        scheduler = BackgroundScheduler()
+        scheduler.configure(logger=logging.getLogger("apscheduler"))
 
-    # Use config value for interval
-    scheduler.add_job(
-        cleanup_coordinator.cleanup,
-        trigger="interval",
-        minutes=configs.cleanup.cleanup_interval_minutes,  # Use configured interval
-        id="cleanup_job",
-    )
+        # Use config value for interval
+        scheduler.add_job(
+            cleanup_coordinator.cleanup,
+            trigger="interval",
+            minutes=configs.cleanup.cleanup_interval_minutes,  # Use configured interval
+            id="cleanup_job",
+        )
 
-    scheduler.start()
-    try:
-        yield
-    finally:
-        # Proper cleanup of resources
-        scheduler.shutdown()
-        # Clean up ChromaDB
-        if chroma_manager:
-            chroma_manager.cleanup()
-        # Clean up any initialized models
-        for model in initialized_models.values():
-            if hasattr(model, "cleanup"):
-                model.cleanup()
-        # Clean up handlers
-        for handler in initialized_handlers.values():
-            if hasattr(handler, "cleanup"):
-                handler.cleanup()
-        # Clean up chatbots
-        for chatbot in initialized_chatbots.values():
-            if hasattr(chatbot, "cleanup"):
-                chatbot.cleanup()
+        scheduler.start()
+        try:
+            yield
+        finally:
+            # Proper cleanup of resources
+            scheduler.shutdown()
+    else:
+        if configs.use_file_hash_db and not SessionLocal:
+            logging.info(
+                "Skipping cleanup coordinator initialization - database is enabled but not connected"
+            )
+        else:
+            logging.info(
+                "Skipping cleanup coordinator initialization - database is disabled"
+            )
+        try:
+            yield
+        finally:
+            pass
+
+    # Clean up ChromaDB
+    if chroma_manager:
+        chroma_manager.cleanup()
+    # Clean up any initialized models
+    for model in initialized_models.values():
+        if hasattr(model, "cleanup"):
+            model.cleanup()
+    # Clean up handlers
+    for handler in initialized_handlers.values():
+        if hasattr(handler, "cleanup"):
+            handler.cleanup()
+    # Clean up chatbots
+    for chatbot in initialized_chatbots.values():
+        if hasattr(chatbot, "cleanup"):
+            chatbot.cleanup()
 
 
 app = FastAPI(
@@ -244,6 +269,64 @@ async def info():
     }
 
 
+@contextmanager
+def get_db_session():
+    """
+    Dependency to get a SQLAlchemy session.
+
+    Returns:
+        Session: SQLAlchemy session.
+    """
+    DATABASE_URL = f"postgresql://{os.getenv('DB_USERNAME')}:{os.getenv('DB_PASSWORD')}@127.0.0.1:5432/chatbot_ui"
+    engine = create_engine(DATABASE_URL)
+    Session = sessionmaker(bind=engine)
+
+    attempts = 0
+    max_attempts = 10
+
+    while attempts < max_attempts:
+        # Try to establish a connection to the database
+        try:
+            attempts += 1
+            db_session = Session()
+            # Try to execute a simple query to check the connection
+            db_session.execute(text("SELECT 1"))
+            break
+        except Exception as e:
+            logging.warning(
+                f"Database connection failed. Retrying in 5 seconds... Original error: {e}"
+            )
+            time.sleep(5)
+        finally:
+            db_session.close()
+
+    try:
+        db_session = Session()
+        yield db_session
+    except Exception as e:
+        logging.error(f"Error in session: {e}")
+    finally:
+        db_session.close()
+
+
+def get_conditional_db_session():
+    """
+    Conditional dependency to get a SQLAlchemy session only when USE_FILE_HASH_DB is enabled.
+
+    Returns:
+        Session: SQLAlchemy session if database is enabled, None otherwise.
+    """
+    if not configs.use_file_hash_db:
+        logging.info("Database connection skipped - USE_FILE_HASH_DB is disabled")
+        return None
+
+    if SessionLocal is None:
+        logging.info("Database connection skipped - SessionLocal is not available")
+        return None
+
+    return get_db_session()
+
+
 # Asynchronous file processing function that runs concurrently with a semaphore limit
 async def process_file_with_semaphore(file_handler, file, file_id, is_image, username):
     async with file_processing_semaphore:
@@ -255,8 +338,6 @@ async def process_file_with_semaphore(file_handler, file, file_id, is_image, use
         file_extension = os.path.splitext(file.filename)[1].lower()
         form_is_image = is_image  # Store original form parameter
         is_image = file_extension in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
-
-        logging.info(f"Processing file with extension: {file_extension}")
         logging.info(
             f"Form is_image parameter: {form_is_image}, Detected is_image: {is_image}"
         )
@@ -271,6 +352,7 @@ async def process_file_with_semaphore(file_handler, file, file_id, is_image, use
         return result
 
 
+# chat with URL is deprecated, but keeping it for backward compatibility
 async def process_url_content(
     file_handler, embedding_handler, urls, username, background_tasks
 ):
@@ -598,6 +680,175 @@ def format_upload_response(processed_file_ids, original_filenames, is_tabular_fl
     return JSONResponse(content=response_data)
 
 
+def _split_processed_files_by_type(
+    all_files,
+    results,
+    processed_file_ids,
+    original_filenames,
+    is_tabular_flags,
+):
+    """Split processed upload results into document and tabular buckets using precomputed flags."""
+    document_files = []
+    tabular_files = []
+
+    for i, result in enumerate(results):
+        file_id = processed_file_ids[i]
+        temp_file_path = result.get("temp_file_path")
+
+        if not file_id or not temp_file_path:
+            logging.warning(
+                f"Skipping invalid file: {original_filenames[i] if i < len(original_filenames) else 'unknown'}"
+            )
+            continue
+
+        file_bucket = (
+            tabular_files
+            if (i < len(is_tabular_flags) and is_tabular_flags[i])
+            else document_files
+        )
+        file_bucket.append(
+            {
+                "index": i,
+                "file_id": file_id,
+                "temp_file_path": temp_file_path,
+                "filename": all_files[i].filename if i < len(all_files) else "",
+                "result": result,
+            }
+        )
+
+    return document_files, tabular_files
+
+
+def _handle_tabular_files_results(tabular_files, is_tabular_flags):
+    """Update flags and log outcomes for tabular files based on FileHandler results."""
+    for file_info in tabular_files:
+        i = file_info["index"]
+        is_tabular_flags[i] = True
+
+        result = file_info["result"]
+        filename = file_info["filename"]
+        file_id = file_info["file_id"]
+
+        if result.get("status") == "success" and result.get("is_tabular"):
+            logging.info(
+                f"Tabular file {filename} with ID {file_id} already processed with database summary"
+            )
+        elif result.get("status") == "existing":
+            logging.info(
+                f"Existing tabular file {filename} with ID {file_id} already processed"
+            )
+        else:
+            logging.warning(
+                f"Unexpected status for tabular file {filename}: {result.get('status')}"
+            )
+
+
+def _augment_document_files_with_migration(document_files, username):
+    """Augment document files with migration files to enable true parallel processing."""
+    try:
+        migration_ctx = globals().get("current_migration_context")
+        if migration_ctx and migration_ctx.get("is_migration"):
+            available_migration_files = migration_ctx.get(
+                "files_to_migrate_details", []
+            )
+            for mig in available_migration_files:
+                mig_file_id = mig.get("file_id")
+                original_filename = mig.get("original_filename")
+                if (
+                    not mig_file_id
+                    or not original_filename
+                    or original_filename == "N/A"
+                ):
+                    continue
+                import os as _os
+
+                base_name = _os.path.basename(original_filename)
+                preferred_temp_path = f"temp_files/{mig_file_id}_{base_name}"
+                legacy_temp_path = f"temp_files/{mig_file_id}"
+                temp_path = (
+                    preferred_temp_path
+                    if _os.path.exists(preferred_temp_path)
+                    else legacy_temp_path
+                )
+                if not _os.path.exists(temp_path):
+                    continue
+                # Build metadata with merged usernames (preserved + current uploader). Duplicates allowed.
+                preserved_usernames = mig.get("usernames", [])
+                merged_usernames = (
+                    preserved_usernames.copy()
+                    if isinstance(preserved_usernames, list)
+                    else []
+                )
+                merged_usernames.append(username)
+                # Prefer file_hash from migration details, else from file_info, else compute
+                file_hash = mig.get("file_hash")
+                if not file_hash:
+                    try:
+                        gcs_info = GCSHandler(configs).get_file_info(mig_file_id) or {}
+                        file_hash = gcs_info.get("file_hash")
+                    except Exception:
+                        file_hash = None
+                if not file_hash:
+                    try:
+                        import hashlib as _hashlib
+
+                        with open(temp_path, "rb") as _f:
+                            file_hash = _hashlib.md5(_f.read()).hexdigest()
+                    except Exception:
+                        file_hash = None
+                # Derive flags from extension or file_info
+                ext = _os.path.splitext(base_name)[1].lower()
+                is_image_flag = ext in [
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".gif",
+                    ".bmp",
+                    ".webp",
+                ]
+                is_tabular_flag = ext in [
+                    ".csv",
+                    ".xlsx",
+                    ".xls",
+                    ".db",
+                    ".sqlite",
+                    ".sqlite3",
+                ]
+                if not (is_image_flag or is_tabular_flag):
+                    # check existing file_info type
+                    try:
+                        gcs_info = GCSHandler(configs).get_file_info(mig_file_id) or {}
+                        ftype = gcs_info.get("file_type")
+                        if ftype in ["tabular", "database"]:
+                            is_tabular_flag = True
+                        # images are covered by extension set above
+                    except Exception:
+                        pass
+                file_metadata = {
+                    "file_id": mig_file_id,
+                    "original_filename": base_name,
+                    "username": merged_usernames,
+                    "is_image": is_image_flag,
+                    "is_tabular": is_tabular_flag,
+                    "file_hash": file_hash,
+                    "migrated": True,  # This file is being migrated
+                }
+                document_files.append(
+                    {
+                        "index": -1,
+                        "file_id": mig_file_id,
+                        "temp_file_path": temp_path,
+                        "filename": base_name,
+                        "result": {"status": "success", "metadata": file_metadata},
+                    }
+                )
+    except Exception as e:
+        logging.warning(
+            f"Failed to augment document files for migration parallelism: {e}"
+        )
+    return document_files
+
+
 async def process_files_by_type(
     background_tasks,
     all_files,
@@ -610,70 +861,19 @@ async def process_files_by_type(
 ):
     """Process each uploaded file based on its type (tabular or document)."""
 
-    # Separate document files and tabular files for different processing
-    document_files = []
-    tabular_files = []
+    # Use precomputed flags instead of recalculating from filenames
+    document_files, tabular_files = _split_processed_files_by_type(
+        all_files, results, processed_file_ids, original_filenames, is_tabular_flags
+    )
 
-    for i, result in enumerate(results):
-        file_id = processed_file_ids[i]
-        temp_file_path = result.get("temp_file_path")
+    # Handle tabular files (flags, logging)
+    _handle_tabular_files_results(tabular_files, is_tabular_flags)
 
-        # Skip invalid files
-        if not file_id or not temp_file_path:
-            logging.warning(f"Skipping invalid file: {original_filenames[i]}")
-            continue
-
-        # Split files by type for batch processing
-        if is_tabular_file(all_files[i].filename):
-            tabular_files.append(
-                {
-                    "index": i,
-                    "file_id": file_id,
-                    "temp_file_path": temp_file_path,
-                    "filename": all_files[i].filename,
-                    "result": result,
-                }
-            )
-        else:
-            document_files.append(
-                {
-                    "index": i,
-                    "file_id": file_id,
-                    "temp_file_path": temp_file_path,
-                    "filename": all_files[i].filename,
-                    "result": result,
-                }
-            )
-
-    # Process tabular files - FileHandler.process_file already handled new vs existing logic
-    # We just need to ensure proper is_tabular flag setting
-    for file_info in tabular_files:
-        i = file_info["index"]
-        is_tabular_flags[i] = True
-
-        # Check if this is a new tabular file that needs database summary
-        result = file_info["result"]
-        if result.get("status") == "success" and result.get("is_tabular"):
-            # New tabular file - FileHandler already processed it with database summary
-            logging.info(
-                f"Tabular file {file_info['filename']} with ID {file_info['file_id']} "
-                f"already processed with database summary"
-            )
-        elif result.get("status") == "existing":
-            # Existing tabular file - also already handled by FileHandler
-            logging.info(
-                f"Existing tabular file {file_info['filename']} with ID {file_info['file_id']} already processed"
-            )
-        else:
-            # Fallback case - should not happen with current FileHandler logic
-            logging.warning(
-                f"Unexpected status for tabular file {file_info['filename']}: {result.get('status')}"
-            )
+    # Augment document files with migration context if present
+    document_files = _augment_document_files_with_migration(document_files, username)
 
     # Process document files in parallel if there are multiple
     if len(document_files) > 1:
-        # Pass background_tasks to enable non-blocking GCS uploads after local embedding creation
-        # Note: process_document_files_parallel should determine is_image per file internally
         await process_document_files_parallel(
             document_files, username, is_image, background_tasks
         )
@@ -683,7 +883,14 @@ async def process_files_by_type(
 
         # Determine is_image based on file extension for this specific file
         file_extension = os.path.splitext(file_info["filename"])[1].lower()
-        is_image = file_extension in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
+        is_image = file_extension in [
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".bmp",
+            ".webp",
+        ]
 
         await process_document_type_file(
             background_tasks,
@@ -946,37 +1153,43 @@ async def handle_existing_file(
 ):
     """Handle an existing file, checking if embeddings need to be recreated."""
 
-    logging.info(f"File {file_id} already exists, checking if it needs new embeddings")
-
-    # Check if embeddings exist
-    azure_result = await embedding_handler.check_embeddings_exist(
-        file_id, "gpt_4o_mini"
-    )
-
-    # Get existing username list to ensure we preserve all users
-    gcs_handler = GCSHandler(configs)
-    current_file_info = gcs_handler.get_file_info(file_id)
-    current_username_list = current_file_info.get("username", [])
-
-    # Ensure current_username_list is a list
-    if not isinstance(current_username_list, list):
-        current_username_list = [current_username_list]
-
-    # If embeddings already exist, just update the username list directly
-    if azure_result["embeddings_exist"]:
-        await update_username_for_existing_file(
-            file_id, username, current_username_list
+    try:
+        logging.info(
+            f"File {file_id} already exists, checking if it needs new embeddings"
         )
-    # If any embeddings are missing, recreate them
-    else:
-        await recreate_embeddings_for_existing_file(
-            background_tasks,
-            file_id,
-            temp_file_path,
-            username,
-            result,
-            current_username_list,
+
+        # Check if embeddings exist
+        azure_result = await embedding_handler.check_embeddings_exist(
+            file_id, "gpt_4o_mini"
         )
+
+        # Get existing username list to ensure we preserve all users
+        gcs_handler = GCSHandler(configs)
+        current_file_info = gcs_handler.get_file_info(file_id)
+        current_username_list = current_file_info.get("username", [])
+
+        # If embeddings already exist, just update the username list directly
+        if azure_result["embeddings_exist"]:
+            await update_username_for_existing_file(
+                file_id, username, current_username_list
+            )
+        # If any embeddings are missing, recreate them
+        else:
+            await recreate_embeddings_for_existing_file(
+                background_tasks,
+                file_id,
+                temp_file_path,
+                username,
+                result,
+                current_username_list,
+            )
+    finally:
+        # Clean up empty directory if it exists
+        import os
+
+        os.rmdir(temp_file_path) if os.path.isdir(temp_file_path) and not os.listdir(
+            temp_file_path
+        ) else None
 
 
 async def update_username_for_existing_file(file_id, username, current_username_list):
@@ -1007,11 +1220,119 @@ async def recreate_embeddings_for_existing_file(
     username_list = result.get("username_list", [username])
 
     # Ensure current usernames are preserved
+    # TODO: This is not correct. We should not be appending usernames. We should be replacing the username list.
     for current_user in current_username_list:
         if current_user not in username_list:
             username_list.append(current_user)
 
     process_document_file(background_tasks, file_id, temp_file_path, username_list)
+
+
+async def _process_normal_upload_flow(
+    all_files,
+    parsed_existing_file_ids,
+    is_image,
+    username,
+    background_tasks,
+    is_migration: bool = False,
+    migration_context: dict | None = None,
+):
+    existing_results = []
+    if parsed_existing_file_ids:
+        if is_migration and migration_context is not None:
+            existing_results = await process_migration_file_ids_in_parallel(
+                parsed_existing_file_ids,
+                username,
+                background_tasks,
+                migration_context,
+            )
+        else:
+            existing_results = await process_existing_file_ids_in_parallel(
+                parsed_existing_file_ids, username, background_tasks
+            )
+
+    new_file_results = []
+    if len(all_files) > 0:
+        (
+            results,
+            processed_file_ids,
+            original_filenames,
+            is_tabular_flags,
+            statuses,
+        ) = await process_files_in_parallel(file_handler, all_files, is_image, username)
+
+        # Check for errors in file processing
+        error_results = [r for r in results if r.get("status") == "error"]
+        if error_results:
+            # If there are any errors, return the first error message
+            error_result = error_results[0]
+            logging.error(f"File processing failed: {error_result.get('message')}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "message": (
+                        f"File processing failed: {error_result.get('message')}"
+                    ),
+                    "file_id": error_result.get("file_id"),
+                    "status": "error",
+                },
+            )
+
+        # Process each file based on its type
+        await process_files_by_type(
+            background_tasks,
+            all_files,
+            results,
+            processed_file_ids,
+            original_filenames,
+            is_tabular_flags,
+            is_image,
+            username,
+        )
+
+        new_file_results = list(
+            zip(processed_file_ids, original_filenames, is_tabular_flags)
+        )
+
+    # Fallback: If this is a migration scenario and there are no uploaded files left after filtering,
+    # ensure migration files are embedded now using the migration context.
+    try:
+        if is_migration and migration_context and len(all_files) == 0:
+            # Reuse augmentation helper to build document files from migration context
+            document_files = _augment_document_files_with_migration([], username)
+            if document_files:
+                if len(document_files) > 1:
+                    await process_document_files_parallel(
+                        document_files, username, is_image, background_tasks
+                    )
+                else:
+                    file_info = document_files[0]
+                    # Determine is_image for this specific file
+                    file_extension = os.path.splitext(file_info["filename"])[1].lower()
+                    file_is_image = file_extension in [
+                        ".jpg",
+                        ".jpeg",
+                        ".png",
+                        ".gif",
+                        ".bmp",
+                        ".webp",
+                    ]
+                    await process_document_type_file(
+                        background_tasks,
+                        file_info["file_id"],
+                        file_info["temp_file_path"],
+                        file_info["filename"],
+                        file_info["result"],
+                        username,
+                        file_is_image,
+                    )
+    except Exception as mig_err:
+        logging.error(
+            f"Migration fallback embedding processing failed: {str(mig_err)}",
+            exc_info=True,
+        )
+
+    return combine_upload_results(existing_results, new_file_results)
 
 
 @app.post("/file/upload", response_model=FileUploadResponse)
@@ -1039,6 +1360,8 @@ async def upload_file(
     All file processing is done asynchronously and in parallel when multiple files are uploaded.
     Embeddings creation and other post-processing happens in background tasks.
     """
+    # FileHandler database flag is already set at module level
+
     try:
         # Parse existing file IDs if provided (do this before URL processing)
         parsed_existing_file_ids = []
@@ -1060,123 +1383,79 @@ async def upload_file(
                     detail=f"Invalid format for existing_file_ids: {str(e)}",
                 )
 
-        # Handle URL processing - may need to combine with existing file IDs
-        if urls:
-            # Check if we also have existing file IDs to process
-            if parsed_existing_file_ids:
-                # Combined mode: URLs + existing file IDs
-                logging.info(
-                    f"Processing URLs and {len(parsed_existing_file_ids)} existing file IDs together"
-                )
-
-                # Process URLs first
-                url_response_data = await process_url_content(
-                    file_handler, embedding_handler, urls, username, background_tasks
-                )
-
-                # Process existing file IDs
-                existing_results = await process_existing_file_ids_in_parallel(
-                    parsed_existing_file_ids, username, background_tasks
-                )
-
-                # Extract URL results and combine with existing file IDs
-                url_file_ids = url_response_data.get("file_ids", [])
-                url_filenames = url_response_data.get("original_filenames", [])
-                # Safely handle case where filenames list might be shorter than file_ids list
-                url_results = []
-                for i, file_id in enumerate(url_file_ids):
-                    filename = (
-                        url_filenames[i]
-                        if i < len(url_filenames)
-                        else f"url_file_{file_id}"
-                    )
-                    url_results.append((file_id, filename, False))
-
-                # Combine both results
-                return combine_upload_results(existing_results, url_results)
-            else:
-                # URLs only
-                response_data = await process_url_content(
-                    file_handler, embedding_handler, urls, username, background_tasks
-                )
-                return JSONResponse(content=response_data)
-
-        # Continue processing existing file IDs and new files if no URLs were processed
-
         # Combine files from both parameters
         all_files = prepare_file_list(file, files)
 
-        # Process existing file IDs and new files
-        if len(parsed_existing_file_ids) > 0 or len(all_files) > 0:
-            logging.info(
-                f"Processing {len(all_files)} new files and {len(parsed_existing_file_ids)} existing file IDs"
+        # Validate existing file IDs early
+        if parsed_existing_file_ids:
+            validation_response = await validate_existing_file_ids(
+                parsed_existing_file_ids, configs
+            )
+            if validation_response:
+                return validation_response
+
+        # ===== MIGRATION DECISION LOGIC - ONLY FOR MULTI-FILE SCENARIOS =====
+        from rtl_rag_chatbot_api.chatbot.migration_handler import (
+            plan_upload_with_migration,
+        )
+
+        try:
+            is_multi_file_scenario, plan = await plan_upload_with_migration(
+                all_files, parsed_existing_file_ids, configs
+            )
+        except ValueError as e:
+            # Handle validation errors (e.g., invalid existing file IDs)
+            error_message = str(e)
+            if "Invalid file ID" in error_message:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "detail": {
+                            "message": error_message,
+                            "errors": [{"error": error_message}],
+                        }
+                    },
+                )
+            else:
+                raise
+
+        # If NOT a multi-file scenario, run the normal processing flow directly (single-file or simple case)
+        if not is_multi_file_scenario:
+            return await _process_normal_upload_flow(
+                all_files,
+                parsed_existing_file_ids,
+                is_image,
+                username,
+                background_tasks,
             )
 
-            # Process existing file IDs in parallel
-            existing_results = []
-            if parsed_existing_file_ids:
-                existing_results = await process_existing_file_ids_in_parallel(
-                    parsed_existing_file_ids, username, background_tasks
-                )
+        # Multi-file: act on plan
+        action = plan.get("action")
+        if action == "error":
+            return JSONResponse(status_code=400, content=plan.get("error", {}))
 
-            # Process new files in parallel (existing logic)
-            new_file_results = []
-            if len(all_files) > 0:
-                (
-                    results,
-                    processed_file_ids,
-                    original_filenames,
-                    is_tabular_flags,
-                    statuses,
-                ) = await process_files_in_parallel(
-                    file_handler, all_files, is_image, username
-                )
+        if action == "fallthrough":
+            # Store migration context globally for downstream logic to augment document files
+            globals()["current_migration_context"] = plan.get("migration_context", {})
 
-                # Check for errors in file processing
-                error_results = [
-                    result for result in results if result.get("status") == "error"
-                ]
-                if error_results:
-                    # If there are any errors, return the first error message
-                    error_result = error_results[0]
-                    logging.error(
-                        f"File processing failed: {error_result.get('message')}"
-                    )
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "message": f"File processing failed: {error_result.get('message')}",
-                            "file_id": error_result.get("file_id"),
-                            "status": "error",
-                        },
-                    )
-
-                # Process each file based on its type
-                await process_files_by_type(
-                    background_tasks,
-                    all_files,
-                    results,
-                    processed_file_ids,
-                    original_filenames,
-                    is_tabular_flags,
-                    is_image,
-                    username,
-                )
-
-                new_file_results = list(
-                    zip(processed_file_ids, original_filenames, is_tabular_flags)
-                )
-
-            # Combine results from existing file IDs and new files
-            return combine_upload_results(existing_results, new_file_results)
-
-        # No files or file IDs provided case
-        return JSONResponse(
-            status_code=400,
-            content={
-                "message": "No files provided in either 'file', 'files', 'urls', or 'existing_file_ids' parameters."
-            },
+        # Proceed with normal flow using possibly filtered files and updated existing IDs
+        response = await _process_normal_upload_flow(
+            plan.get("all_files", all_files),
+            plan.get("parsed_existing_file_ids", parsed_existing_file_ids),
+            is_image,
+            username,
+            background_tasks,
+            is_migration=(plan.get("migration_context", {}) or {}).get(
+                "is_migration", False
+            ),
+            migration_context=plan.get("migration_context", {}),
         )
+
+        # Clear migration context after processing
+        if "current_migration_context" in globals():
+            del globals()["current_migration_context"]
+
+        return response
 
     except HTTPException as http_ex:
         # Re-raise HTTPException with proper status codes (these are expected API errors)
@@ -1184,21 +1463,7 @@ async def upload_file(
         raise http_ex
     except Exception as e:
         logging.exception(f"Unexpected error in upload_file: {str(e)}")
-        # Return a more detailed error response with stack trace in dev mode
-        if configs.app.dev:
-            import traceback
-
-            stack_trace = traceback.format_exc()
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": str(e),
-                    "stack_trace": stack_trace,
-                    "message": "File upload failed. See error details.",
-                },
-            )
-        else:
-            raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
 
 
 async def prepare_sqlite_db(file_id: str, temp_file_path: str):
@@ -1417,6 +1682,256 @@ async def process_existing_file_ids_in_parallel(
         )
 
 
+async def _handle_migration_file_id(
+    file_id: str,
+    username: str,
+    migration_details_map: dict,
+) -> tuple:
+    """Handle a single file_id that requires migration by preparing it for the pipeline.
+
+    Returns a tuple of (file_id, original_filename, is_tabular_flag) on success,
+    or ("error", file_id, error_message) on failure.
+    """
+    try:
+        logging.info(f"Processing file {file_id} for migration (new embeddings)")
+
+        # Get migration details
+        file_detail = migration_details_map.get(file_id, {})
+        preserved_usernames = file_detail.get("usernames", [])
+        original_filename = file_detail.get("original_filename", f"file_{file_id}")
+
+        # Determine temp file path (downloaded/persisted during migration)
+        preferred_temp_path = None
+        if original_filename and original_filename != f"file_{file_id}":
+            import os as _os
+
+            base_name = _os.path.basename(original_filename)
+            preferred_temp_path = f"temp_files/{file_id}_{base_name}"
+        legacy_temp_path = f"temp_files/{file_id}"
+        temp_file_path = (
+            preferred_temp_path
+            if preferred_temp_path and os.path.exists(preferred_temp_path)
+            else legacy_temp_path
+        )
+
+        if os.path.exists(temp_file_path):
+            logging.info(
+                f"Using downloaded/uploaded file for migration: {temp_file_path}"
+            )
+            # Use helper function to prepare migration file for standard pipeline
+            return await _prepare_migration_file_for_pipeline(
+                file_id=file_id,
+                original_filename=original_filename,
+                temp_file_path=temp_file_path,
+                preserved_usernames=preserved_usernames,
+                username=username,
+                gcs_handler=gcs_handler,
+                configs=configs,
+                embedding_handler=embedding_handler,
+            )
+
+        error_msg = f"Migration file {file_id} not found in temp directory"
+        logging.error(error_msg)
+        return ("error", file_id, error_msg)
+
+    except Exception as e:
+        logging.error(f"Error processing migration file ID {file_id}: {str(e)}")
+        return ("error", file_id, f"Error processing file ID {file_id}: {str(e)}")
+
+
+async def _handle_existing_no_migration_file_id(
+    file_id: str,
+    username: str,
+    background_tasks: BackgroundTasks,
+) -> tuple:
+    """Handle a single file_id that does not require migration using existing logic.
+
+    Returns a tuple of (file_id, original_filename, is_tabular_flag) on success,
+    or ("error", file_id, error_message) on failure.
+    """
+    try:
+        logging.info(f"Processing file {file_id} (no migration needed)")
+
+        # Check embeddings
+        results = await _check_file_embeddings_safe([file_id], "gpt_4o_mini")
+        result = results[0]
+
+        if not result.get("embeddings_exist", False):
+            logging.warning(f"Embeddings not found for file ID: {file_id}")
+            return ("error", file_id, f"Embeddings not found for file {file_id}")
+
+        # Get file info
+        file_info = gcs_handler.get_file_info(file_id)
+        if not file_info:
+            return ("error", file_id, f"File info not found for file {file_id}")
+
+        original_filename = file_info.get("original_filename", f"file_{file_id}")
+        is_tabular = file_info.get("file_type") in ["tabular", "database"]
+
+        # Ensure local embeddings are present
+        local_embeddings_exist = embedding_handler.has_local_embeddings(file_id)
+        if not local_embeddings_exist:
+            logging.info(f"Downloading embeddings for file {file_id}")
+            gcs_handler.download_files_from_folder_by_id(file_id)
+
+        # Update username (normal existing file logic)
+        background_tasks.add_task(
+            update_username_for_existing_file,
+            file_id,
+            username,
+            file_info.get("username", []),
+        )
+
+        return (file_id, original_filename, is_tabular)
+
+    except Exception as e:
+        logging.error(
+            f"Error processing existing (no migration) file ID {file_id}: {str(e)}"
+        )
+        return ("error", file_id, f"Error processing file ID {file_id}: {str(e)}")
+
+
+async def process_migration_file_ids_in_parallel(
+    file_ids: List[str],
+    username: str,
+    background_tasks: BackgroundTasks,
+    migration_context: dict,
+) -> List[tuple]:
+    """
+    Process file IDs in migration context - handle both files needing migration and existing files.
+
+    Args:
+        file_ids: List of file IDs to process (mix of migration and non-migration files)
+        username: Current username to add/preserve
+        background_tasks: Background tasks for async operations
+        migration_context: Migration context with file details
+
+    Returns:
+        List of tuples: (file_id, original_filename, is_tabular)
+    """
+    files_to_migrate = migration_context.get("files_to_migrate", [])
+    files_to_migrate_details = migration_context.get("files_to_migrate_details", [])
+    existing_files_no_migration = migration_context.get(
+        "existing_files_no_migration", []
+    )
+
+    # Create mapping of file_id to details for migration files
+    migration_details_map = {
+        detail["file_id"]: detail for detail in files_to_migrate_details
+    }
+
+    async def _process_single_migration_file_id(file_id: str) -> tuple:
+        """Thin wrapper that routes to the appropriate handler based on context lists."""
+        try:
+            if file_id in files_to_migrate:
+                return await _handle_migration_file_id(
+                    file_id=file_id,
+                    username=username,
+                    migration_details_map=migration_details_map,
+                )
+            if file_id in existing_files_no_migration:
+                return await _handle_existing_no_migration_file_id(
+                    file_id=file_id,
+                    username=username,
+                    background_tasks=background_tasks,
+                )
+            error_msg = f"File {file_id} not found in migration context"
+            logging.error(error_msg)
+            return ("error", file_id, error_msg)
+        except Exception as e:
+            logging.error(f"Error processing migration file ID {file_id}: {str(e)}")
+            return ("error", file_id, f"Error processing file ID {file_id}: {str(e)}")
+
+    # Process all file IDs in parallel
+    try:
+        results = await asyncio.gather(
+            *[_process_single_migration_file_id(file_id) for file_id in file_ids],
+            return_exceptions=True,
+        )
+
+        # Handle results similar to existing function
+        processed_results = []
+        error_details = []
+
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                error_details.append({"file_id": file_ids[i], "error": str(result)})
+            elif isinstance(result, tuple) and len(result) == 3:
+                if result[0] == "error":
+                    error_details.append({"file_id": result[1], "error": result[2]})
+                else:
+                    processed_results.append(result)
+            else:
+                processed_results.append(result)
+
+        # If there are errors, raise an HTTPException
+        if error_details:
+            error_message = (
+                f"Migration processing failed for {len(error_details)} file(s)"
+            )
+            detailed_errors = {
+                "message": error_message,
+                "errors": error_details,
+                "successfully_processed": [result[0] for result in processed_results],
+            }
+            logging.error(f"Error in migration processing: {error_message}")
+            raise HTTPException(status_code=400, detail=detailed_errors)
+
+        return processed_results
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Unexpected error in migration processing: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Migration processing error: {str(e)}"
+        )
+
+
+async def validate_existing_file_ids(
+    parsed_existing_file_ids: List[str], configs: dict
+):
+    """
+    Validate that all existing file IDs are valid and accessible.
+
+    Returns:
+        JSONResponse with error details if any file IDs are invalid, None if all valid
+    """
+    from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
+
+    gcs_handler = GCSHandler(configs)
+
+    invalid_file_ids = []
+    for file_id in parsed_existing_file_ids:
+        try:
+            file_info = gcs_handler.get_file_info(file_id)
+            if not file_info:
+                invalid_file_ids.append(file_id)
+        except Exception:
+            invalid_file_ids.append(file_id)
+
+    if invalid_file_ids:
+        invalid_count = len(invalid_file_ids)
+        total_count = len(parsed_existing_file_ids)
+        error_message = (
+            f"Found {invalid_count} invalid file ID(s) out of {total_count} total."
+        )
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": {
+                    "message": error_message,
+                    "errors": [
+                        {"file_id": fid, "error": "File not found"}
+                        for fid in invalid_file_ids
+                    ],
+                }
+            },
+        )
+
+    return None
+
+
 def combine_upload_results(
     existing_results: List[tuple], new_file_results: List[tuple]
 ) -> JSONResponse:
@@ -1430,7 +1945,7 @@ def combine_upload_results(
     Returns:
         JSONResponse with combined results
     """
-    # Combine all results
+    # Combine all results (existing first to preserve expected ordering)
     all_results = existing_results + new_file_results
 
     if not all_results:
@@ -1439,10 +1954,17 @@ def combine_upload_results(
             content={"message": "No valid files or file IDs were processed."},
         )
 
-    # Extract data from combined results
-    all_file_ids = [result[0] for result in all_results]
-    all_filenames = [result[1] for result in all_results]
-    all_is_tabular_flags = [result[2] for result in all_results]
+    # Deduplicate while preserving order and keeping the first occurrence's metadata
+    # Each tuple is (file_id, original_filename, is_tabular)
+    unique_map: Dict[str, tuple] = {}
+    for file_id, filename, is_tabular in all_results:
+        if file_id not in unique_map:
+            unique_map[file_id] = (filename, is_tabular)
+
+    # Extract data from deduplicated results
+    all_file_ids = list(unique_map.keys())
+    all_filenames = [unique_map[fid][0] for fid in all_file_ids]
+    all_is_tabular_flags = [unique_map[fid][1] for fid in all_file_ids]
 
     # Use existing format_upload_response function for consistency
     return format_upload_response(all_file_ids, all_filenames, all_is_tabular_flags)
@@ -1600,12 +2122,25 @@ async def initialize_file_metadata(
         # Ensure embeddings_status is set
         if "embeddings_status" not in file_metadata:
             file_metadata["embeddings_status"] = "in_progress"
+        # Ensure migrated flag is present (preserve existing value)
+        if "migrated" not in file_metadata:
+            file_metadata["migrated"] = False
+        # Merge provided username_list into existing metadata (preserve and deduplicate)
+        if username_list:
+            current_usernames = file_metadata.get("username", [])
+            if not isinstance(current_usernames, list):
+                current_usernames = [current_usernames] if current_usernames else []
+            for u in username_list:
+                if u not in current_usernames:
+                    current_usernames.append(u)
+            file_metadata["username"] = current_usernames
     else:
         logging.info(f"Creating new metadata for {file_id}")
         file_metadata = {
             "file_id": file_id,
             "username": username_list if username_list else [],
             "embeddings_status": "in_progress",
+            "migrated": False,  # New files are not migrated
         }
 
     # Add file hash if calculated
@@ -1692,6 +2227,54 @@ async def create_embeddings_background(
 
         # If embeddings were created successfully, trigger background upload
         if embedding_result["status"] == "ready_for_chat":
+            # Store file hash in database if the feature is enabled
+            if configs.use_file_hash_db and file_metadata:
+                file_hash = file_metadata.get("file_hash")
+                original_filename = file_metadata.get("original_filename")
+                if file_hash:
+                    try:
+                        # Import database function and store hash directly
+                        from rtl_rag_chatbot_api.common.db import (
+                            delete_file_info_by_file_id,
+                            insert_file_info_record,
+                        )
+
+                        with get_db_session() as db_session:
+                            # Always delete old entry for this file_id before insert (covers migration)
+                            try:
+                                del_result = delete_file_info_by_file_id(
+                                    db_session, file_id
+                                )
+                                if del_result.get("status") == "success":
+                                    deleted_count = del_result.get("deleted_count", 0)
+                                    logging.info(
+                                        f"Deleted {deleted_count} old FileInfo records for file_id: {file_id}"
+                                    )
+                            except Exception as del_err:
+                                logging.warning(
+                                    f"Failed to delete existing FileInfo for {file_id}: {del_err}"
+                                )
+
+                            result = insert_file_info_record(
+                                db_session,
+                                file_id,
+                                file_hash,
+                                original_filename,
+                                "azure-03-small",
+                            )
+                            if result["status"] == "success":
+                                logging.info(
+                                    f"Successfully stored file hash in database for file_id: {file_id}"
+                                )
+                            else:
+                                logging.error(
+                                    f"Failed to store file hash in database: {result['message']}"
+                                )
+                    except Exception as hash_store_error:
+                        logging.error(
+                            f"Failed to store file hash in database: {str(hash_store_error)}"
+                        )
+
             # Start the GCS upload as a non-blocking operation using background_tasks if available
             if background_tasks:
                 # Use FastAPI's BackgroundTasks for proper non-blocking execution
@@ -1718,14 +2301,46 @@ async def create_embeddings_background(
                 f"Error creating embeddings for {file_id}: {embedding_result.get('message', 'Unknown error')}"
             )
             # Run cleanup in background to avoid blocking
-            asyncio.create_task(run_cleanup_after_error(configs, SessionLocal, file_id))
+            if configs.use_file_hash_db:
+                asyncio.create_task(
+                    run_cleanup_after_error(configs, SessionLocal, file_id)
+                )
+            else:
+                # When database is disabled, just clean up ChromaDB and GCS
+                from rtl_rag_chatbot_api.common.cleanup_coordinator import (
+                    CleanupCoordinator,
+                )
+
+                cleanup_coordinator = CleanupCoordinator(configs, None, gcs_handler)
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        cleanup_coordinator.cleanup_chroma_instance,
+                        file_id,
+                        include_gcs=True,
+                    )
+                )
 
         return embedding_result
 
     except Exception as e:
         logging.error(f"Error in create_embeddings_background for {file_id}: {str(e)}")
         # Run cleanup in background to avoid blocking
-        asyncio.create_task(run_cleanup_after_error(configs, SessionLocal, file_id))
+        if configs.use_file_hash_db:
+            asyncio.create_task(run_cleanup_after_error(configs, SessionLocal, file_id))
+        else:
+            # When database is disabled, just clean up ChromaDB and GCS
+            from rtl_rag_chatbot_api.common.cleanup_coordinator import (
+                CleanupCoordinator,
+            )
+
+            cleanup_coordinator = CleanupCoordinator(configs, None, gcs_handler)
+            asyncio.create_task(
+                asyncio.to_thread(
+                    cleanup_coordinator.cleanup_chroma_instance,
+                    file_id,
+                    include_gcs=True,
+                )
+            )
         return {
             "status": "error",
             "message": f"Failed to create embeddings: {str(e)}",
@@ -2518,7 +3133,7 @@ def _filter_context_from_file_info(file_info: Dict[str, Any]) -> Dict[str, Any]:
     context_info = {}
 
     # --- Essential keys for application logic ---
-    for key in ["is_tabular", "embeddings_status", "file_id"]:
+    for key in ["is_tabular", "embeddings_status", "file_id", "embedding_type"]:
         if key in file_info:
             context_info[key] = file_info[key]
 
@@ -2658,6 +3273,7 @@ async def _detect_visualization_need(
     if should_visualize_filter:
         question_for_detection = CHART_DETECTION_PROMPT + question
         try:
+            logging.info("Detecting if visualization is needed..")
             # vis_detection_response = get_gemini_non_rag_response(
             #     configs, question_for_detection, "gemini-2.5-flash", temperature
             # )
@@ -2712,12 +3328,15 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             temperature = _get_default_temperature(query.model_choice)
         logging.info(f"Using temperature {temperature} for model {query.model_choice}")
 
-        generate_visualization = await _detect_visualization_need(
-            current_actual_question, configs, temperature
-        )
-
-        # TEMPORARILY DISABLE CHART GENERATION - HARDCODED TO FALSE
-        generate_visualization = False
+        # Use config flag for chart generation
+        if not configs.generate_visualization:
+            # If flag is explicitly set to False, disable visualization
+            generate_visualization = False
+        else:
+            # Otherwise, use the existing detection logic
+            generate_visualization = await _detect_visualization_need(
+                current_actual_question, configs, temperature
+            )
 
         # Process file information and build the model key
         file_data = await _process_file_info(query, gcs_handler, generate_visualization)
@@ -2838,6 +3457,9 @@ async def manual_cleanup(
     current_user=Depends(get_current_user),
 ):
     """Endpoint to manually trigger cleanup."""
+    if not configs.use_file_hash_db:
+        return {"status": "Cleanup skipped - database is disabled"}
+
     try:
         cleanup_coordinator = CleanupCoordinator(configs, SessionLocal)
         cleanup_coordinator.cleanup(is_manual=request.is_manual)
@@ -2874,16 +3496,7 @@ async def get_neighbors(query: NeighborsQuery, current_user=Depends(get_current_
         return {"neighbors": neighbors}
     except Exception as e:
         logging.exception(f"Error in get_neighbors: {str(e)}")
-        # Return a more detailed error response with stack trace in dev mode
-        if configs.app.dev:
-            import traceback
-
-            stack_trace = traceback.format_exc()
-            raise HTTPException(
-                status_code=500, detail={"error": str(e), "stack_trace": stack_trace}
-            )
-        else:
-            raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/analyze-image", response_model=Dict[str, Any])
@@ -2989,12 +3602,21 @@ async def delete_resources(
 
                 # If username is the only one, delete the embeddings
                 if len(usernames) == 1 and usernames[0] == request.username:
-                    cleanup_coordinator = CleanupCoordinator(
-                        configs, SessionLocal, gcs_handler
-                    )
-                    cleanup_coordinator.cleanup_chroma_instance(
-                        file_id, include_gcs=request.include_gcs
-                    )
+                    if configs.use_file_hash_db:
+                        cleanup_coordinator = CleanupCoordinator(
+                            configs, SessionLocal, gcs_handler
+                        )
+                        cleanup_coordinator.cleanup_chroma_instance(
+                            file_id, include_gcs=request.include_gcs
+                        )
+                    else:
+                        # When database is disabled, just clean up ChromaDB and GCS
+                        cleanup_coordinator = CleanupCoordinator(
+                            configs, None, gcs_handler
+                        )
+                        cleanup_coordinator.cleanup_chroma_instance(
+                            file_id, include_gcs=request.include_gcs
+                        )
                     results[file_id] = "Success: Embeddings deleted"
                 else:
                     # Remove username from the list and update file_info.json
@@ -3048,9 +3670,14 @@ async def delete_all_resources(
         results = {}
         for file_id in file_ids:
             try:
-                cleanup_coordinator = CleanupCoordinator(
-                    configs, SessionLocal, gcs_handler
-                )
+                if configs.use_file_hash_db:
+                    cleanup_coordinator = CleanupCoordinator(
+                        configs, SessionLocal, gcs_handler
+                    )
+                else:
+                    # When database is disabled, just clean up ChromaDB and GCS
+                    cleanup_coordinator = CleanupCoordinator(configs, None, gcs_handler)
+
                 cleanup_coordinator.cleanup_chroma_instance(
                     file_id, include_gcs=request.include_gcs
                 )
@@ -3691,3 +4318,271 @@ async def _initialize_single_file_model(
         query, configs, gcs_handler, single_file_info_for_init, temperature
     )
     return model, is_tabular
+
+
+@app.get("/test-db-connection")
+async def test_db_connection():
+    """Test the database connection by executing a simple query and return JSON."""
+    if not configs.use_file_hash_db:
+        return {
+            "status": "disabled",
+            "message": "Database is disabled - USE_FILE_HASH_DB is set to false",
+        }
+
+    try:
+        with get_db_session() as db:
+            # Execute a simple query to check the connection
+            result = db.execute(text("SELECT 1"))
+            value = result.scalar()
+            return {"status": "success", "result": int(value)}
+    except Exception as e:
+        logging.error(f"Database connection test failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/insert-file-info")
+async def insert_file_info(
+    request: Request,
+    file_id: str = Form(...),
+    file_hash: str = Form(...),
+    filename: str = Form(None),
+    embedding_type: str = Form("azure-03-small"),
+    current_user=Depends(get_current_user),
+):
+    """Insert a new record into the FileInfo table."""
+    if not configs.use_file_hash_db:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "Database is disabled - USE_FILE_HASH_DB is set to false",
+            },
+        )
+
+    from rtl_rag_chatbot_api.common.db import insert_file_info_record
+
+    # Use the context manager properly
+    with get_db_session() as db:
+        result = insert_file_info_record(
+            db, file_id, file_hash, filename, embedding_type
+        )
+
+        if result["status"] == "success":
+            return JSONResponse(status_code=200, content=result)
+        else:
+            return JSONResponse(status_code=500, content=result)
+
+
+@app.delete("/delete-all-file-info")
+async def delete_all_file_info(current_user=Depends(get_current_user)):
+    """
+    Delete all records from the FileInfo table.
+
+    This endpoint will permanently remove all file information records from the database.
+    Use with caution as this action cannot be undone.
+
+    Args:
+        current_user: Authenticated user information
+
+    Returns:
+        dict: Response containing the deletion result
+    """
+    if not configs.use_file_hash_db:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "Database is disabled - USE_FILE_HASH_DB is set to false",
+            },
+        )
+
+    from rtl_rag_chatbot_api.common.db import delete_all_file_info_records
+
+    try:
+        with get_db_session() as db:
+            result = delete_all_file_info_records(db)
+
+            if result["status"] == "success":
+                if result["deleted"]:
+                    return JSONResponse(
+                        status_code=200,
+                        content={
+                            "message": f"Successfully deleted all {result['deleted_count']} FileInfo records",
+                            "deleted_count": result["deleted_count"],
+                            "deleted_records": result.get("deleted_records", []),
+                        },
+                    )
+                else:
+                    return JSONResponse(
+                        status_code=200,
+                        content={"message": result["message"], "deleted_count": 0},
+                    )
+            else:
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "error": "Failed to delete FileInfo records",
+                        "message": result["message"],
+                    },
+                )
+
+    except Exception as e:
+        logging.error(f"Error deleting all FileInfo records: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Internal server error",
+                "message": f"An error occurred while deleting FileInfo records: {str(e)}",
+            },
+        )
+
+
+def _exclude_uploaded_files_already_handled(
+    all_files, detailed_info, available_migration_files
+):
+    """
+    Remove uploaded files from all_files that are already covered by migration logic
+    (files scheduled for migration) or recognized as existing with no migration
+    (source == 'uploaded_file'). This prevents duplicate preprocessing.
+    """
+    # Filenames of uploaded files scheduled for migration
+    migration_filenames = set()
+    for file_detail in available_migration_files:
+        if file_detail.get("source") == "uploaded_file":
+            original_filename = file_detail.get("original_filename", "")
+            if original_filename and original_filename != "N/A":
+                migration_filenames.add(original_filename)
+
+    # Filenames of uploaded files that are existing and need no migration
+    existing_no_migration_details = detailed_info.get("existing_files_no_migration", [])
+    existing_no_migration_uploaded_filenames = set(
+        d.get("original_filename")
+        for d in existing_no_migration_details
+        if d.get("source") == "uploaded_file"
+        and d.get("original_filename")
+        and d.get("original_filename") != "N/A"
+    )
+
+    filenames_to_exclude = migration_filenames.union(
+        existing_no_migration_uploaded_filenames
+    )
+
+    filtered_files = [
+        file for file in all_files if file.filename not in filenames_to_exclude
+    ]
+
+    if len(filtered_files) != len(all_files):
+        logging.info(
+            "Filtered %s uploaded file(s) already handled by migration/no-migration logic",
+            len(all_files) - len(filtered_files),
+        )
+
+    return filtered_files
+
+
+async def _prepare_migration_file_for_pipeline(
+    file_id: str,
+    original_filename: str,
+    temp_file_path: str,
+    preserved_usernames: list,
+    username: str,
+    gcs_handler: GCSHandler,
+    configs: dict,
+    embedding_handler,
+) -> tuple[str, str, bool]:
+    """Prepare a migration file to follow the standard pipeline.
+
+    - Compute file_hash
+    - Ensure encryption uploaded under the SAME file_id
+    - Seed file_info with in_progress and essential flags
+
+    Returns: (file_id, original_filename, is_tabular_flag)
+    """
+    # Combine usernames (duplicates allowed for frequency tracking)
+    combined_usernames = (
+        preserved_usernames.copy() if isinstance(preserved_usernames, list) else []
+    )
+    combined_usernames.append(username)
+
+    # Detect tabular/image flags
+    import os as _os
+
+    base_name = _os.path.basename(original_filename)
+    ext = _os.path.splitext(base_name)[1].lower()
+    is_tabular_flag = ext in [
+        ".csv",
+        ".xlsx",
+        ".xls",
+        ".db",
+        ".sqlite",
+        ".sqlite3",
+    ]
+
+    # Compute file hash
+    file_hash = None
+    try:
+        import hashlib as _hashlib
+
+        with open(temp_file_path, "rb") as _f:
+            file_hash = _hashlib.md5(_f.read()).hexdigest()
+    except Exception as _hash_err:
+        logging.warning(
+            f"Failed to compute file hash for migration file {file_id}: {_hash_err}"
+        )
+
+    # Ensure encryption under the same file_id (no-op for tabular)
+    try:
+        from rtl_rag_chatbot_api.chatbot.utils.file_encryption_manager import (
+            FileEncryptionManager,
+        )
+
+        _enc_mgr = FileEncryptionManager(gcs_handler)
+        await _enc_mgr.ensure_file_encryption(
+            file_id=file_id,
+            original_filename=base_name,
+            temp_file_path=temp_file_path,
+            is_tabular=is_tabular_flag,
+            is_database=False,
+        )
+    except Exception as _enc_err:
+        logging.warning(
+            f"Failed to ensure encryption for migration file {file_id}: {_enc_err}"
+        )
+
+    # Note: Do not start embedding creation here. Migration files will be
+    # embedded exactly once by the standard parallel document processing flow.
+
+    # DB maintenance: delete old row and insert new
+    try:
+        from rtl_rag_chatbot_api.common.db import (
+            delete_file_info_by_file_id,
+            insert_file_info_record,
+        )
+
+        if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
+            with get_db_session() as db_session:
+                try:
+                    del_result = delete_file_info_by_file_id(db_session, file_id)
+                    if del_result.get("status") == "success":
+                        deleted_count = del_result.get("deleted_count", 0)
+                        logging.info(
+                            f"Deleted {deleted_count} old FileInfo records for file_id: {file_id}"
+                        )
+                except Exception as del_err:
+                    logging.warning(
+                        f"Failed to delete existing FileInfo for {file_id}: {del_err}"
+                    )
+                # insert new
+                if file_hash:
+                    _ = insert_file_info_record(
+                        db_session,
+                        file_id,
+                        file_hash,
+                        base_name,
+                        "azure-03-small",
+                    )
+    except Exception as _db_err:
+        logging.warning(
+            f"Failed to refresh FileInfo DB record for {file_id}: {_db_err}"
+        )
+    return file_id, original_filename, is_tabular_flag
