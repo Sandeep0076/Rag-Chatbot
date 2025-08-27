@@ -715,12 +715,14 @@ def test_generate_dalle3_images(client):
     response_data = response.json()
     print(f"Received DALL-E 3 response: {response_data.keys()}")
 
-    # Check most important response elements
+    # Check most important response elements with optimized URL format
     assert response_data["success"] is True
-    assert "image_url" in response_data
+    assert "image_urls" in response_data
+    assert len(response_data["image_urls"]) >= 1
     assert "dall-e" in response_data["model"].lower()
 
     print(f"Successfully generated DALL-E 3 image with model: {response_data['model']}")
+    print(f"Optimized response contains {len(response_data['image_urls'])} image URLs")
 
 
 def test_generate_imagen3_images(client):
@@ -759,4 +761,7 @@ def test_generate_imagen3_images(client):
     print(
         f"Successfully generated {len(response_data['image_urls'])} Imagen 3 images "
         f"with model: {response_data['model']}"
+    )
+    print(
+        "Memory optimization: Using single image_urls array instead of duplicate fields"
     )

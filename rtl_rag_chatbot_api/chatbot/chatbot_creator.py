@@ -361,27 +361,22 @@ class AzureChatbot(BaseRAGHandler):
             )
             # logging.debug(f"Messages for LLM: {messages}") # Be careful logging full context
 
-            # Check for any o3 or o4 models which have different parameter requirements
+            # Check for O3, O4, or GPT-5 models which use max_completion_tokens
             deployment_lower = self.model_config.deployment.lower()
-            if "o4" in deployment_lower:
-                # O4 models: Minimal parameters only
+            if (
+                "o3" in deployment_lower
+                or "o4" in deployment_lower
+                or "gpt-5" in deployment_lower
+                or "gpt_5" in deployment_lower
+            ):
+                # O3, O4 and GPT-5 models: Use max_completion_tokens parameter
                 logging.info(
-                    f"Using O4-specific parameters for model: {self.model_config.deployment}"
+                    f"Using max_completion_tokens for model: {self.model_config.deployment}"
                 )
                 response = self.llm_client.chat.completions.create(
                     model=self.model_config.deployment,
                     messages=messages,
                     max_completion_tokens=max_response_tokens,
-                )
-            elif "o3" in deployment_lower:
-                # O3 models: Use minimal parameters for simplicity
-                logging.info(
-                    f"Using O3-specific parameters for model: {self.model_config.deployment}"
-                )
-                response = self.llm_client.chat.completions.create(
-                    model=self.model_config.deployment,
-                    messages=messages,
-                    max_tokens=max_response_tokens,
                 )
             else:
                 # Regular OpenAI models
@@ -455,16 +450,21 @@ def get_azure_non_rag_response(
             max_tokens if max_tokens is not None else configs.llm_hyperparams.max_tokens
         )
 
-        # Check if the model is any o3 or o4 variant which requires different parameters
+        # Check if the model is O3, O4, or GPT-5 variant which requires max_completion_tokens
         logging.info(
             f"Non-RAG model deployment name: {configs.azure_llm.models[model_choice].deployment}"
         )
         deployment_lower = configs.azure_llm.models[model_choice].deployment.lower()
 
-        if "o4" in deployment_lower:
-            # O4 models: Minimal parameters only
+        if (
+            "o3" in deployment_lower
+            or "o4" in deployment_lower
+            or "gpt-5" in deployment_lower
+            or "gpt_5" in deployment_lower
+        ):
+            # O3, O4 and GPT-5 models: Use max_completion_tokens parameter
             logging.info(
-                f"Using O4-specific parameters for non-RAG response with model: "
+                f"Using max_completion_tokens for non-RAG response with model: "
                 f"{configs.azure_llm.models[model_choice].deployment}"
             )
             response = llm_client.chat.completions.create(
@@ -472,19 +472,8 @@ def get_azure_non_rag_response(
                 messages=messages,
                 max_completion_tokens=effective_max_tokens,
             )
-        elif "o3" in deployment_lower:
-            # O3 models: Use minimal parameters for simplicity
-            logging.info(
-                f"Using O3-specific parameters for non-RAG response with model: "
-                f"{configs.azure_llm.models[model_choice].deployment}"
-            )
-            response = llm_client.chat.completions.create(
-                model=configs.azure_llm.models[model_choice].deployment,
-                messages=messages,
-                max_tokens=effective_max_tokens,
-            )
         else:
-            # Regular OpenAI models
+            # Regular models: Use all standard parameters
             response = llm_client.chat.completions.create(
                 model=configs.azure_llm.models[model_choice].deployment,
                 messages=messages,

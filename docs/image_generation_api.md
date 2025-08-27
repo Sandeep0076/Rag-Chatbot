@@ -41,7 +41,6 @@ The RTL-Deutschland RAG Chatbot API provides two main endpoints for image genera
 {
   "success": "boolean",
   "is_base64": "boolean",
-  "image_url": "string",
   "image_urls": ["string"],
   "prompt": "string",
   "model": "string",
@@ -56,12 +55,13 @@ The RTL-Deutschland RAG Chatbot API provides two main endpoints for image genera
 |-------|------|-------------|
 | `success` | boolean | Whether the request was successful |
 | `is_base64` | boolean | Whether the image data is base64-encoded |
-| `image_url` | string | Base64-encoded image data (first image) |
-| `image_urls` | array | Array of all base64-encoded image data |
+| `image_urls` | array | Array of all base64-encoded image data (optimized format) |
 | `prompt` | string | The original prompt used |
 | `model` | string | The model used for generation |
 | `size` | string | The size of the generated image(s) |
 | `error` | string | Error message if `success` is false |
+
+**Memory Optimization Note**: The response now uses only the `image_urls` array instead of duplicating URLs in both `image_url` and `image_urls` fields, reducing memory usage and data transmission overhead.
 
 **Example Request**:
 
@@ -83,7 +83,6 @@ curl -X POST "http://localhost:8080/image/generate" \
 {
   "success": true,
   "is_base64": true,
-  "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
   "image_urls": [
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."
@@ -135,7 +134,6 @@ curl -X POST "http://localhost:8080/image/generate" \
   "dalle_result": {
     "success": "boolean",
     "is_base64": "boolean",
-    "image_url": "string",
     "image_urls": ["string"],
     "prompt": "string",
     "model": "string",
@@ -144,7 +142,6 @@ curl -X POST "http://localhost:8080/image/generate" \
   "imagen_result": {
     "success": "boolean",
     "is_base64": "boolean",
-    "image_url": "string",
     "image_urls": ["string"],
     "prompt": "string",
     "model": "string",
@@ -196,7 +193,6 @@ curl -X POST "http://localhost:8080/image/generate-combined" \
   "dalle_result": {
     "success": true,
     "is_base64": true,
-    "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
     "image_urls": ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."],
     "prompt": "A serene lake surrounded by mountains at sunset",
     "model": "dall-e-3",
@@ -205,7 +201,6 @@ curl -X POST "http://localhost:8080/image/generate-combined" \
   "imagen_result": {
     "success": true,
     "is_base64": true,
-    "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
     "image_urls": [
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."

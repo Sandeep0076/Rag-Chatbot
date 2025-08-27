@@ -1,5 +1,6 @@
 .windsurfrules
 run.sh
+.env
 # Folders
 structure.txt
 .idea/

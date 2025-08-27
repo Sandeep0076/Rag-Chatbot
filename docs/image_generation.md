@@ -61,7 +61,6 @@ The Image Generation module in the RTL-Deutschland RAG Chatbot API provides capa
 {
   "success": true,
   "is_base64": true,
-  "image_url": "base64_encoded_image_data",
   "image_urls": ["base64_encoded_image_data", "..."],
   "prompt": "Original prompt",
   "model": "imagen-3.0-generate-002",
@@ -102,7 +101,6 @@ The Image Generation module in the RTL-Deutschland RAG Chatbot API provides capa
   "dalle_result": {
     "success": true,
     "is_base64": true,
-    "image_url": "base64_encoded_image_data",
     "image_urls": ["base64_encoded_image_data"],
     "prompt": "Original prompt",
     "model": "dall-e-3",
@@ -111,7 +109,6 @@ The Image Generation module in the RTL-Deutschland RAG Chatbot API provides capa
   "imagen_result": {
     "success": true,
     "is_base64": true,
-    "image_url": "base64_encoded_image_data",
     "image_urls": ["base64_encoded_image_data_1", "base64_encoded_image_data_2"],
     "prompt": "Original prompt",
     "model": "imagen-3.0-generate-002",

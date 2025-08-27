@@ -180,7 +180,7 @@ class ImagenGenerator:
     def _create_success_response(
         self, image_data: Union[str, List[str]], prompt: str, size: str
     ) -> Dict[str, Any]:
-        """Create a success response.
+        """Create a success response with optimized URL structure.
 
         Args:
             image_data: Base64 encoded image data URL or list of URLs for multiple images
@@ -188,32 +188,28 @@ class ImagenGenerator:
             size: Image size
 
         Returns:
-            Success response dictionary
+            Success response dictionary with single URL array to reduce memory usage
         """
-        # Handle multiple images case
-        if isinstance(image_data, list):
-            return {
-                "success": True,
-                "is_base64": True,
-                "image_urls": image_data,  # List of image URLs
-                "image_url": image_data[0]
-                if image_data
-                else "",  # For backward compatibility
-                "prompt": prompt,
-                "model": self.configs.vertexai_imagen.model_name,
-                "size": size,
-            }
-        # Handle single image case (for backward compatibility)
+        # Convert single image to list for consistent response structure
+        if isinstance(image_data, str):
+            image_urls = [image_data]
         else:
-            return {
-                "success": True,
-                "is_base64": True,
-                "image_url": image_data,
-                "image_urls": [image_data],  # Also include as list for consistency
-                "prompt": prompt,
-                "model": self.configs.vertexai_imagen.model_name,
-                "size": size,
-            }
+            image_urls = image_data
+
+        # Log memory optimization info
+        logging.info(
+            f"Optimized response: returning {len(image_urls)} URLs in single array"
+        )
+
+        # Return optimized response with only image_urls array (no duplicate image_url field)
+        return {
+            "success": True,
+            "is_base64": True,
+            "image_urls": image_urls,  # Single source of truth for image URLs
+            "prompt": prompt,
+            "model": self.configs.vertexai_imagen.model_name,
+            "size": size,
+        }
 
     def _create_error_response(self, error_msg: str, prompt: str) -> Dict[str, Any]:
         """Create an error response.
@@ -296,14 +292,14 @@ class ImagenGenerator:
         all_image_data = []
 
         for i, generated_image in enumerate(images):
-            logging.info(f"Processing image {i+1}/{len(images)}")
+            logging.info(f"Processing image {i + 1}/{len(images)}")
 
             # Try to extract image data using all available methods
             image_data = self._extract_image_data(generated_image)
             if image_data:
                 all_image_data.append(image_data)
             else:
-                logging.error(f"Failed to extract data for image {i+1}")
+                logging.error(f"Failed to extract data for image {i + 1}")
 
         # Check if we extracted at least one image
         if all_image_data:
