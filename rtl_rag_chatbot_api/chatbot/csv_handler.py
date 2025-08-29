@@ -92,7 +92,7 @@ class TabularDataHandler:
         self.dbs = {}
         self.agents = {}
 
-        # Set temperature - use provided value or model-specific default
+        # Set temperature -use provided value or model-specific default
         if temperature is not None:
             self.temperature = temperature
         elif model_choice.lower() in ["gemini-2.5-flash", "gemini-2.5-pro"]:
