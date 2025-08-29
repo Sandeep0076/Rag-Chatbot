@@ -3973,15 +3973,72 @@ def _create_tabular_data_handler(
     Raises:
         Exception: If TabularDataHandler creation fails
     """
-    return TabularDataHandler(
-        configs,
-        file_id=file_ids[0],  # For backward compatibility
-        model_choice=model_choice,
-        file_ids=file_ids,
-        database_summaries_param=database_summaries if database_summaries else None,
-        all_file_infos=all_file_infos,
-        temperature=temperature,
+    logging.info("=== Creating TabularDataHandler ===")
+    logging.info(f"File IDs: {file_ids}")
+    logging.info(f"Model choice: {model_choice}")
+    logging.info(f"Temperature: {temperature}")
+    logging.info(
+        f"Database summaries keys: {list(database_summaries.keys()) if database_summaries else 'None'}"
     )
+    logging.info(
+        f"All file infos keys: {list(all_file_infos.keys()) if all_file_infos else 'None'}"
+    )
+
+    # Check if the required directories and files exist before creating TabularDataHandler
+    for file_id in file_ids:
+        data_dir = f"./chroma_db/{file_id}"
+        db_path = os.path.join(data_dir, "tabular_data.db")
+
+        logging.info(f"Checking file_id: {file_id}")
+        logging.info(f"  Data directory: {data_dir}")
+        logging.info(f"  Database path: {db_path}")
+
+        # Check directory existence
+        if not os.path.exists(data_dir):
+            logging.error(f"  Data directory does not exist: {data_dir}")
+        else:
+            logging.info(f"  Data directory exists: {data_dir}")
+            # Check directory contents
+            try:
+                dir_contents = os.listdir(data_dir)
+                logging.info(f"  Directory contents: {dir_contents}")
+            except Exception as e:
+                logging.error(f"  Error listing directory contents: {str(e)}")
+
+        # Check database file existence
+        if not os.path.exists(db_path):
+            logging.error(f"  Database file does not exist: {db_path}")
+        else:
+            logging.info(f"  Database file exists: {db_path}")
+            # Check file size and permissions
+            try:
+                file_size = os.path.getsize(db_path)
+                file_stat = os.stat(db_path)
+                logging.info(f"  Database file size: {file_size} bytes")
+                logging.info(f"  Database file permissions: {oct(file_stat.st_mode)}")
+            except Exception as e:
+                logging.error(f"  Error getting file info: {str(e)}")
+
+    try:
+        logging.info("Creating TabularDataHandler instance...")
+        handler = TabularDataHandler(
+            configs,
+            file_id=file_ids[0],  # For backward compatibility
+            model_choice=model_choice,
+            file_ids=file_ids,
+            database_summaries_param=database_summaries if database_summaries else None,
+            all_file_infos=all_file_infos,
+            temperature=temperature,
+        )
+        logging.info("TabularDataHandler instance created successfully")
+        return handler
+    except Exception as e:
+        logging.error(f"Failed to create TabularDataHandler: {str(e)}")
+        logging.error(f"Exception type: {type(e).__name__}")
+        import traceback
+
+        logging.error(f"Full traceback: {traceback.format_exc()}")
+        raise
 
 
 def _create_rag_model_for_multi_file(
