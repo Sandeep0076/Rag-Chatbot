@@ -266,6 +266,7 @@ async def info():
         "title": configs.chatbot.title,
         "description": configs.chatbot.description,
         "info_text": configs.chatbot.info_text,
+        "current_time": time.time(),
     }
 
 
