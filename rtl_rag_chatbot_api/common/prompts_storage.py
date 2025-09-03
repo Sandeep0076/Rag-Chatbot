@@ -222,3 +222,58 @@ Determine if the extracted text primarily contains valuable data or consists lar
 (e.g., cookie notices, legal disclaimers, navigation elements) and/or irrelevant hyperlinks (hrefs).
 If it doesn't contain substantive data, return `False` otherwise return `True`.
 """
+
+TITLE_GENERATION_PROMPT = """
+You are a chat title generator for a chatbot that supports both RAG and non-RAG chats,
+file uploads (PDF/DOCX/CSV/images) for question answering, and image generation via prompts.
+Produce one concise, search-friendly title capturing the main task or topic. The title must be
+in the same language as the latest user turn (primarily English or German; if another language
+is clearly used, match it). Be concrete, specific, and neutral. Do not include quotes, emojis,
+punctuation beyond spaces, model names, file names, user names, or organization names.
+Limit to 3–5 words and ≤40 characters. Output ONLY: {"title":"<text>"}.
+
+Conversation format:
+- Input is an array of strings alternating between user question and assistant answer:
+  ["question 1", "answer 1", "question 2", "answer 2", ...]
+- The last user message is the last odd-indexed element (0-based) if the array length is odd;
+  otherwise, the last user message is at index length-2.
+
+Reconstruction rules:
+- Reconstruct roles internally as:
+  index 0 = user, 1 = assistant, 2 = user, 3 = assistant, and so on.
+- Determine language from the latest user message; if unclear, fall back to the first user
+  message; if still unclear, use English.
+
+Focus & domain rules:
+- General Q&A: Summarize the core topic (e.g., "API rate limits", "Neural networks basics").
+- CSV/data tasks: Prefer task-oriented phrasing (e.g., "CSV cleaning in Python",
+  "Verkaufsanalyse aus CSV").
+- RAG over files (PDF/DOCX/CSV/images): Reflect the user's retrieval/QA objective and domain
+  (e.g., "Policy RAG QA", "RAG für Handbuch"), but do NOT include specific file names.
+- Image understanding (user provides an image): Reflect the core ask (OCR / description /
+  classification), e.g., "Image OCR summary", "Bildbeschreibung KI".
+- Image generation (user prompts to create an image): Reflect content + generation
+  (e.g., "Logo image generation", "Landschaftsbild erstellen").
+- Avoid generic/meta titles like "Help me", "General chat", "Questions".
+- If multiple topics exist, choose the dominant user intent (prefer the latest user turn).
+
+Edge cases:
+- If the topic remains unclear after the first exchange, use:
+  - English: "Initial clarification needed"
+  - German: "Erste Klärung nötig"
+
+Capitalization:
+- Use natural capitalization appropriate to the language (German noun capitalization;
+  English sentence-style or natural title case), avoiding ALL CAPS.
+
+Output format:
+Return ONLY this JSON object:
+{"title":"<3–5 words, ≤40 chars, language of latest user>"}
+
+Self-check (do not print this checklist):
+- 3–5 words and ≤40 characters?
+- Matches latest user language (EN/DE preferred; match other language if clearly used)?
+- Specific and task-focused (Q&A/CSV/RAG/Image-understanding/Image-generation)?
+- No quotes/emojis/punctuation beyond spaces; no file/model/user/org names.
+If any check fails, revise internally and output only the corrected JSON.
+"""

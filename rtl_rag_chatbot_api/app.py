@@ -56,12 +56,14 @@ from rtl_rag_chatbot_api.common.models import (
     ImageGenerationRequest,
     NeighborsQuery,
     Query,
+    TitleGenerationRequest,
 )
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
 from rtl_rag_chatbot_api.common.prompts_storage import (
     CHART_DETECTION_PROMPT,
+    TITLE_GENERATION_PROMPT,
     VISUALISATION_PROMPT,
 )
 from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
@@ -4591,3 +4593,78 @@ async def _prepare_migration_file_for_pipeline(
             f"Failed to refresh FileInfo DB record for {file_id}: {_db_err}"
         )
     return file_id, original_filename, is_tabular_flag
+
+
+@app.post("/chat/generate-title")
+async def generate_chat_title(
+    request: TitleGenerationRequest, current_user=Depends(get_current_user)
+):
+    """
+    Generate an automatically generated title for a chat conversation based on its content.
+
+    This endpoint uses GPT nano model with the TITLE_GENERATION_PROMPT to create
+    concise, descriptive titles (around 5 words) that accurately reflect the
+    conversation's main topic or task.
+
+    Args:
+        request (TitleGenerationRequest): Request body containing:
+            - conversation (List[str]): Array of strings alternating between user questions and assistant answers
+            - model_choice (Optional[str]): Model to use (defaults to "gpt_4_1_nano")
+        current_user: Authenticated user information
+
+    Returns:
+        dict: Dictionary containing:
+            - title (str): Generated conversation title
+            - success (bool): Whether title generation was successful
+
+    Raises:
+        HTTPException: If title generation fails or response parsing fails
+    """
+    try:
+        import json
+
+        # Format the conversation with the title generation prompt
+        full_prompt = (
+            TITLE_GENERATION_PROMPT + "\n\n" + json.dumps(request.conversation)
+        )
+
+        # Use specified model or default to gpt_4_1_nano
+        model_choice = "gpt_4_1_nano"
+
+        logging.info(
+            f"Generating title for conversation with {len(request.conversation)}"
+            f"messages using {model_choice}"
+        )
+
+        # Call Azure OpenAI to generate the title
+        response = get_azure_non_rag_response(
+            configs=configs,
+            query=full_prompt,
+            model_choice=model_choice,
+            max_tokens=100,  # Limit tokens for title generation
+        )
+
+        # Parse the JSON response
+        try:
+            parsed_response = json.loads(response.strip())
+            title = parsed_response.get("title", "").strip()
+
+            if not title:
+                raise ValueError("Empty title in response")
+
+            logging.info(f"Successfully generated title: '{title}'")
+
+            return {"title": title, "success": True}
+
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to parse JSON response: {response}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to parse title generation response: {str(e)}",
+            )
+
+    except Exception as e:
+        logging.error(f"Error generating chat title: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to generate chat title: {str(e)}"
+        )
