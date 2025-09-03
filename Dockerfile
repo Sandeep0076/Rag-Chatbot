@@ -62,6 +62,9 @@ COPY --from=build /opt/poetry /opt/poetry
 COPY --from=build --chown=worker:worker /code /code
 COPY --from=build --chown=worker:worker /nltk_data /nltk_data
 
+USER worker
+RUN mkdir -p /code/chroma_db
+
 EXPOSE 8080
 
 ENTRYPOINT ["poetry", "run"]
