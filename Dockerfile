@@ -63,7 +63,7 @@ COPY --from=build --chown=worker:worker /code /code
 COPY --from=build --chown=worker:worker /nltk_data /nltk_data
 
 USER worker
-RUN mkdir -p /code/chroma_db
+RUN mkdir -p /code/chroma_db && chmod -R 666 /code/chroma_db
 
 EXPOSE 8080
 
