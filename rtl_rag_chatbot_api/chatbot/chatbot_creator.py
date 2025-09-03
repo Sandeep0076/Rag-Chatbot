@@ -367,6 +367,18 @@ class AzureChatbot(BaseRAGHandler):
                 term in deployment_lower for term in ["o3", "o4", "gpt-5", "gpt_5"]
             )
 
+            # Resolve optional env-configurable advanced params
+            configured_reasoning_effort = (
+                self.configs.llm_hyperparams.reasoning_effort
+                if hasattr(self.configs, "llm_hyperparams")
+                else None
+            )
+            configured_verbosity = (
+                self.configs.llm_hyperparams.verbosity
+                if hasattr(self.configs, "llm_hyperparams")
+                else None
+            )
+
             # Build params similar to working examples/test-gpt-5.py
             completion_params = {
                 "model": self.model_config.deployment,
@@ -381,8 +393,11 @@ class AzureChatbot(BaseRAGHandler):
                 completion_params[
                     "presence_penalty"
                 ] = self.configs.llm_hyperparams.presence_penalty
-                completion_params["reasoning_effort"] = "minimal"
-                completion_params["verbosity"] = "low"
+                # Use env-provided values if available, else defaults proven to work
+                completion_params["reasoning_effort"] = (
+                    configured_reasoning_effort or "minimal"
+                )
+                completion_params["verbosity"] = configured_verbosity or "medium"
                 # Do NOT include 'stop' for GPT-5/O-series models
             else:
                 # Regular OpenAI models
@@ -397,7 +412,8 @@ class AzureChatbot(BaseRAGHandler):
                 completion_params[
                     "presence_penalty"
                 ] = self.configs.llm_hyperparams.presence_penalty
-                # completion_params["stop"] = self.configs.llm_hyperparams.stop
+                if self.configs.llm_hyperparams.stop is not None:
+                    completion_params["stop"] = self.configs.llm_hyperparams.stop
 
             response = self.llm_client.chat.completions.create(**completion_params)
 
@@ -473,6 +489,18 @@ def get_azure_non_rag_response(
             term in deployment_lower for term in ["o3", "o4", "gpt-5", "gpt_5"]
         )
 
+        # Resolve optional env-configurable advanced params
+        configured_reasoning_effort = (
+            configs.llm_hyperparams.reasoning_effort
+            if hasattr(configs, "llm_hyperparams")
+            else None
+        )
+        configured_verbosity = (
+            configs.llm_hyperparams.verbosity
+            if hasattr(configs, "llm_hyperparams")
+            else None
+        )
+
         # Build params similar to working examples/test-gpt-5.py
         completion_params = {
             "model": configs.azure_llm.models[model_choice].deployment,
@@ -488,8 +516,11 @@ def get_azure_non_rag_response(
             completion_params[
                 "presence_penalty"
             ] = configs.llm_hyperparams.presence_penalty
-            completion_params["reasoning_effort"] = "minimal"
-            completion_params["verbosity"] = "medium"
+            # Use env-provided values if available, else defaults proven to work
+            completion_params["reasoning_effort"] = (
+                configured_reasoning_effort or "minimal"
+            )
+            completion_params["verbosity"] = configured_verbosity or "medium"
             # Do NOT include 'stop' for GPT-5/O-series models
         else:
             # Regular models: Use all standard parameters
@@ -502,7 +533,8 @@ def get_azure_non_rag_response(
             completion_params[
                 "presence_penalty"
             ] = configs.llm_hyperparams.presence_penalty
-            # completion_params["stop"] = configs.llm_hyperparams.stop
+            if configs.llm_hyperparams.stop is not None:
+                completion_params["stop"] = configs.llm_hyperparams.stop
 
         response = llm_client.chat.completions.create(**completion_params)
 

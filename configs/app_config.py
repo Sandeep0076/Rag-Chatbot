@@ -40,6 +40,9 @@ class LLMHyperParams(BaseModel):
     frequency_penalty: float
     presence_penalty: float
     stop: Optional[List[str]]
+    # Optional advanced params (can be provided via env: LLM_HYPERPARAMS__REASONING_EFFORT, LLM_HYPERPARAMS__VERBOSITY)
+    reasoning_effort: Optional[str] = None
+    verbosity: Optional[str] = None
 
 
 class ChatbotConfig(BaseModel):
