@@ -3449,7 +3449,13 @@ async def get_available_models(current_user=Depends(get_current_user)):
     azure_models = list(configs.azure_llm.models.keys())
     gemini_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
     # Add individual image models and the combined option
-    image_models = ["dall-e-3", configs.vertexai_imagen.model_name, "Dalle + Imagen"]
+    image_models = [
+        "dall-e-3",
+        configs.vertexai_imagen.model_name,
+        "imagen-4.0-ultra-generate-001",
+        "imagen-4.0-generate-001",
+        "Dalle + Imagen",
+    ]
 
     # Return combined list with model categories
     return {
@@ -3806,7 +3812,8 @@ async def generate_image(
             - prompt (str): Text prompt for image generation
             - size (str, optional): Size of the generated image (default: "1024x1024")
             - n (int, optional): Number of images to generate (default: 1)
-            - model_choice (str, optional): Model to use ("dall-e-3" or "imagen-3.0") (default: "dall-e-3")
+            - model_choice (str, optional): Model to use ("dall-e-3" or Imagen variant
+              such as "imagen-3.0-generate-002"). Default: "dall-e-3".
         current_user: Authenticated user information
 
     Returns:
@@ -3824,8 +3831,17 @@ async def generate_image(
             logging.info(
                 f"Using Vertex AI Imagen model for image generation with prompt: {request.prompt}"
             )
+            # Only pass an override when a specific Imagen variant is requested (imagen-...)
+            imagen_override = (
+                request.model_choice
+                if request.model_choice.lower().startswith("imagen-")
+                else None
+            )
             result = imagen_handler.generate_image(
-                prompt=request.prompt, size=request.size, n=request.n
+                prompt=request.prompt,
+                size=request.size,
+                n=request.n,
+                model_name=imagen_override,
             )
         else:
             # Default to DALL-E 3
