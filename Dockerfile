@@ -56,7 +56,7 @@ RUN python -m nltk.downloader punkt -d /nltk_data
 #  │                     Runtime - Stage                      │
 #  ╰──────────────────────────────────────────────────────────╯
 FROM base AS runtime
-ENV PATH="/opt/poetry/bin:code/.venv/bin:$PATH"
+ENV PATH="/opt/poetry/bin:/code/.venv/bin:$PATH"
 
 COPY --from=build /opt/poetry /opt/poetry
 COPY --from=build --chown=worker:worker /code /code
