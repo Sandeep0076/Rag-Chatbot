@@ -16,7 +16,6 @@ universal-helm-chart:
     securityContext:
       runAsUser: 4711
       runAsGroup: 4711
-      fsGroup: 4711
     resources:
       requests:
         cpu: 500m
