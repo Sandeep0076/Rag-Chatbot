@@ -89,6 +89,7 @@ file_handler.use_file_hash_db = configs.use_file_hash_db
 logging.info(
     f"File hash database lookup {'enabled' if configs.use_file_hash_db else 'disabled'}"
 )
+
 model_handler = ModelHandler(configs, gcs_handler)
 embedding_handler = EmbeddingHandler(configs, gcs_handler, file_handler)
 # Initialize image handlers only once
