@@ -12,7 +12,7 @@
   # auto-deploy preprod from rc-* or release-* branches
   - if: |
       $CI_COMMIT_BRANCH =~ /^rc-.*|^release-.*/ && $MG_ENV == "preprod"
-    when: manual
+    when: on_success
     allow_failure: false
     exists:
       - helm/chart/Chart.yaml
