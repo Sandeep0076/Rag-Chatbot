@@ -24,6 +24,10 @@ class ImagenGenerator:
         self.configs = configs
         self.client = None
         self.initialize_client()
+        # Cache of initialized Imagen model clients keyed by model name
+        self._model_clients: Dict[str, Any] = {
+            self.configs.vertexai_imagen.model_name: self.client
+        }
 
     def initialize_client(self):
         """Initialize Google Vertex AI client for Imagen."""
@@ -41,6 +45,28 @@ class ImagenGenerator:
             logging.info("Imagen client initialized successfully")
         except Exception as e:
             logging.error(f"Error initializing Imagen client: {str(e)}")
+            raise
+
+    def _get_model_client(self, model_name: str):
+        """Get or create a cached Imagen client for the specified model name."""
+        try:
+            if model_name in self._model_clients:
+                return self._model_clients[model_name]
+
+            # Ensure Vertex AI is initialized (idempotent)
+            vertexai.init(
+                project=self.configs.vertexai_imagen.project,
+                location=self.configs.vertexai_imagen.location,
+            )
+
+            client = ImageGenerationModel.from_pretrained(model_name)
+            self._model_clients[model_name] = client
+            logging.info(f"Initialized Imagen client for model: {model_name}")
+            return client
+        except Exception as e:
+            logging.error(
+                f"Failed to initialize Imagen client for {model_name}: {str(e)}"
+            )
             raise
 
     def _convert_size_to_aspect_ratio(self, size: str) -> str:
@@ -311,7 +337,11 @@ class ImagenGenerator:
             )
 
     def generate_image(
-        self, prompt: str, size: str = "1024x1024", n: int = 1
+        self,
+        prompt: str,
+        size: str = "1024x1024",
+        n: int = 1,
+        model_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate an image based on the provided prompt using Imagen.
@@ -320,6 +350,7 @@ class ImagenGenerator:
             prompt (str): The text prompt to generate an image from
             size (str): Image size (default: "1024x1024")
             n (int): Number of images to generate (default: 1)
+            model_name (Optional[str]): Override Imagen model name for this request
 
         Returns:
             Dict[str, Any]: Response containing the generated image URL and other metadata
@@ -327,12 +358,20 @@ class ImagenGenerator:
         try:
             logging.info(f"Generating image with prompt: {prompt}")
 
+            # Determine which Imagen model to use
+            used_model_name = model_name or self.configs.vertexai_imagen.model_name
+            client_to_use = (
+                self.client
+                if used_model_name == self.configs.vertexai_imagen.model_name
+                else self._get_model_client(used_model_name)
+            )
+
             # Convert size to aspect ratio
             aspect_ratio = self._convert_size_to_aspect_ratio(size)
 
             try:
                 # Generate images according to the API
-                response = self.client.generate_images(
+                response = client_to_use.generate_images(
                     prompt=prompt,
                     number_of_images=int(n),
                     aspect_ratio=aspect_ratio
@@ -346,9 +385,12 @@ class ImagenGenerator:
                 # Process the response to extract image data
                 result = self._process_response(response, prompt)
 
-                # Add size to the result if it's a success
-                if result["success"] and "size" in result and not result["size"]:
-                    result["size"] = size
+                # Add size and model to the result if it's a success
+                if result.get("success"):
+                    if "size" in result and not result["size"]:
+                        result["size"] = size
+                    # Ensure the model field reflects the actual model used
+                    result["model"] = used_model_name
 
                 return result
 

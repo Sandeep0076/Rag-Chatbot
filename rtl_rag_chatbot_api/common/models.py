@@ -105,3 +105,14 @@ class FileDeleteRequest(BaseModel):
 class DeleteRequest(BaseModel):
     file_ids: Union[str, List[str]]  # Can be single ID or list of IDs
     include_gcs: bool = False
+
+
+class TitleGenerationRequest(BaseModel):
+    conversation: List[str] = Field(
+        ...,
+        description="Array of strings alternating between user questions and assistant answers",
+    )
+    model_choice: Optional[str] = Field(
+        default="gpt_4_1_nano",
+        description="Model to use for title generation (defaults to gpt_4_1_nano)",
+    )

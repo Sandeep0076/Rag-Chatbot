@@ -363,29 +363,59 @@ class AzureChatbot(BaseRAGHandler):
 
             # Check for O3, O4, or GPT-5 models which use max_completion_tokens
             deployment_lower = self.model_config.deployment.lower()
-            if (
-                "o3" in deployment_lower
-                or "o4" in deployment_lower
-                or "gpt-5" in deployment_lower
-                or "gpt_5" in deployment_lower
-            ):
-                # O3, O4 and GPT-5 models: Use max_completion_tokens parameter
+            use_max_completion = any(
+                term in deployment_lower for term in ["o3", "o4", "gpt-5", "gpt_5"]
+            )
+
+            # Resolve optional env-configurable advanced params
+            configured_reasoning_effort = (
+                self.configs.llm_hyperparams.reasoning_effort
+                if hasattr(self.configs, "llm_hyperparams")
+                else None
+            )
+            configured_verbosity = (
+                self.configs.llm_hyperparams.verbosity
+                if hasattr(self.configs, "llm_hyperparams")
+                else None
+            )
+
+            # Build params similar to working examples/test-gpt-5.py
+            completion_params = {
+                "model": self.model_config.deployment,
+                "messages": messages,
+            }
+
+            if use_max_completion:
                 logging.info(
                     f"Using max_completion_tokens for model: {self.model_config.deployment}"
                 )
-                response = self.llm_client.chat.completions.create(
-                    model=self.model_config.deployment,
-                    messages=messages,
-                    max_completion_tokens=max_response_tokens,
+                completion_params["max_completion_tokens"] = max_response_tokens
+                completion_params[
+                    "presence_penalty"
+                ] = self.configs.llm_hyperparams.presence_penalty
+                # Use env-provided values if available, else defaults proven to work
+                completion_params["reasoning_effort"] = (
+                    configured_reasoning_effort or "minimal"
                 )
+                completion_params["verbosity"] = configured_verbosity or "medium"
+                # Do NOT include 'stop' for GPT-5/O-series models
             else:
                 # Regular OpenAI models
-                response = self.llm_client.chat.completions.create(
-                    model=self.model_config.deployment,
-                    messages=messages,
-                    temperature=self.configs.llm_hyperparams.temperature,  # Use configured temperature
-                    max_tokens=max_response_tokens,
-                )
+                completion_params[
+                    "temperature"
+                ] = self.configs.llm_hyperparams.temperature
+                completion_params["max_tokens"] = max_response_tokens
+                completion_params["top_p"] = self.configs.llm_hyperparams.top_p
+                completion_params[
+                    "frequency_penalty"
+                ] = self.configs.llm_hyperparams.frequency_penalty
+                completion_params[
+                    "presence_penalty"
+                ] = self.configs.llm_hyperparams.presence_penalty
+                if self.configs.llm_hyperparams.stop is not None:
+                    completion_params["stop"] = self.configs.llm_hyperparams.stop
+
+            response = self.llm_client.chat.completions.create(**completion_params)
 
             final_answer = response.choices[0].message.content
             logging.info(f"Received answer from LLM for files {self.active_file_ids}")
@@ -455,35 +485,58 @@ def get_azure_non_rag_response(
             f"Non-RAG model deployment name: {configs.azure_llm.models[model_choice].deployment}"
         )
         deployment_lower = configs.azure_llm.models[model_choice].deployment.lower()
+        use_max_completion = any(
+            term in deployment_lower for term in ["o3", "o4", "gpt-5", "gpt_5"]
+        )
 
-        if (
-            "o3" in deployment_lower
-            or "o4" in deployment_lower
-            or "gpt-5" in deployment_lower
-            or "gpt_5" in deployment_lower
-        ):
-            # O3, O4 and GPT-5 models: Use max_completion_tokens parameter
+        # Resolve optional env-configurable advanced params
+        configured_reasoning_effort = (
+            configs.llm_hyperparams.reasoning_effort
+            if hasattr(configs, "llm_hyperparams")
+            else None
+        )
+        configured_verbosity = (
+            configs.llm_hyperparams.verbosity
+            if hasattr(configs, "llm_hyperparams")
+            else None
+        )
+
+        # Build params similar to working examples/test-gpt-5.py
+        completion_params = {
+            "model": configs.azure_llm.models[model_choice].deployment,
+            "messages": messages,
+        }
+
+        if use_max_completion:
             logging.info(
                 f"Using max_completion_tokens for non-RAG response with model: "
                 f"{configs.azure_llm.models[model_choice].deployment}"
             )
-            response = llm_client.chat.completions.create(
-                model=configs.azure_llm.models[model_choice].deployment,
-                messages=messages,
-                max_completion_tokens=effective_max_tokens,
+            completion_params["max_completion_tokens"] = effective_max_tokens
+            completion_params[
+                "presence_penalty"
+            ] = configs.llm_hyperparams.presence_penalty
+            # Use env-provided values if available, else defaults proven to work
+            completion_params["reasoning_effort"] = (
+                configured_reasoning_effort or "minimal"
             )
+            completion_params["verbosity"] = configured_verbosity or "medium"
+            # Do NOT include 'stop' for GPT-5/O-series models
         else:
             # Regular models: Use all standard parameters
-            response = llm_client.chat.completions.create(
-                model=configs.azure_llm.models[model_choice].deployment,
-                messages=messages,
-                temperature=configs.llm_hyperparams.temperature,
-                max_tokens=effective_max_tokens,
-                top_p=configs.llm_hyperparams.top_p,
-                frequency_penalty=configs.llm_hyperparams.frequency_penalty,
-                presence_penalty=configs.llm_hyperparams.presence_penalty,
-                stop=configs.llm_hyperparams.stop,
-            )
+            completion_params["temperature"] = configs.llm_hyperparams.temperature
+            completion_params["max_tokens"] = effective_max_tokens
+            completion_params["top_p"] = configs.llm_hyperparams.top_p
+            completion_params[
+                "frequency_penalty"
+            ] = configs.llm_hyperparams.frequency_penalty
+            completion_params[
+                "presence_penalty"
+            ] = configs.llm_hyperparams.presence_penalty
+            if configs.llm_hyperparams.stop is not None:
+                completion_params["stop"] = configs.llm_hyperparams.stop
+
+        response = llm_client.chat.completions.create(**completion_params)
 
         return response.choices[0].message.content.strip()
 
