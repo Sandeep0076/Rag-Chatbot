@@ -14,6 +14,7 @@ from sqlalchemy.pool import QueuePool
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
+from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.chatbot.gemini_handler import (
     GeminiSafetyFilterError,
     get_gemini_non_rag_response,
@@ -358,6 +359,28 @@ class TabularDataHandler:
         logging.info(f"Data directory: {data_dir}")
         logging.info(f"Database path: {db_path}")
         logging.info(f"Database URL: {db_url}")
+
+        # If the data directory doesn't exist, it means this pod hasn't processed
+        # or downloaded the files yet. We need to fetch them from GCS.
+        if not os.path.exists(data_dir):
+            logging.warning(
+                f"Data directory {data_dir} not found locally. Attempting to download from GCS."
+            )
+            try:
+                gcs_handler = GCSHandler(_configs=self.config)
+                gcs_handler.download_files_from_folder_by_id(file_id)
+                logging.info(
+                    f"Successfully downloaded files from GCS for file_id: {file_id}"
+                )
+            except Exception as e:
+                logging.error(
+                    f"Failed to download files from GCS for file_id {file_id}: {e}"
+                )
+                # Re-raise or handle the error appropriately. If files can't be downloaded,
+                # the handler cannot proceed.
+                raise FileNotFoundError(
+                    f"Data directory {data_dir} not found and could not be downloaded from GCS."
+                ) from e
 
         try:
             # Validate database file
