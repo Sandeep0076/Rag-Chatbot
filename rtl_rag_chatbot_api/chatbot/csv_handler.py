@@ -73,6 +73,17 @@ class TabularDataHandler:
             all_file_infos (Optional[Dict[str, Any]], optional): Complete file information
                 including metadata for context. Defaults to None.
         """
+        logging.info("=== Initializing TabularDataHandler ===")
+        logging.info(f"Model choice: {model_choice}")
+        logging.info(f"File ID: {file_id}")
+        logging.info(f"File IDs: {file_ids}")
+        logging.info(
+            f"Database summaries provided: {len(database_summaries_param) if database_summaries_param else 0}"
+        )
+        logging.info(
+            f"All file infos provided: {len(all_file_infos) if all_file_infos else 0}"
+        )
+
         self.config = config
         self.model_choice = model_choice
         self.db_name = "tabular_data.db"
@@ -81,7 +92,7 @@ class TabularDataHandler:
         self.dbs = {}
         self.agents = {}
 
-        # Set temperature - use provided value or model-specific default
+        # Set temperature -use provided value or model-specific default
         if temperature is not None:
             self.temperature = temperature
         elif model_choice.lower() in ["gemini-2.5-flash", "gemini-2.5-pro"]:
@@ -89,8 +100,12 @@ class TabularDataHandler:
         else:
             self.temperature = 0.4  # Lower temperature for OpenAI models
 
+        logging.info(f"Temperature set to: {self.temperature}")
+
         # Initialize LLM for all database operations before initializing databases
+        logging.info("Initializing LLM...")
         self.llm = self._initialize_llm()
+        logging.info("LLM initialized successfully")
 
         # Initialize database_summaries with pre-loaded data if provided
         self.database_summaries = {}
@@ -106,6 +121,7 @@ class TabularDataHandler:
 
         # Determine if we're in multi-file mode
         self.is_multi_file = bool(file_ids and len(file_ids) > 0)
+        logging.info(f"Multi-file mode: {self.is_multi_file}")
 
         if self.is_multi_file:
             # Multi-file mode
@@ -119,15 +135,20 @@ class TabularDataHandler:
 
             # Initialize databases for all files
             for f_id in self.file_ids:
+                logging.info(f"Initializing database for file_id: {f_id}")
                 self._initialize_file_database(f_id)
         else:
             # Single file mode (backward compatible)
             self.file_id = file_id
             self.file_ids = [file_id] if file_id else []
             if file_id:
+                logging.info(
+                    f"Initializing single file database for file_id: {file_id}"
+                )
                 self._initialize_file_database(file_id)
             else:
                 # Legacy path for tests or default initialization
+                logging.info("Using legacy path for tests or default initialization")
                 self.data_dir = "rtl_rag_chatbot_api/tabularData/csv_dir"
                 self.db_path = os.path.join(self.data_dir, self.db_name)
                 self.db_url = f"sqlite:///{self.db_path}"
@@ -146,6 +167,9 @@ class TabularDataHandler:
 
         # For backward compatibility, set these attributes for the primary file
         if self.file_id:
+            logging.info(
+                f"Setting up backward compatibility attributes for file_id: {self.file_id}"
+            )
             self.engine = self.engines.get(self.file_id)
             self.Session = self.sessions.get(self.file_id)
             self.db = self.dbs.get(self.file_id)
@@ -154,6 +178,9 @@ class TabularDataHandler:
             if self.file_id in self.database_summaries:
                 # Set primary DB info and table_info
                 self.primary_db_info = self.database_summaries[self.file_id]
+                logging.info(
+                    f"Primary DB info set from database summaries for file_id: {self.file_id}"
+                )
 
                 if (
                     isinstance(self.primary_db_info, dict)
@@ -166,14 +193,154 @@ class TabularDataHandler:
                 # Set table_name from table_info
                 if self.table_info and len(self.table_info) > 0:
                     self.table_name = self.table_info[0]["name"]
+                    logging.info(f"Table name set to: {self.table_name}")
                 else:
-                    raise ValueError(
-                        f"No tables found in the primary database for file_id: {self.file_id}"
-                    )
+                    error_msg = f"No tables found in the primary database for file_id: {self.file_id}"
+                    logging.error(error_msg)
+                    raise ValueError(error_msg)
             else:
-                raise ValueError(
-                    f"No database summary found for file_id: {self.file_id}"
-                )
+                error_msg = f"No database summary found for file_id: {self.file_id}"
+                logging.error(error_msg)
+                raise ValueError(error_msg)
+
+        logging.info("=== TabularDataHandler initialization completed ===")
+
+    def _validate_database_file(self, data_dir: str, db_path: str, file_id: str):
+        """
+        Validate that the database file exists and is accessible.
+
+        Args:
+            data_dir (str): The data directory path
+            db_path (str): The database file path
+            file_id (str): The file ID for logging
+
+        Raises:
+            FileNotFoundError: If directory or file doesn't exist
+            PermissionError: If directory or file is not readable
+        """
+        logging.info(f"Validating database file for file_id: {file_id}")
+
+        # Check if directory exists
+        if not os.path.exists(data_dir):
+            logging.error(f"Data directory does not exist: {data_dir}")
+            raise FileNotFoundError(f"Data directory not found: {data_dir}")
+
+        # Check if directory is readable
+        if not os.access(data_dir, os.R_OK):
+            logging.error(f"Data directory is not readable: {data_dir}")
+            raise PermissionError(f"Data directory not readable: {data_dir}")
+
+        # Check if database file exists
+        if not os.path.exists(db_path):
+            logging.error(f"Database file does not exist: {db_path}")
+            raise FileNotFoundError(f"Database file not found: {db_path}")
+
+        # Check if database file is readable
+        if not os.access(db_path, os.R_OK):
+            logging.error(f"Database file is not readable: {db_path}")
+            raise PermissionError(f"Database file not readable: {db_path}")
+
+        # Check file size
+        try:
+            file_size = os.path.getsize(db_path)
+            logging.info(f"Database file size: {file_size} bytes")
+            if file_size == 0:
+                logging.warning(f"Database file is empty: {db_path}")
+        except OSError as e:
+            logging.error(f"Error getting file size: {str(e)}")
+
+        # Check file permissions
+        try:
+            stat_info = os.stat(db_path)
+            logging.info(f"Database file permissions: {oct(stat_info.st_mode)}")
+        except OSError as e:
+            logging.error(f"Error getting file permissions: {str(e)}")
+
+        logging.info(f"Database file validation successful for file_id: {file_id}")
+
+    def _validate_sqlite_database(self, db_path: str, file_id: str):
+        """
+        Validate that the file is a valid SQLite database.
+
+        Args:
+            db_path (str): The database file path
+            file_id (str): The file ID for logging
+
+        Raises:
+            sqlite3.Error: If the file is not a valid SQLite database
+        """
+        logging.info(f"Validating SQLite database for file_id: {file_id}")
+
+        try:
+            import sqlite3
+
+            test_conn = sqlite3.connect(db_path, timeout=10)
+            test_conn.close()
+            logging.info(f"SQLite database validation successful for: {db_path}")
+        except sqlite3.Error as e:
+            logging.error(f"SQLite database validation failed: {str(e)}")
+            raise
+        except Exception as e:
+            logging.error(f"Unexpected error during SQLite validation: {str(e)}")
+            raise
+
+    def _create_database_components(self, db_url: str, file_id: str):
+        """
+        Create SQLAlchemy database components.
+
+        Args:
+            db_url (str): The database URL
+            file_id (str): The file ID for logging
+
+        Raises:
+            Exception: If any component creation fails
+        """
+        logging.info(f"Creating database components for file_id: {file_id}")
+
+        # Create SQLAlchemy engine
+        try:
+            self.engines[file_id] = create_engine(
+                db_url,
+                poolclass=QueuePool,
+                pool_size=5,
+                max_overflow=10,
+                pool_timeout=30,
+                pool_recycle=1800,
+            )
+            logging.info(
+                f"SQLAlchemy engine created successfully for file_id: {file_id}"
+            )
+        except Exception as e:
+            logging.error(f"Failed to create SQLAlchemy engine: {str(e)}")
+            raise
+
+        # Create session maker
+        try:
+            self.sessions[file_id] = sessionmaker(bind=self.engines[file_id])
+            logging.info(f"Session maker created successfully for file_id: {file_id}")
+        except Exception as e:
+            logging.error(f"Failed to create session maker: {str(e)}")
+            raise
+
+        # Create SQLDatabase instance
+        try:
+            self.dbs[file_id] = SQLDatabase(engine=self.engines[file_id])
+            logging.info(
+                f"SQLDatabase instance created successfully for file_id: {file_id}"
+            )
+        except Exception as e:
+            logging.error(f"Failed to create SQLDatabase instance: {str(e)}")
+            raise
+
+        # Patch database run method
+        try:
+            self._patch_db_run_for_file(file_id)
+            logging.info(
+                f"Database run method patched successfully for file_id: {file_id}"
+            )
+        except Exception as e:
+            logging.error(f"Failed to patch database run method: {str(e)}")
+            raise
 
     def _initialize_file_database(self, file_id: str):
         """
@@ -182,27 +349,27 @@ class TabularDataHandler:
         Args:
             file_id (str): The file ID to initialize
         """
+        logging.info(f"=== Starting database initialization for file_id: {file_id} ===")
+
         data_dir = f"./chroma_db/{file_id}"
         db_path = os.path.join(data_dir, self.db_name)
         db_url = f"sqlite:///{db_path}"
 
-        # Configure connection pooling
-        self.engines[file_id] = create_engine(
-            db_url,
-            poolclass=QueuePool,
-            pool_size=5,
-            max_overflow=10,
-            pool_timeout=30,
-            pool_recycle=1800,
-        )
-        self.sessions[file_id] = sessionmaker(bind=self.engines[file_id])
-        self.dbs[file_id] = SQLDatabase(engine=self.engines[file_id])
+        logging.info(f"Data directory: {data_dir}")
+        logging.info(f"Database path: {db_path}")
+        logging.info(f"Database URL: {db_url}")
 
-        # Ensure db.run uses our robust cleaner for this file
-        self._patch_db_run_for_file(file_id)
-
-        # Get database info - check if we already have a pre-loaded summary first
         try:
+            # Validate database file
+            self._validate_database_file(data_dir, db_path, file_id)
+
+            # Validate SQLite database
+            self._validate_sqlite_database(db_path, file_id)
+
+            # Create database components
+            self._create_database_components(db_url, file_id)
+
+            # Get database info - check if we already have a pre-loaded summary first
             if file_id in self.database_summaries:
                 logging.info(
                     f"Using pre-loaded database summary for file_id: {file_id}"
@@ -212,14 +379,29 @@ class TabularDataHandler:
                 logging.info(f"Generating database summary for file_id: {file_id}")
                 db_info = self._get_table_info_for_file(file_id)
                 self.database_summaries[file_id] = db_info
+                logging.info(
+                    f"Database summary generated successfully for file_id: {file_id}"
+                )
 
             # Initialize SQL agent after database is prepared
+            logging.info(f"Initializing SQL agent for file_id: {file_id}")
             self._initialize_agent_for_file(file_id)
-            logging.info(f"Successfully initialized database for file_id: {file_id}")
+            logging.info(f"SQL agent initialized successfully for file_id: {file_id}")
+
+            logging.info(
+                f"=== Database initialization completed successfully for file_id: {file_id} ==="
+            )
+
         except Exception as e:
             logging.error(
-                f"Error initializing database for file_id {file_id}: {str(e)}"
+                f"Error during database initialization for file_id {file_id}: {str(e)}"
             )
+            logging.error(f"Exception type: {type(e).__name__}")
+            logging.error(f"Exception details: {str(e)}")
+            import traceback
+
+            logging.error(f"Full traceback: {traceback.format_exc()}")
+            raise
 
     def _initialize_llm(self) -> Union[AzureChatOpenAI, ChatVertexAI]:
         """

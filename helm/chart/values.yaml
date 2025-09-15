@@ -14,7 +14,8 @@ universal-helm-chart:
       repository: "override-me-via-ci-pipeline"
       tag: "override-me-via-ci-pipeline"
     securityContext:
-      runAsUser: 1000
+      runAsUser: 4711
+      runAsGroup: 4711
     resources:
       requests:
         cpu: 500m
