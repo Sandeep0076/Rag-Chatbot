@@ -7,6 +7,8 @@ import asyncio
 import json
 import logging
 import os
+import pathlib
+import pwd
 import time
 import uuid
 from asyncio import Semaphore
@@ -270,6 +272,18 @@ async def info():
         "description": configs.chatbot.description,
         "info_text": configs.chatbot.info_text,
         "current_time": time.time(),
+    }
+
+
+@app.get("/__debug/runtime")
+def runtime():
+    """Get runtime information."""
+    return {
+        "uid": os.geteuid(),
+        "user": pwd.getpwuid(os.geteuid()).pw_name,
+        "gid": os.getegid(),
+        "cwd": os.getcwd(),
+        "chroma_exists": pathlib.Path("chroma_db").exists(),
     }
 
 

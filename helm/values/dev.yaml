@@ -19,7 +19,7 @@ universal-helm-chart:
   deployment:
     scaleDown: false
     # switch back to 2 or 1 replica in dev after release
-    replicaCount: 2
+    replicaCount: 1
   container:
     resources:
       requests:
