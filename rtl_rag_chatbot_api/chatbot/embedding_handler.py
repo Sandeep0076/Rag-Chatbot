@@ -116,7 +116,7 @@ class EmbeddingHandler:
             "embeddings_ready": azure_result.get("success", False),
             "file_id": file_id,  # Ensure file_id consistency
             "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
-            "embedding_type": "azure-03-small",  # Use new text-embedding-3-small for new uploads
+            "embedding_type": "azure-3-large",  # Use new text-embedding-3-large for new uploads
         }
 
         # Ensure critical fields are present
@@ -1538,7 +1538,7 @@ class EmbeddingHandler:
             )
             file_metadata["file_id"] = file_id
             file_metadata["migrated"] = True
-            file_metadata["embedding_type"] = "azure-03-small"
+            file_metadata["embedding_type"] = "azure-3-large"
 
             result = await self.create_embeddings(
                 file_id=file_id,

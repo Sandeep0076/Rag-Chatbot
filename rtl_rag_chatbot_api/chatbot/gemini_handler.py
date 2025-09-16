@@ -157,17 +157,17 @@ class GeminiHandler(BaseRAGHandler):
             api_version=configs.azure_embedding.azure_embedding_api_version,
         )
 
-        # New 03-small client
-        self.azure_client_03_small = AzureOpenAI(
-            api_key=configs.azure_embedding_03_small.azure_embedding_03_small_api_key,
-            azure_endpoint=configs.azure_embedding_03_small.azure_embedding_03_small_endpoint,
-            api_version=configs.azure_embedding_03_small.azure_embedding_03_small_api_version,
+        # New 03 client
+        self.azure_client_03 = AzureOpenAI(
+            api_key=configs.azure_embedding_3_large.azure_embedding_3_large_api_key,
+            azure_endpoint=configs.azure_embedding_3_large.azure_embedding_3_large_endpoint,
+            api_version=configs.azure_embedding_3_large.azure_embedding_3_large_api_version,
         )
 
-        # Default to 03-small for new embeddings
-        self.azure_client = self.azure_client_03_small
+        # Default to 03 for new embeddings
+        self.azure_client = self.azure_client_03
         self.azure_embedding_deployment = (
-            configs.azure_embedding_03_small.azure_embedding_03_small_deployment
+            configs.azure_embedding_3_large.azure_embedding_3_large_deployment
         )
 
         self.generative_model = None
@@ -280,9 +280,9 @@ class GeminiHandler(BaseRAGHandler):
     def _get_embedding_config_for_file(self, file_id: str = None):
         """Get the appropriate embedding client and deployment based on file's embedding_type"""
         # Default to new embedding for new files
-        default_client = self.azure_client_03_small
+        default_client = self.azure_client_03
         default_deployment = (
-            self.configs.azure_embedding_03_small.azure_embedding_03_small_deployment
+            self.configs.azure_embedding_3_large.azure_embedding_3_large_deployment
         )
 
         if not file_id:
@@ -297,14 +297,14 @@ class GeminiHandler(BaseRAGHandler):
                 and file_id in self.all_file_infos
             ):
                 file_info_data = self.all_file_infos[file_id]
-                embedding_type = file_info_data.get("embedding_type", "azure-03-small")
+                embedding_type = file_info_data.get("embedding_type", "azure-3-large")
                 # For tabular files (no embedding_type), explicitly use new embedding
                 if file_info_data.get("is_tabular", False):
-                    embedding_type = "azure-03-small"
+                    embedding_type = "azure-3-large"
                     import logging
 
                     logging.info(
-                        f"Tabular file {file_id} detected, using text-embedding-3-small"
+                        f"Tabular file {file_id} detected, using text-embedding-3-large"
                     )
             else:
                 # Check local file_info.json
@@ -316,19 +316,19 @@ class GeminiHandler(BaseRAGHandler):
                     with open(local_info_path, "r") as f:
                         file_info_data = json.load(f)
                         embedding_type = file_info_data.get(
-                            "embedding_type", "azure-03-small"
+                            "embedding_type", "azure-3-large"
                         )
                         # For tabular files (no embedding_type), explicitly use new embedding
                         if file_info_data.get("is_tabular", False):
-                            embedding_type = "azure-03-small"
+                            embedding_type = "azure-3-large"
                             import logging
 
                             logging.info(
-                                f"Tabular file {file_id} detected, using text-embedding-3-small"
+                                f"Tabular file {file_id} detected, using text-embedding-3-large"
                             )
                 else:
                     # Default to new embedding for files without info
-                    embedding_type = "azure-03-small"
+                    embedding_type = "azure-3-large"
 
             # Return appropriate client and deployment based on embedding_type
             import logging
@@ -341,13 +341,13 @@ class GeminiHandler(BaseRAGHandler):
                     self.azure_client_ada002,
                     self.configs.azure_embedding.azure_embedding_deployment,
                 )
-            else:  # "azure-03-small" or any other value (including tabular files) defaults to new embedding
+            else:  # "azure-3-large" or any other value (including tabular files) defaults to new embedding
                 logging.info(
-                    f"Using text-embedding-3-small for file {file_id} (embedding_type: '{embedding_type}')"
+                    f"Using text-embedding-3-large for file {file_id} (embedding_type: '{embedding_type}')"
                 )
                 return (
-                    self.azure_client_03_small,
-                    self.configs.azure_embedding_03_small.azure_embedding_03_small_deployment,
+                    self.azure_client_03,
+                    self.configs.azure_embedding_3_large.azure_embedding_3_large_deployment,
                 )
         except Exception as e:
             import logging

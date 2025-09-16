@@ -20,7 +20,7 @@ class ModelHandler:
             # Always use "azure" as folder name for Azure embeddings, regardless of embedding_type metadata
             storage_folder = (
                 "azure"
-                if embedding_type in ["azure", "azure-03-small"]
+                if embedding_type in ["azure", "azure-3-large"]
                 else embedding_type
             )
             chroma_db_path = f"./chroma_db/{file_id}/{storage_folder}"

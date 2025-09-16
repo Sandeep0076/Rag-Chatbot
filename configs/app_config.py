@@ -25,12 +25,12 @@ class AzureEmbeddingConfig(BaseModel):
     azure_embedding_model_name: str
 
 
-class AzureEmbedding03SmallConfig(BaseModel):
-    azure_embedding_03_small_api_key: str
-    azure_embedding_03_small_endpoint: str
-    azure_embedding_03_small_api_version: str
-    azure_embedding_03_small_deployment: str
-    azure_embedding_03_small_model_name: str
+class AzureEmbedding3LargeConfig(BaseModel):
+    azure_embedding_3_large_api_key: str
+    azure_embedding_3_large_endpoint: str
+    azure_embedding_3_large_api_version: str
+    azure_embedding_3_large_deployment: str
+    azure_embedding_3_large_model_name: str
 
 
 class LLMHyperParams(BaseModel):
@@ -98,7 +98,7 @@ class CleanupConfig(BaseModel):
 
 class Config(BaseSettings):
     azure_embedding: AzureEmbeddingConfig
-    azure_embedding_03_small: AzureEmbedding03SmallConfig
+    azure_embedding_3_large: AzureEmbedding3LargeConfig
     azure_llm: AzureLLMConfig
     chatbot: ChatbotConfig
     llm_hyperparams: LLMHyperParams

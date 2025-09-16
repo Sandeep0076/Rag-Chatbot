@@ -1,6 +1,10 @@
 import json
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 os.environ["azure_llm"] = json.dumps(
     {
         "azure_llm_api_key": os.getenv("AZURE_OPENAI_LLM_API_KEY"),
@@ -13,30 +17,28 @@ os.environ["azure_llm"] = json.dumps(
 
 os.environ["azure_embedding"] = json.dumps(
     {
-        "azure_embedding_api_key": os.getenv("AZURE_OPENAI_EMBEDDING_API_KEY"),
-        "azure_embedding_endpoint": os.getenv("AZURE_OPENAI_EMBEDDING_ENDPOINT"),
+        "azure_embedding_api_key": os.getenv("AZURE_EMBEDDING_API_KEY"),
+        "azure_embedding_endpoint": os.getenv("AZURE_EMBEDDING_ENDPOINT"),
         "azure_embedding_api_version": os.getenv("AZURE_EMBEDDING_API_VERSION"),
         "azure_embedding_deployment": os.getenv("AZURE_EMBEDDING_DEPLOYMENT"),
         "azure_embedding_model_name": os.getenv("AZURE_EMBEDDING_MODEL_NAME"),
     }
 )
 
-os.environ["azure_embedding_03_small"] = json.dumps(
+os.environ["azure_embedding_3_large"] = json.dumps(
     {
-        "azure_embedding_03_small_api_key": os.getenv(
-            "AZURE_EMBEDDING_03_SMALL_API_KEY"
+        "azure_embedding_3_large_api_key": os.getenv("AZURE_EMBEDDING_3_LARGE_API_KEY"),
+        "azure_embedding_3_large_endpoint": os.getenv(
+            "AZURE_EMBEDDING_3_LARGE_ENDPOINT"
         ),
-        "azure_embedding_03_small_endpoint": os.getenv(
-            "AZURE_EMBEDDING_03_SMALL_ENDPOINT"
+        "azure_embedding_3_large_api_version": os.getenv(
+            "AZURE_EMBEDDING_3_LARGE_API_VERSION"
         ),
-        "azure_embedding_03_small_api_version": os.getenv(
-            "AZURE_EMBEDDING_03_SMALL_API_VERSION"
+        "azure_embedding_3_large_deployment": os.getenv(
+            "AZURE_EMBEDDING_3_LARGE_DEPLOYMENT"
         ),
-        "azure_embedding_03_small_deployment": os.getenv(
-            "AZURE_EMBEDDING_03_SMALL_DEPLOYMENT"
-        ),
-        "azure_embedding_03_small_model_name": os.getenv(
-            "AZURE_EMBEDDING_03_SMALL_MODEL_NAME"
+        "azure_embedding_3_large_model_name": os.getenv(
+            "AZURE_EMBEDDING_3_LARGE_MODEL_NAME"
         ),
     }
 )

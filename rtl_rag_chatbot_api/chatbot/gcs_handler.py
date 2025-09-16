@@ -512,7 +512,7 @@ class GCSHandler:
                     file_info = json.loads(blob.download_as_bytes().decode("utf-8"))
                     if file_info.get("file_hash") == file_hash:
                         return file_info.get("file_id"), file_info.get(
-                            "embedding_type", "azure-03-small"
+                            "embedding_type", "azure-3-large"
                         )
             logging.info(f"No file found with hash: {file_hash}")
             return None, None

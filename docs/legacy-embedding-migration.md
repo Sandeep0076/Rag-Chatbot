@@ -2,13 +2,13 @@
 
 ## Overview
 
-This document describes the implementation of automatic legacy embedding migration for multi-file uploads in the RAG application. The system automatically detects when users upload files with mixed embedding types and migrates legacy `azure` embeddings to the current `azure-03-small` model to ensure consistency.
+This document describes the implementation of automatic legacy embedding migration for multi-file uploads in the RAG application. The system automatically detects when users upload files with mixed embedding types and migrates legacy `azure` embeddings to the current `azure-3-large` model to ensure consistency.
 
 The current implementation includes advanced parallel processing, intelligent migration context management, and enhanced resource optimization for handling hundreds of concurrent users efficiently.
 
 ## Problem Statement
 
-When users upload multiple files, some may have legacy `azure` embeddings while others have current `azure-03-small` embeddings. This creates inconsistency and potential issues in multi-file chat scenarios. The migration system ensures all files use the same embedding model.
+When users upload multiple files, some may have legacy `azure` embeddings while others have current `azure-3-large` embeddings. This creates inconsistency and potential issues in multi-file chat scenarios. The migration system ensures all files use the same embedding model.
 
 Additionally, the system must handle:
 - **Concurrent Processing**: Multiple files processed simultaneously for optimal performance
@@ -43,9 +43,9 @@ Additionally, the system must handle:
 
 | Scenario | File Types | Action | Result |
 |----------|------------|---------|---------|
-| **All New Files** | 3 new PDFs | Process normally | All files processed with `azure-03-small` |
-| **All Current** | 2 `azure-03-small` + 1 new | Skip existing, process new | 2 files skipped, 1 new file processed |
-| **Mixed Types** | 1 `azure` + 1 `azure-03-small` + 1 new | **Migrate legacy file**, skip current, process new | 1 file migrated, 1 skipped, 1 new processed |
+| **All New Files** | 3 new PDFs | Process normally | All files processed with `azure-3-large` |
+| **All Current** | 2 `azure-3-large` + 1 new | Skip existing, process new | 2 files skipped, 1 new file processed |
+| **Mixed Types** | 1 `azure` + 1 `azure-3-large` + 1 new | **Migrate legacy file**, skip current, process new | 1 file migrated, 1 skipped, 1 new processed |
 | **All Legacy** | 3 `azure` files | Skip migration | All files skipped (same type) |
 | **Migration Required** | Files need migration but not available | Return error | User must re-upload missing files |
 
@@ -84,18 +84,18 @@ Additionally, the system must handle:
 ## Usage Examples
 
 ### Scenario 1: Mixed Embedding Types
-- **User uploads**: file1.pdf (legacy azure), file2.pdf (azure-03-small), file3.pdf (new)
+- **User uploads**: file1.pdf (legacy azure), file2.pdf (azure-3-large), file3.pdf (new)
 - **Result**:
-  - file1.pdf migrated to azure-03-small with preserved usernames
+  - file1.pdf migrated to azure-3-large with preserved usernames
   - file2.pdf skipped (already current)
-  - file3.pdf processed normally with azure-03-small
+  - file3.pdf processed normally with azure-3-large
   - All files processed in parallel for optimal performance
 
 ### Scenario 2: All Current Embeddings
-- **User uploads**: file1.pdf (azure-03-small), file2.pdf (azure-03-small), file3.pdf (new)
+- **User uploads**: file1.pdf (azure-3-large), file2.pdf (azure-3-large), file3.pdf (new)
 - **Result**:
   - file1.pdf and file2.pdf skipped (already current)
-  - file3.pdf processed normally with azure-03-small
+  - file3.pdf processed normally with azure-3-large
   - No migration needed, optimal performance
 
 ### Scenario 3: Migration Required but Files Missing
@@ -111,7 +111,7 @@ Additionally, the system must handle:
 ### Environment Variables
 - **USE_FILE_HASH_DB**: Enable database lookup for file hashes (recommended: true)
 - **LEGACY_EMBEDDING_TYPE**: Legacy embedding type (default: "azure")
-- **NEW_EMBEDDING_TYPE**: Current embedding type (default: "azure-03-small")
+- **NEW_EMBEDDING_TYPE**: Current embedding type (default: "azure-3-large")
 - **DB_INSTANCE**: Database connection flag (required if USE_FILE_HASH_DB=true)
 - **DB_USERNAME**: Database username for file hash storage
 - **DB_PASSWORD**: Database password for file hash storage

@@ -1,7 +1,7 @@
 """
 Migration Handler for Legacy Embeddings
 
-This module handles the migration of legacy azure embeddings to azure-03-small
+This module handles the migration of legacy azure embeddings to azure-3-large
 embeddings based on the flowchart logic. It provides functionality to:
 1. Check file embedding types (database first, then GCS fallback)
 2. Classify files as legacy or new embedding types
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Constants for embedding types
 LEGACY_EMBEDDING_TYPE = "azure"
-NEW_EMBEDDING_TYPE = "azure-03-small"
+NEW_EMBEDDING_TYPE = "azure-3-large"
 
 
 class MigrationResult:
@@ -218,7 +218,7 @@ async def migrate_single_file_embedding(
         # TODO: Implement actual migration logic:
         # 1. Use usernames list to scope the migration if needed
         # 2. Delete old embeddings for all users
-        # 3. Create new embeddings with azure-03-small
+        # 3. Create new embeddings with azure-3-large
         # 4. Update database records
 
         # Dummy implementation for now
@@ -246,7 +246,7 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
     - If ALL files are new embeddings → NO migration (consistent state)
     - If ALL files are new → NO migration (no existing embeddings)
     - If MIX of legacy + new embeddings → Migrate legacy files
-    - If MIX of legacy + new files → Migrate legacy files (NEW FILES WILL CREATE azure-03-small!)
+    - If MIX of legacy + new files → Migrate legacy files (NEW FILES WILL CREATE azure-3-large!)
     - If MIX of new embeddings + new files → NO migration
 
     Args:
@@ -328,13 +328,13 @@ def decide_migration_files(file_infos: List[FileEmbeddingInfo]) -> Dict[str, Any
 
     elif legacy_count > 0 and (new_embedding_count > 0 or new_files_count > 0):
         # MIX: legacy files + (new embeddings OR new files) - migrate legacy files
-        # New files will create azure-03-small embeddings, creating mixed state
+        # New files will create azure-3-large embeddings, creating mixed state
         reason_parts = []
         if new_embedding_count > 0:
             reason_parts.append(f"{new_embedding_count} existing new-embedding files")
         if new_files_count > 0:
             reason_parts.append(
-                f"{new_files_count} new files (will create azure-03-small)"
+                f"{new_files_count} new files (will create azure-3-large)"
             )
 
         additional_info = " + ".join(reason_parts)
@@ -596,14 +596,14 @@ async def get_detailed_migration_file_info(
             detailed_info = {
                 "file_id": file_id,
                 "usernames": [],
-                "embedding_type": "azure-03-small",
+                "embedding_type": "azure-3-large",
                 "original_filename": file_id.replace("temp_", ""),
                 "source": "uploaded_file",  # New files are always from uploads
             }
             result["new_files"].append(detailed_info)
 
             logger.info(
-                f"New File ID: {file_id} - Will be processed with azure-03-small embeddings"
+                f"New File ID: {file_id} - Will be processed with azure-3-large embeddings"
             )
 
     # Create summary

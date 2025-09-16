@@ -82,7 +82,7 @@ The application requires several environment variables to be set. These are deta
 - **Migration System Variables**:
   - `USE_FILE_HASH_DB`: Enable database-based file hash lookup (recommended)
   - `LEGACY_EMBEDDING_TYPE`: Legacy embedding type (default: "azure")
-  - `NEW_EMBEDDING_TYPE`: Current embedding type (default: "azure-03-small")
+  - `NEW_EMBEDDING_TYPE`: Current embedding type (default: "azure-3-large")
 
 To set these variables, you can either export them in your shell or create a `.env` file in the project root.
 
@@ -177,9 +177,9 @@ The new migration system automatically detects and migrates legacy embeddings to
 
 | Scenario | File Types | Action |
 |----------|------------|---------|
-| **All New Files** | 3 new PDFs | Process normally with `azure-03-small` |
-| **All Current** | 2 `azure-03-small` + 1 new | Skip existing, process new file |
-| **Mixed Types** | 1 `azure` + 1 `azure-03-small` + 1 new | **Migrate legacy file**, skip current, process new |
+| **All New Files** | 3 new PDFs | Process normally with `azure-3-large` |
+| **All Current** | 2 `azure-3-large` + 1 new | Skip existing, process new file |
+| **Mixed Types** | 1 `azure` + 1 `azure-3-large` + 1 new | **Migrate legacy file**, skip current, process new |
 | **All Legacy** | 3 `azure` files | Skip migration (all same type) |
 
 ### Migration Flow
@@ -217,7 +217,7 @@ USE_FILE_HASH_DB=true
 
 # Legacy and current embedding types
 LEGACY_EMBEDDING_TYPE=azure
-NEW_EMBEDDING_TYPE=azure-03-small
+NEW_EMBEDDING_TYPE=azure-3-large
 ```
 
 ## Multi-File Support
