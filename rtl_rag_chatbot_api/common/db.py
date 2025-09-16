@@ -29,7 +29,7 @@ class FileInfo(Base):
     file_name = Column(
         String, nullable=True
     )  # Using the correct column name from database
-    embedding_type = Column(String, nullable=True, default="azure-03-small")
+    embedding_type = Column(String, nullable=True, default="azure-3-large")
     createdAt = Column(DateTime, nullable=False)
 
 
@@ -75,7 +75,7 @@ def insert_file_info_record(
     file_id: str,
     file_hash: str,
     filename: str = None,
-    embedding_type: str = "azure-03-small",
+    embedding_type: str = "azure-3-large",
 ) -> Dict[str, Any]:
     """
     Insert a new record into the FileInfo table.
@@ -85,7 +85,7 @@ def insert_file_info_record(
         file_id: The file ID
         file_hash: The file hash
         filename: The original filename (optional)
-        embedding_type: The embedding type to use (default: "azure-03-small")
+        embedding_type: The embedding type to use (default: "azure-3-large")
 
     Returns:
         Dict containing the result of the operation
@@ -370,7 +370,7 @@ def export_gcs_file_info_to_sql_text(
             file_hash = info.get("file_hash")
             # Map filename
             file_name_value = info.get("original_filename") or info.get("file_name")
-            embedding_type_value = info.get("embedding_type", "azure-03-small")
+            embedding_type_value = info.get("embedding_type", "azure-3-large")
 
             # Determine createdAt value
             created_at_str = info.get("embeddings_created_at")

@@ -90,7 +90,7 @@ class FileHandler:
         file_id: str,
         file_hash: str,
         filename: str = None,
-        embedding_type: str = "azure-03-small",
+        embedding_type: str = "azure-3-large",
     ):
         """
         Store file hash and filename in the database if the feature is enabled.
@@ -99,7 +99,7 @@ class FileHandler:
             file_id: The file ID
             file_hash: The file hash to store
             filename: The original filename to store (optional)
-            embedding_type: The embedding type to use (default: "azure-03-small")
+            embedding_type: The embedding type to use (default: "azure-3-large")
         """
         if self.use_file_hash_db:
             try:
@@ -348,7 +348,7 @@ class FileHandler:
 
         # Store file hash and filename in database if enabled for tabular files
         await self.store_file_hash_in_db(
-            file_id, file_hash, original_filename, "azure-03-small"
+            file_id, file_hash, original_filename, "azure-3-large"
         )
 
         return {

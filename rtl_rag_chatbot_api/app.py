@@ -2278,7 +2278,7 @@ async def create_embeddings_background(
                                 file_id,
                                 file_hash,
                                 original_filename,
-                                "azure-03-small",
+                                "azure-3-large",
                             )
                             if result["status"] == "success":
                                 logging.info(
@@ -4442,7 +4442,7 @@ async def insert_file_info(
     file_id: str = Form(...),
     file_hash: str = Form(...),
     filename: str = Form(None),
-    embedding_type: str = Form("azure-03-small"),
+    embedding_type: str = Form("azure-3-large"),
     current_user=Depends(get_current_user),
 ):
     """Insert a new record into the FileInfo table."""
@@ -4675,7 +4675,7 @@ async def _prepare_migration_file_for_pipeline(
                         file_id,
                         file_hash,
                         base_name,
-                        "azure-03-small",
+                        "azure-3-large",
                     )
     except Exception as _db_err:
         logging.warning(
