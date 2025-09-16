@@ -10,8 +10,14 @@
       - helm/chart/Chart.yaml
 
   # auto-deploy preprod from rc-* or release-* branches
-  - if: |
-      $CI_COMMIT_BRANCH =~ /^rc-.*|^release-.*/ && $MG_ENV == "preprod"
+  - if: '$CI_COMMIT_REF_NAME =~ /^rc-.*|^release-.*/ && $MG_ENV == "preprod"'
+    when: on_success
+    allow_failure: false
+    exists:
+      - helm/chart/Chart.yaml
+
+  # allow automatic deployment to preprod from git tags
+  - if: '$CI_COMMIT_TAG != null && $MG_ENV == "preprod"'
     when: on_success
     allow_failure: false
     exists:
