@@ -64,6 +64,7 @@ class GCPResourceConfig(BaseModel):
     gcp_project: str
     bucket_name: str
     embeddings_folder: str
+    gcp_embeddings_folder: str
 
 
 class GeminiConfig(BaseModel):

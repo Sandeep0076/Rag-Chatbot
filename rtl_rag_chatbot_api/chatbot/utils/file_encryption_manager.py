@@ -52,7 +52,7 @@ class FileEncryptionManager:
         # Check if encrypted file exists in GCS
         encrypted_file_exists = await asyncio.to_thread(
             self.gcs_handler.check_file_exists,
-            f"file-embeddings/{file_id}/{original_filename}.encrypted",
+            f"{self.gcs_handler.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/{original_filename}.encrypted",
         )
 
         if not encrypted_file_exists:
@@ -65,7 +65,10 @@ class FileEncryptionManager:
             if encrypted_file_path:
                 success = await self._upload_encrypted_file(
                     encrypted_file_path,
-                    f"file-embeddings/{file_id}/{original_filename}.encrypted",
+                    (
+                        f"{self.gcs_handler.configs.gcp_resource.gcp_embeddings_folder}/"
+                        f"{file_id}/{original_filename}.encrypted"
+                    ),
                     original_filename,
                 )
                 if success:
@@ -91,7 +94,7 @@ class FileEncryptionManager:
         if encrypted_file_path:
             success = await self._upload_encrypted_file(
                 encrypted_file_path,
-                f"file-embeddings/{file_id}/{file_name}.encrypted",
+                f"{self.gcs_handler.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/{file_name}.encrypted",
                 file_name,
             )
             return success, encrypted_file_path
@@ -141,7 +144,7 @@ class FileEncryptionManager:
                 file_id = path_parts[1]
 
                 # Check if there are any other encrypted files in this folder with different names
-                prefix = f"file-embeddings/{file_id}/"
+                prefix = f"{self.gcs_handler.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/"
                 blobs = list(self.gcs_handler.bucket.list_blobs(prefix=prefix))
 
                 for blob in blobs:

@@ -77,7 +77,7 @@ class GCSHandler:
         """Download files maintaining the original structure."""
         logging.info(f"=== Starting file download for file_id: {file_id} ===")
 
-        prefix = f"file-embeddings/{file_id}/"
+        prefix = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/"
         logging.info(f"GCS prefix: {prefix}")
 
         try:
@@ -248,7 +248,7 @@ class GCSHandler:
         Returns:
             Optional[str]: Path to the decrypted file if successful, None otherwise
         """
-        prefix = f"file-embeddings/{file_id}/"
+        prefix = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/"
         blobs = list(self.bucket.list_blobs(prefix=prefix))
 
         if not blobs:
@@ -327,7 +327,7 @@ class GCSHandler:
         """Upload files maintaining consistent folder structure."""
         try:
             base_path = f"./chroma_db/{file_id}/{embedding_type}"
-            gcs_base_path = f"file-embeddings/{file_id}/{embedding_type}"
+            gcs_base_path = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/{embedding_type}"
 
             # Upload embeddings
             files_to_upload = {}
@@ -390,7 +390,10 @@ class GCSHandler:
             blob_path (str): Path of the blob in GCS
         """
         local_path_parts = blob_path.split("/")
-        if len(local_path_parts) >= 3 and "file-embeddings" in blob_path:
+        if (
+            len(local_path_parts) >= 3
+            and (self.configs.gcp_resource.gcp_embeddings_folder) in blob_path
+        ):
             file_id = local_path_parts[1]
             filename = local_path_parts[-1]
             local_dir = f"./chroma_db/{file_id}"
@@ -418,7 +421,8 @@ class GCSHandler:
         # Handle file_info.json (both GCS upload and local storage)
         if (
             isinstance(source, dict)
-            and "file-embeddings" in destination_blob_name
+            and (self.configs.gcp_resource.gcp_embeddings_folder)
+            in destination_blob_name
             and destination_blob_name.endswith("/file_info.json")
         ):
             self._store_file_info_json_locally(destination_blob_name, source)
@@ -504,7 +508,8 @@ class GCSHandler:
 
             # Fallback to GCS lookup
             blobs = self._storage_client.list_blobs(
-                self.bucket_name, prefix="file-embeddings/"
+                self.bucket_name,
+                prefix=f"{self.configs.gcp_resource.gcp_embeddings_folder}/",
             )
 
             for blob in blobs:
@@ -521,13 +526,17 @@ class GCSHandler:
             return None, None
 
     def get_file_info(self, file_id: str):
-        blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
+        blob = self.bucket.blob(
+            f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json"
+        )
         if blob.exists():
             return json.loads(blob.download_as_bytes().decode("utf-8"))
         return {}
 
     def update_file_info(self, file_id: str, new_info: dict):
-        blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
+        blob = self.bucket.blob(
+            f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json"
+        )
         if blob.exists():
             current_info = json.loads(blob.download_as_bytes().decode("utf-8"))
 
@@ -610,7 +619,9 @@ class GCSHandler:
             file_id (str): The ID of the file to update
             username_list (list): The new list of usernames
         """
-        blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
+        blob = self.bucket.blob(
+            f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json"
+        )
         if blob.exists():
             # Get the current file info from GCS
             current_info = json.loads(blob.download_as_bytes().decode("utf-8"))
@@ -699,7 +710,7 @@ class GCSHandler:
             logging.info(f"Deleting embeddings for file_id: {file_id}")
 
             # Delete embeddings folder from GCS
-            prefix = f"file-embeddings/{file_id}/"
+            prefix = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/"
             blobs = self.bucket.list_blobs(prefix=prefix)
 
             for blob in blobs:
@@ -765,7 +776,7 @@ class GCSHandler:
         Returns:
             Optional[str]: The file_id if found, None otherwise
         """
-        prefix = "file-embeddings/"
+        prefix = f"{self.configs.gcp_resource.gcp_embeddings_folder}/"
         for blob in self.bucket.list_blobs(prefix=prefix):
             if blob.name.endswith("file_info.json"):
                 try:
@@ -806,7 +817,7 @@ class GCSHandler:
                 return file_info.get("embeddings_status", "in_progress")
 
             # Check if there are any blobs in the file-embeddings directory
-            prefix = f"file-embeddings/{file_id}/"
+            prefix = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/"
             blobs = list(self.bucket.list_blobs(prefix=prefix, max_results=1))
             if blobs:
                 # If there are blobs but no file_info.json, assume embeddings are in progress

@@ -79,5 +79,6 @@ os.environ["gcp_resource"] = json.dumps(
         "gcp_project": os.getenv("GCP_PROJECT"),
         "bucket_name": os.getenv("BUCKET_NAME"),
         "embeddings_folder": os.getenv("EMBEDDINGS_FOLDER", "embeddings_folder/"),
+        "gcp_embeddings_folder": os.getenv("GCP_EMBEDDINGS_FOLDER", "file-embeddings"),
     }
 )
