@@ -179,7 +179,9 @@ class EmbeddingHandler:
                 return True, True, True
 
             # Check GCS Azure embeddings only
-            azure_gcs_prefix = f"file-embeddings/{file_id}/azure/"
+            azure_gcs_prefix = (
+                f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/azure/"
+            )
 
             azure_blobs = list(
                 self.gcs_handler.bucket.list_blobs(prefix=azure_gcs_prefix)
@@ -739,7 +741,9 @@ class EmbeddingHandler:
                     logging.warning(f"Error reading local file_info.json: {str(e)}")
 
             # If no valid local embeddings or status, check GCS as fallback
-            gcs_prefix = f"file-embeddings/{file_id}/azure/"
+            gcs_prefix = (
+                f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/azure/"
+            )
             blobs = list(self.gcs_handler.bucket.list_blobs(prefix=gcs_prefix))
 
             gcs_embeddings_exist = len(blobs) > 0 and any(
@@ -880,7 +884,7 @@ class EmbeddingHandler:
                 {
                     "metadata": (
                         file_info,
-                        f"file-embeddings/{file_id}/file_info.json",
+                        f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json",
                     )
                 },
             )
@@ -909,7 +913,7 @@ class EmbeddingHandler:
                         try:
                             local_path = os.path.join(root, file)
                             relative_path = os.path.relpath(local_path, "./chroma_db")
-                            gcs_path = f"file-embeddings/{relative_path}"
+                            gcs_path = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{relative_path}"
 
                             # Upload each file individually
                             self.gcs_handler.upload_to_gcs(
@@ -1358,7 +1362,7 @@ class EmbeddingHandler:
     def get_embeddings_info(self, file_id: str):
         # Retrieve embeddings info from GCS
         try:
-            info_blob_name = f"file-embeddings/{file_id}/file_info.json"
+            info_blob_name = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json"
             blob = self.gcs_handler.bucket.blob(info_blob_name)
             if blob.exists():
                 content = blob.download_as_text()
@@ -1485,7 +1489,10 @@ class EmbeddingHandler:
                         self.gcs_handler.upload_to_gcs(
                             self.configs.gcp_resource.bucket_name,
                             source=encrypted_db_path,
-                            destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db.encrypted",
+                            destination_blob_name=(
+                                f"{self.configs.gcp_resource.gcp_embeddings_folder}/"
+                                f"{file_id}/tabular_data.db.encrypted"
+                            ),
                         )
                     finally:
                         if os.path.exists(encrypted_db_path):
@@ -1512,7 +1519,7 @@ class EmbeddingHandler:
                         {
                             "metadata": (
                                 metadata,
-                                f"file-embeddings/{file_id}/file_info.json",
+                                f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json",
                             )
                         },
                     )

@@ -570,7 +570,9 @@ class BaseRAGHandler:
     def upload_embeddings_to_gcs(self, file_id: str, subfolder: str):
         """Upload embeddings to Google Cloud Storage."""
         chroma_db_path = f"./chroma_db/{file_id}/{subfolder}"
-        gcs_subfolder = f"file-embeddings/{file_id}/{subfolder}"
+        gcs_subfolder = (
+            f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/{subfolder}"
+        )
 
         files_to_upload = {}
         for file in Path(chroma_db_path).rglob("*"):

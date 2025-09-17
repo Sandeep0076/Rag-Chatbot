@@ -328,10 +328,13 @@ class FileHandler:
             encrypted_db_path = await asyncio.to_thread(encrypt_file, db_path)
             try:
                 files_to_upload = {
-                    "metadata": (metadata, f"file-embeddings/{file_id}/file_info.json"),
+                    "metadata": (
+                        metadata,
+                        f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json",
+                    ),
                     "database": (
                         encrypted_db_path,
-                        f"file-embeddings/{file_id}/tabular_data.db.encrypted",
+                        f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/tabular_data.db.encrypted",
                     ),
                 }
                 await asyncio.to_thread(
@@ -1130,7 +1133,7 @@ class FileHandler:
             return actual_file_id, encrypted_file_path, metadata
 
         # For non-tabular files, check if there's already a different file in this directory
-        prefix = f"file-embeddings/{actual_file_id}/"
+        prefix = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{actual_file_id}/"
         has_conflict = False
 
         blobs = await asyncio.to_thread(

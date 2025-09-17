@@ -312,7 +312,11 @@ class SharePointHandler:
         """
         try:
             # List all blobs with the file_info.json pattern
-            blobs = list(self.gcs_handler.bucket.list_blobs(prefix="file-embeddings/"))
+            blobs = list(
+                self.gcs_handler.bucket.list_blobs(
+                    prefix=f"{self.configs.gcp_resource.gcp_embeddings_folder}/"
+                )
+            )
             file_info_blobs = [b for b in blobs if b.name.endswith("file_info.json")]
 
             for blob in file_info_blobs:

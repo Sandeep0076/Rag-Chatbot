@@ -104,7 +104,11 @@ combined_image_handler = CombinedImageGenerator(configs, dalle_handler, imagen_h
 if configs.use_file_hash_db:
     if os.getenv("DB_INSTANCE"):
         logging.info("Using DB_INSTANCE env variable to connect to database")
-        DATABASE_URL = f"postgresql://{os.getenv('DB_USERNAME')}:{os.getenv('DB_PASSWORD')}@127.0.0.1:5432/chatbot_ui"
+        DATABASE_URL = (
+            f"postgresql://{os.getenv('DB_USERNAME')}:"
+            f"{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST', '127.0.0.1')}:"
+            f"{os.getenv('DB_PORT', '5432')}/chatbot_ui"
+        )
         engine = create_engine(DATABASE_URL)
         SessionLocal = sessionmaker(bind=engine)
     else:
@@ -295,7 +299,11 @@ def get_db_session():
     Returns:
         Session: SQLAlchemy session.
     """
-    DATABASE_URL = f"postgresql://{os.getenv('DB_USERNAME')}:{os.getenv('DB_PASSWORD')}@127.0.0.1:5432/chatbot_ui"
+    DATABASE_URL = (
+        f"postgresql://{os.getenv('DB_USERNAME')}:"
+        f"{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST', '127.0.0.1')}:"
+        f"{os.getenv('DB_PORT', '5432')}/chatbot_ui"
+    )
     engine = create_engine(DATABASE_URL)
     Session = sessionmaker(bind=engine)
 
@@ -581,7 +589,7 @@ def process_tabular_file(
         {
             "metadata": (
                 file_metadata,
-                f"file-embeddings/{file_id}/file_info.json",
+                f"{configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json",
             )
         },
     )
@@ -1519,7 +1527,10 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
             gcs_handler.upload_to_gcs(
                 configs.gcp_resource.bucket_name,
                 source=encrypted_db_path,
-                destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db.encrypted",
+                destination_blob_name=(
+                    f"{configs.gcp_resource.gcp_embeddings_folder}/"
+                    f"{file_id}/tabular_data.db.encrypted"
+                ),
             )
         finally:
             # Clean up encrypted file
@@ -1540,7 +1551,7 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
             {
                 "metadata": (
                     metadata,
-                    f"file-embeddings/{file_id}/file_info.json",
+                    f"{configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json",
                 )
             },
         )
@@ -1562,7 +1573,7 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
                 {
                     "metadata": (
                         metadata,
-                        f"file-embeddings/{file_id}/file_info.json",
+                        f"{configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json",
                     )
                 },
             )
