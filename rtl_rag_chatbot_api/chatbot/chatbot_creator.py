@@ -406,11 +406,12 @@ class AzureChatbot(BaseRAGHandler):
                 completion_params[
                     "presence_penalty"
                 ] = self.configs.llm_hyperparams.presence_penalty
-                # Use env-provided values if available, else defaults proven to work
-                completion_params["reasoning_effort"] = (
-                    configured_reasoning_effort or "minimal"
-                )
-                completion_params["verbosity"] = configured_verbosity or "medium"
+                # 'reasoning_effort' and 'verbosity' are only supported by GPT-5 family, not by O4/O3
+                if any(term in deployment_lower for term in ["gpt-5", "gpt_5"]):
+                    completion_params["reasoning_effort"] = (
+                        configured_reasoning_effort or "minimal"
+                    )
+                    completion_params["verbosity"] = configured_verbosity or "medium"
                 # Do NOT include 'stop' for GPT-5/O-series models
             else:
                 # Regular OpenAI models
@@ -529,11 +530,12 @@ def get_azure_non_rag_response(
             completion_params[
                 "presence_penalty"
             ] = configs.llm_hyperparams.presence_penalty
-            # Use env-provided values if available, else defaults proven to work
-            completion_params["reasoning_effort"] = (
-                configured_reasoning_effort or "minimal"
-            )
-            completion_params["verbosity"] = configured_verbosity or "medium"
+            # 'reasoning_effort' and 'verbosity' are only supported by GPT-5 family, not by O4/O3
+            if any(term in deployment_lower for term in ["gpt-5", "gpt_5"]):
+                completion_params["reasoning_effort"] = (
+                    configured_reasoning_effort or "minimal"
+                )
+                completion_params["verbosity"] = configured_verbosity or "medium"
             # Do NOT include 'stop' for GPT-5/O-series models
         else:
             # Regular models: Use all standard parameters
