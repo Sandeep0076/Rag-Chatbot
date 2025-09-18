@@ -107,7 +107,7 @@ if configs.use_file_hash_db:
         DATABASE_URL = (
             f"postgresql://{os.getenv('DB_USERNAME')}:"
             f"{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST', '127.0.0.1')}:"
-            f"{os.getenv('DB_PORT', '5433')}/chatbot_ui"
+            f"{os.getenv('DB_PORT', '5432')}/chatbot_ui"
         )
         engine = create_engine(DATABASE_URL)
         SessionLocal = sessionmaker(bind=engine)
@@ -302,7 +302,7 @@ def get_db_session():
     DATABASE_URL = (
         f"postgresql://{os.getenv('DB_USERNAME')}:"
         f"{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST', '127.0.0.1')}:"
-        f"{os.getenv('DB_PORT', '5433')}/chatbot_ui"
+        f"{os.getenv('DB_PORT', '5432')}/chatbot_ui"
     )
     engine = create_engine(DATABASE_URL)
     Session = sessionmaker(bind=engine)
