@@ -236,7 +236,15 @@ class FileHandler:
 
         # Prepare SQLite database
         data_preparer = PrepareSQLFromTabularData(temp_file_path, data_dir)
-        data_preparer.run_pipeline()
+        pipeline_success = data_preparer.run_pipeline()
+
+        # Check if pipeline failed
+        if not pipeline_success:
+            logging.error(f"Failed to prepare database from file: {original_filename}")
+            raise ValueError(
+                f"Failed to process tabular file: {original_filename}. "
+                f"The file may be corrupted, empty, or in an unsupported format."
+            )
 
         # Extract database_summary directly without using TabularDataHandler
         try:
@@ -311,9 +319,31 @@ class FileHandler:
                     }
                 )
 
+            # Validate that the database has valid tables with data
+            if len(table_info) == 0:
+                logging.error(
+                    f"No tables found in the database for file: {original_filename}"
+                )
+                raise ValueError(
+                    f"No tables found in the database for file: {original_filename}. "
+                    f"The file may be empty or corrupted."
+                )
+
+            # Check if all tables are empty
+            total_rows = sum(table["row_count"] for table in table_info)
+            if total_rows == 0:
+                logging.error(
+                    f"All tables are empty in the database for file: {original_filename}"
+                )
+                raise ValueError(
+                    f"All tables are empty in the database for file: {original_filename}. "
+                    f"Please check if the file contains valid data."
+                )
+
             metadata["database_summary"] = database_summary
             logging.info(
-                f"Successfully extracted database_summary with {len(table_info)} tables"
+                f"Successfully extracted database_summary with {len(table_info)} tables "
+                f"and {total_rows} total rows"
             )
 
         except Exception as e:
@@ -321,6 +351,15 @@ class FileHandler:
                 f"Failed to extract database_summary for new file: {str(e)}",
                 exc_info=True,
             )
+            # Re-raise the exception to prevent continuing with invalid data
+            if isinstance(e, ValueError):
+                # Re-raise ValueError as-is (our validation errors)
+                raise
+            else:
+                # Wrap other exceptions with a descriptive message
+                raise ValueError(
+                    f"Failed to analyze database structure for file: {original_filename}. {str(e)}"
+                )
 
         # Upload metadata and encrypted database
         try:
@@ -467,12 +506,34 @@ class FileHandler:
                             }
                         )
 
+                    # Validate that the database has valid tables with data
+                    if len(table_info) == 0:
+                        logging.error(
+                            f"No tables found in the existing database for file_id: {existing_file_id}"
+                        )
+                        raise ValueError(
+                            f"No tables found in the existing database for file_id: {existing_file_id}. "
+                            f"The database may be corrupted."
+                        )
+
+                    # Check if all tables are empty
+                    total_rows = sum(table["row_count"] for table in table_info)
+                    if total_rows == 0:
+                        logging.error(
+                            f"All tables are empty in the existing database for file_id: {existing_file_id}"
+                        )
+                        raise ValueError(
+                            f"All tables are empty in the existing database for file_id: {existing_file_id}. "
+                            f"Please check if the database contains valid data."
+                        )
+
                     # Update file_info.json with database_summary
                     update_data = {"database_summary": database_summary}
 
                     self.gcs_handler.update_file_info(existing_file_id, update_data)
                     logging.info(
-                        f"Added database_summary to existing file_info.json with {len(table_info)} tables"
+                        f"Added database_summary to existing file_info.json with {len(table_info)} tables "
+                        f"and {total_rows} total rows"
                     )
 
                 except Exception as e:
@@ -480,6 +541,16 @@ class FileHandler:
                         f"Failed to extract database_summary for existing file: {str(e)}",
                         exc_info=True,
                     )
+                    # Re-raise validation errors for corrupted databases
+                    if isinstance(e, ValueError):
+                        raise
+                    else:
+                        # Log other errors but don't fail the entire process for existing files
+                        # as they may have been processed with older versions
+                        logging.warning(
+                            f"Could not extract database summary for existing file {existing_file_id}, "
+                            f"continuing anyway"
+                        )
 
             # Return success directly - we've already extracted the database summary if needed
             # No need to initialize TabularDataHandler which might fail

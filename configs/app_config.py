@@ -31,6 +31,7 @@ class AzureEmbedding3LargeConfig(BaseModel):
     azure_embedding_3_large_api_version: str
     azure_embedding_3_large_deployment: str
     azure_embedding_3_large_model_name: str
+    embedding_dimension: Optional[int] = 3072
 
 
 class LLMHyperParams(BaseModel):
