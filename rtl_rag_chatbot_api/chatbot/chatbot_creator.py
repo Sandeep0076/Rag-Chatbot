@@ -196,31 +196,18 @@ class AzureChatbot(BaseRAGHandler):
                     text_item if isinstance(text_item, str) else " ".join(text_item)
                 )
                 if not current_text.strip():  # Handle empty strings
+                    # OpenAI API errors on empty strings, return zero vector or skip
+                    # Default dimension for both models (ada-002: 1536, text-embedding-3-large: 1536)
                     logging.warning(
                         "Empty string encountered in get_embeddings, returning zero vector."
                     )
-                    dim = (
-                        getattr(
-                            self.configs.azure_embedding_3_large,
-                            "embedding_dimension",
-                            3072,
-                        )
-                        or 3072
-                    )
-                    batch_embeddings.append([0.0] * int(dim))
+                    batch_embeddings.append(
+                        [0.0] * 1536
+                    )  # Both models use 1536 dimensions
                     continue
-                dim = (
-                    getattr(
-                        self.configs.azure_embedding_3_large,
-                        "embedding_dimension",
-                        3072,
-                    )
-                    or 3072
-                )
                 response = embedding_client.embeddings.create(
                     model=deployment,
                     input=current_text,
-                    dimensions=int(dim),
                 )
                 batch_embeddings.append(response.data[0].embedding)
             return batch_embeddings
