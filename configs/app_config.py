@@ -58,6 +58,7 @@ class ChatbotConfig(BaseModel):
     max_chunk_overlap: float
     chunk_size_limit: int
     n_neighbours: int
+    default_embedding_type: str = "azure-3-large"
 
 
 class GCPResourceConfig(BaseModel):

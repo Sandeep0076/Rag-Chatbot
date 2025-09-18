@@ -107,7 +107,7 @@ if configs.use_file_hash_db:
         DATABASE_URL = (
             f"postgresql://{os.getenv('DB_USERNAME')}:"
             f"{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST', '127.0.0.1')}:"
-            f"{os.getenv('DB_PORT', '5432')}/chatbot_ui"
+            f"{os.getenv('DB_PORT', '5433')}/chatbot_ui"
         )
         engine = create_engine(DATABASE_URL)
         SessionLocal = sessionmaker(bind=engine)
@@ -302,7 +302,7 @@ def get_db_session():
     DATABASE_URL = (
         f"postgresql://{os.getenv('DB_USERNAME')}:"
         f"{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST', '127.0.0.1')}:"
-        f"{os.getenv('DB_PORT', '5432')}/chatbot_ui"
+        f"{os.getenv('DB_PORT', '5433')}/chatbot_ui"
     )
     engine = create_engine(DATABASE_URL)
     Session = sessionmaker(bind=engine)
@@ -2289,7 +2289,8 @@ async def create_embeddings_background(
                                 file_id,
                                 file_hash,
                                 original_filename,
-                                "azure-3-large",
+                                None,  # Use configurable default
+                                configs,
                             )
                             if result["status"] == "success":
                                 logging.info(
@@ -4453,7 +4454,7 @@ async def insert_file_info(
     file_id: str = Form(...),
     file_hash: str = Form(...),
     filename: str = Form(None),
-    embedding_type: str = Form("azure-3-large"),
+    embedding_type: str = Form(None),
     current_user=Depends(get_current_user),
 ):
     """Insert a new record into the FileInfo table."""
@@ -4471,7 +4472,7 @@ async def insert_file_info(
     # Use the context manager properly
     with get_db_session() as db:
         result = insert_file_info_record(
-            db, file_id, file_hash, filename, embedding_type
+            db, file_id, file_hash, filename, embedding_type, configs
         )
 
         if result["status"] == "success":
@@ -4686,7 +4687,8 @@ async def _prepare_migration_file_for_pipeline(
                         file_id,
                         file_hash,
                         base_name,
-                        "azure-3-large",
+                        None,  # Use configurable default
+                        configs,
                     )
     except Exception as _db_err:
         logging.warning(

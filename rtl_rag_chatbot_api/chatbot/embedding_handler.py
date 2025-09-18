@@ -116,7 +116,7 @@ class EmbeddingHandler:
             "embeddings_ready": azure_result.get("success", False),
             "file_id": file_id,  # Ensure file_id consistency
             "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
-            "embedding_type": "azure-3-large",  # Use new text-embedding-3-large for new uploads
+            "embedding_type": self.configs.chatbot.default_embedding_type,  # Use configurable default embedding type
         }
 
         # Ensure critical fields are present
@@ -1545,7 +1545,9 @@ class EmbeddingHandler:
             )
             file_metadata["file_id"] = file_id
             file_metadata["migrated"] = True
-            file_metadata["embedding_type"] = "azure-3-large"
+            file_metadata[
+                "embedding_type"
+            ] = self.configs.chatbot.default_embedding_type
 
             result = await self.create_embeddings(
                 file_id=file_id,

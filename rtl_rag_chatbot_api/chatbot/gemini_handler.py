@@ -297,8 +297,10 @@ class GeminiHandler(BaseRAGHandler):
                 and file_id in self.all_file_infos
             ):
                 file_info_data = self.all_file_infos[file_id]
-                embedding_type = file_info_data.get("embedding_type", "azure-3-large")
-                # For tabular files (no embedding_type), explicitly use new embedding
+                embedding_type = file_info_data.get(
+                    "embedding_type", self.configs.chatbot.default_embedding_type
+                )
+                # For tabular files (no embedding_type), explicitly use configurable default embedding
                 if file_info_data.get("is_tabular", False):
                     embedding_type = "azure-3-large"
                     import logging
@@ -316,19 +318,20 @@ class GeminiHandler(BaseRAGHandler):
                     with open(local_info_path, "r") as f:
                         file_info_data = json.load(f)
                         embedding_type = file_info_data.get(
-                            "embedding_type", "azure-3-large"
+                            "embedding_type",
+                            self.configs.chatbot.default_embedding_type,
                         )
-                        # For tabular files (no embedding_type), explicitly use new embedding
+                        # For tabular files (no embedding_type), explicitly use configurable default embedding
                         if file_info_data.get("is_tabular", False):
-                            embedding_type = "azure-3-large"
+                            embedding_type = self.configs.chatbot.default_embedding_type
                             import logging
 
                             logging.info(
-                                f"Tabular file {file_id} detected, using text-embedding-3-large"
+                                f"Tabular file {file_id} detected, using {embedding_type}"
                             )
                 else:
-                    # Default to new embedding for files without info
-                    embedding_type = "azure-3-large"
+                    # Default to configurable embedding for files without info
+                    embedding_type = self.configs.chatbot.default_embedding_type
 
             # Return appropriate client and deployment based on embedding_type
             import logging
