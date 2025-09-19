@@ -70,6 +70,38 @@ def find_file_by_hash_db(session: Session, file_hash: str) -> Optional[tuple[str
         return None
 
 
+def find_embedding_type_by_file_id(session: Session, file_id: str) -> Optional[str]:
+    """
+    Find embedding_type by file_id from database.
+
+    Args:
+        session: Database session
+        file_id: The file ID to search for
+
+    Returns:
+        embedding_type if found, None otherwise
+    """
+    try:
+        record = (
+            session.query(FileInfo.embedding_type)
+            .filter(FileInfo.file_id == file_id)
+            .order_by(FileInfo.createdAt.desc())
+            .first()
+        )
+        if not record:
+            return None
+
+        # SQLAlchemy may return a Row or a tuple depending on version/query style
+        return getattr(
+            record,
+            "embedding_type",
+            record[0] if isinstance(record, (tuple, list)) else None,
+        )
+    except Exception as e:
+        logging.error(f"Error finding embedding_type by file_id in database: {e}")
+        return None
+
+
 def insert_file_info_record(
     session: Session,
     file_id: str,
