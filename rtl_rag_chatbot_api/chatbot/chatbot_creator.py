@@ -204,9 +204,12 @@ class AzureChatbot(BaseRAGHandler):
                     logging.warning(
                         "Empty string encountered in get_embeddings, returning zero vector."
                     )
-                    batch_embeddings.append(
-                        [0.0] * 1536
-                    )  # Both models use 1536 dimensions
+                    dims_by_deployment = {
+                        "text-embedding-ada-002": 1536,
+                        "text-embedding-3-large": 3072,
+                    }
+                    zero_dim = dims_by_deployment.get(deployment, 3072)
+                    batch_embeddings.append([0.0] * zero_dim)
                     continue
                 response = embedding_client.embeddings.create(
                     model=deployment,
