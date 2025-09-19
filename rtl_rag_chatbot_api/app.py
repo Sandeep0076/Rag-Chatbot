@@ -2841,6 +2841,22 @@ async def _process_single_file(query: Query, gcs_handler: GCSHandler) -> Dict[st
                 " Please try uploading/selecting a different file.",
             )
 
+    # Ensure embedding_type is populated from DB (fast path) if available
+    try:
+        if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
+            from rtl_rag_chatbot_api.common.db import find_embedding_type_by_file_id
+
+            with get_db_session() as db_session:
+                embedding_type_from_db = find_embedding_type_by_file_id(
+                    db_session, query.file_id
+                )
+                if embedding_type_from_db:
+                    file_info_single["embedding_type"] = embedding_type_from_db
+    except Exception as e:
+        logging.warning(
+            f"Failed to enrich embedding_type from DB for {query.file_id}: {e}"
+        )
+
     all_file_infos = {query.file_id: file_info_single}
     model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
 
@@ -3088,6 +3104,26 @@ async def _process_multi_files(query: Query, gcs_handler: GCSHandler) -> Dict[st
 
     # Get file info for all files
     all_file_infos = await _get_file_info_multi(query.file_ids, gcs_handler)
+
+    # Enrich each file's embedding_type from DB when available (fast path)
+    try:
+        if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
+            from rtl_rag_chatbot_api.common.db import find_embedding_type_by_file_id
+
+            with get_db_session() as db_session:
+                for _fid in query.file_ids:
+                    if _fid in all_file_infos:
+                        embedding_type_from_db = find_embedding_type_by_file_id(
+                            db_session, _fid
+                        )
+                        if embedding_type_from_db:
+                            all_file_infos[_fid][
+                                "embedding_type"
+                            ] = embedding_type_from_db
+    except Exception as e:
+        logging.warning(
+            f"Failed to enrich embedding_type from DB for multi-file request {query.file_ids}: {e}"
+        )
 
     # Determine if the query is tabular
     is_tabular = await _determine_tabular_status(tabular_files, non_tabular_files)
