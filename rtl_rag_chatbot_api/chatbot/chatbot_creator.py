@@ -112,9 +112,37 @@ class AzureChatbot(BaseRAGHandler):
                 and file_id in self.all_file_infos
             ):
                 file_info_data = self.all_file_infos[file_id]
-                embedding_type = file_info_data.get(
-                    "embedding_type", self.configs.chatbot.default_embedding_type
-                )
+
+                # ZL
+                # last chance, check embedding type in database entry
+                from rtl_rag_chatbot_api.app import get_db_session
+                from rtl_rag_chatbot_api.common.db import get_embedding_type_by_file_id
+
+                if self.configs.use_file_hash_db:
+                    try:
+                        with get_db_session() as db_session:
+                            # take embedding type from database if available
+                            embedding_type = get_embedding_type_by_file_id(
+                                db_session, file_id
+                            )
+
+                            if embedding_type:
+                                logging.info(
+                                    f"Found embedding_type '{embedding_type}' in database for file with hash {file_id}"
+                                )
+
+                    except Exception as e:
+                        logging.warning(
+                            f"Database lookup for embedding_type failed for file with hash {file_id}: {e}"
+                        )
+                        pass
+
+                if not embedding_type:
+                    # Default to configurable embedding for files without info
+                    embedding_type = file_info_data.get(
+                        "embedding_type", self.configs.chatbot.default_embedding_type
+                    )
+
                 # For tabular files (no embedding_type), explicitly use configurable default embedding
                 if file_info_data.get("is_tabular", False):
                     embedding_type = "azure-3-large"
