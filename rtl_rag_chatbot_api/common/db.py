@@ -70,6 +70,36 @@ def find_file_by_hash_db(session: Session, file_hash: str) -> Optional[tuple[str
         return None
 
 
+def get_embedding_type_by_file_id(session: Session, file_id: str) -> Optional[str]:
+    """
+    Get embedding_type by file_id from database.
+
+    Args:
+        session: Database session
+        file_id: The file ID to search for
+
+    Returns:
+        Optional[str]: The embedding type if found, None otherwise
+    """
+    try:
+        logging.info(f"Looking up embedding_type for file_id '{file_id}' in database")
+        result = (
+            session.query(FileInfo.embedding_type)
+            .filter(FileInfo.file_id == file_id)
+            .first()
+        )
+
+        if result:
+            logging.info(f"Found embedding_type '{result[0]}' for file_id '{file_id}'")
+            return result[0] if result else None
+        else:
+            logging.info(f"No embedding_type found for file_id '{file_id}'")
+            return None
+    except Exception as e:
+        logging.error(f"Error getting embedding_type by file_id from database: {e}")
+        return None
+
+
 def insert_file_info_record(
     session: Session,
     file_id: str,
