@@ -94,6 +94,10 @@ class AzureChatbot(BaseRAGHandler):
 
     def _get_embedding_config_for_file(self, file_id: str = None):
         """Get the appropriate embedding client and deployment based on file's embedding_type"""
+
+        # TODO ZL: this has to go to BaseRAGHandler or a common utility, since this class inherits from it
+        # and the functionality is same as in gemini_handler.py
+
         # Default to new embedding for new files
         default_client = self.embedding_client_03
         default_deployment = (
@@ -116,7 +120,7 @@ class AzureChatbot(BaseRAGHandler):
                 file_info_data = self.all_file_infos[file_id]
 
                 # ZL
-                # last chance, check embedding type in database entry
+                # first check embedding type in database entry
                 from rtl_rag_chatbot_api.app import get_db_session
                 from rtl_rag_chatbot_api.common.db import get_embedding_type_by_file_id
 
