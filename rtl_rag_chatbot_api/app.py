@@ -4717,19 +4717,16 @@ async def generate_chat_title(
             TITLE_GENERATION_PROMPT + "\n\n" + json.dumps(request.conversation)
         )
 
-        # Use specified model or default to gpt_4_1_nano
-        model_choice = "gpt_4_1_nano"
-
         logging.info(
             f"Generating title for conversation with {len(request.conversation)}"
-            f"messages using {model_choice}"
+            f"messages using {request.model_choice}"
         )
 
         # Call Azure OpenAI to generate the title
         response = get_azure_non_rag_response(
             configs=configs,
             query=full_prompt,
-            model_choice=model_choice,
+            model_choice=request.model_choice,
             max_tokens=100,  # Limit tokens for title generation
         )
 
