@@ -307,20 +307,23 @@ class GeminiHandler(BaseRAGHandler):
                 # ZL
                 # first check embedding type in database entry
                 from rtl_rag_chatbot_api.app import get_db_session
-                from rtl_rag_chatbot_api.common.db import get_embedding_type_by_file_id
+                from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
 
+                embedding_type = None
                 if self.configs.use_file_hash_db:
                     try:
                         with get_db_session() as db_session:
+                            # AIP-1060, https://rtldata.atlassian.net/browse/AIP-1060
                             # take embedding type from database if available
-                            embedding_type = get_embedding_type_by_file_id(
-                                db_session, file_id
-                            )
+                            record = get_file_info_by_file_id(db_session, file_id)
 
-                            if embedding_type:
+                            if record and record.embedding_type:
                                 logging.info(
-                                    f"Found embedding_type '{embedding_type}' in database for file with hash {file_id}"
+                                    f"Found embedding_type '{record.embedding_type}' in database "
+                                    f"for file with hash {record.file_hash}"
                                 )
+
+                                embedding_type = record.embedding_type
 
                     except Exception as e:
                         logging.warning(

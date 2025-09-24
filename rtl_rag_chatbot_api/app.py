@@ -2402,6 +2402,10 @@ async def check_embeddings(
 
         # Create summary statistics
         all_exist = all(r["embeddings_exist"] for r in results)
+        all_legacy = all(r["model_type"] == "azure" for r in results)
+        all_new = all(r["model_type"] != "azure" for r in results)
+        has_one_legacy_model = any(r["model_type"] == "azure" for r in results)
+
         total_files = len(results)
         existing_files = sum(1 for r in results if r["embeddings_exist"])
 
@@ -2417,7 +2421,14 @@ async def check_embeddings(
                 "total_files": total_files,
                 "files_with_embeddings": existing_files,
                 "files_missing_embeddings": total_files - existing_files,
-                "all_files_ready": all_exist,
+                # AIP-1066, https://rtldata.atlassian.net/browse/AIP-1066
+                # if there are multiple files, we require all to be non-legacy.
+                # if there is one single file, we allow legacy model_type "azure"
+                "all_files_ready": (
+                    (all_legacy or all_new or (all_exist and not has_one_legacy_model))
+                    if total_files > 1
+                    else all_exist
+                ),
                 "model_choice": request.model_choice,
             },
         }
@@ -2888,6 +2899,7 @@ async def _check_file_embeddings(
             processed_results.append(
                 {
                     "file_id": file_id,
+                    "file_name": None,
                     "embeddings_exist": False,
                     "error": str(result),
                     "model_type": "azure",
