@@ -2407,13 +2407,24 @@ async def check_embeddings(
         has_one_legacy_model = any(r["model_type"] == "azure" for r in results)
 
         total_files = len(results)
+
+        if len(results) > 1 and not all_legacy and has_one_legacy_model:
+            results = list(
+                map(
+                    lambda r: {**r, "embeddings_exist": False}
+                    if r["model_type"] == "azure"
+                    else r,
+                    results,
+                )
+            )
+
         existing_files = sum(1 for r in results if r["embeddings_exist"])
 
         # AIP-923: this is a hotfix, so that the client can process the return
         # Currently the client accepts status 400 and a list of all embeddings with status
-        if existing_files != total_files:
-            # looks like at least one is missing
-            return JSONResponse(status_code=400, content=results)
+        # if existing_files != total_files:
+        # looks like at least one is missing
+        # return JSONResponse(status_code=400, content=results)
 
         return {
             "results": results,
