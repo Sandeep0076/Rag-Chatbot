@@ -3427,8 +3427,21 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         logging.info(f"Graphic generation flag: {generate_visualization}")
         logging.info(f"For {file_id_logging}")
 
-        # Chat endpoint must be fast: no migration or DB lookups here. Upload and
-        # status/check endpoints handle migration and DB enrichment.
+        # Enrich all_file_infos with embedding_type in one batch lookup
+        if configs.use_file_hash_db and all_file_infos:
+            try:
+                from rtl_rag_chatbot_api.common.db import get_file_infos_batch
+
+                file_ids_to_enrich = list(all_file_infos.keys())
+                with get_db_session() as db_session:
+                    embedding_types = get_file_infos_batch(
+                        db_session, file_ids_to_enrich
+                    )
+                    for file_id, embedding_type in embedding_types.items():
+                        if embedding_type and file_id in all_file_infos:
+                            all_file_infos[file_id]["embedding_type"] = embedding_type
+            except Exception as e:
+                logging.warning(f"Failed to batch enrich embedding_type: {e}")
 
         model_info = initialized_models.get(model_key)
         model = model_info["model"] if model_info else None

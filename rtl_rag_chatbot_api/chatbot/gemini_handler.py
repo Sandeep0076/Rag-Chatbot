@@ -304,34 +304,8 @@ class GeminiHandler(BaseRAGHandler):
             ):
                 file_info_data = self.all_file_infos[file_id]
 
-                # Use embedding_type from all_file_infos if available (set during upload)
+                # Use embedding_type from all_file_infos (enriched in chat endpoint)
                 embedding_type = file_info_data.get("embedding_type")
-
-                if not embedding_type:
-                    # Fallback to DB lookup only if not in all_file_infos
-                    from rtl_rag_chatbot_api.app import get_db_session
-                    from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
-
-                    if self.configs.use_file_hash_db:
-                        try:
-                            with get_db_session() as db_session:
-                                # AIP-1060, https://rtldata.atlassian.net/browse/AIP-1060
-                                # take embedding type from database if available
-                                record = get_file_info_by_file_id(db_session, file_id)
-
-                                if record and record.embedding_type:
-                                    logging.info(
-                                        f"Found embedding_type '{record.embedding_type}' in database "
-                                        f"for file with hash {record.file_hash}"
-                                    )
-
-                                    embedding_type = record.embedding_type
-
-                        except Exception as e:
-                            logging.warning(
-                                f"Database lookup for embedding_type failed for file with hash {file_id}: {e}"
-                            )
-                            pass
 
                 if not embedding_type:
                     # Default to configurable embedding for files without info

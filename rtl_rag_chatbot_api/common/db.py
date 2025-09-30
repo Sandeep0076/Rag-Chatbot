@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import Column, DateTime, ForeignKey, String
 from sqlalchemy.orm import Session, declarative_base
@@ -91,6 +91,42 @@ def get_file_info_by_file_id(session: Session, file_id: str) -> Optional[str]:
     except Exception as e:
         logging.error(f"Error getting embedding_type by file_id from database: {e}")
         return None
+
+
+def get_file_infos_batch(
+    session: Session, file_ids: List[str]
+) -> Dict[str, Optional[str]]:
+    """
+    Get file info for multiple file_ids in a single database query (batch lookup).
+
+    Args:
+        session: Database session
+        file_ids: List of file IDs to search for
+
+    Returns:
+        Dictionary mapping file_id to embedding_type (or None if not found)
+    """
+    try:
+        logging.info(f"Batch lookup for {len(file_ids)} file_ids in database")
+        results = session.query(FileInfo).filter(FileInfo.file_id.in_(file_ids)).all()
+
+        file_info_map = {}
+        for result in results:
+            file_info_map[result.file_id] = result.embedding_type
+            logging.info(
+                f"Found database record file_id '{result.file_id}' with embedding_type: {result.embedding_type}"
+            )
+
+        # Add None for file_ids not found in database
+        for file_id in file_ids:
+            if file_id not in file_info_map:
+                file_info_map[file_id] = None
+                logging.debug(f"No database record found for file_id '{file_id}'")
+
+        return file_info_map
+    except Exception as e:
+        logging.error(f"Error getting file info batch from database: {e}")
+        return {file_id: None for file_id in file_ids}
 
 
 def insert_file_info_record(
