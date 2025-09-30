@@ -126,7 +126,7 @@ class GCSHandler:
                         if os.path.exists(local_path):
                             decrypted_size = os.path.getsize(local_path)
                             logging.info(
-                                f"  Decrypted file size: {decrypted_size} bytes"
+                                f"  Decrypted file size is: {decrypted_size} bytes"
                             )
 
                             # Try to validate SQLite database

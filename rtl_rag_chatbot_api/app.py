@@ -2402,14 +2402,29 @@ async def check_embeddings(
 
         # Create summary statistics
         all_exist = all(r["embeddings_exist"] for r in results)
+        all_legacy = all(r["model_type"] == "azure" for r in results)
+        all_new = all(r["model_type"] != "azure" for r in results)
+        has_one_legacy_model = any(r["model_type"] == "azure" for r in results)
+
         total_files = len(results)
+
+        if len(results) > 1 and not all_legacy and has_one_legacy_model:
+            results = list(
+                map(
+                    lambda r: {**r, "embeddings_exist": False}
+                    if r["model_type"] == "azure"
+                    else r,
+                    results,
+                )
+            )
+
         existing_files = sum(1 for r in results if r["embeddings_exist"])
 
         # AIP-923: this is a hotfix, so that the client can process the return
         # Currently the client accepts status 400 and a list of all embeddings with status
-        if existing_files != total_files:
-            # looks like at least one is missing
-            return JSONResponse(status_code=400, content=results)
+        # if existing_files != total_files:
+        # looks like at least one is missing
+        # return JSONResponse(status_code=400, content=results)
 
         return {
             "results": results,
@@ -2417,7 +2432,14 @@ async def check_embeddings(
                 "total_files": total_files,
                 "files_with_embeddings": existing_files,
                 "files_missing_embeddings": total_files - existing_files,
-                "all_files_ready": all_exist,
+                # AIP-1066, https://rtldata.atlassian.net/browse/AIP-1066
+                # if there are multiple files, we require all to be non-legacy.
+                # if there is one single file, we allow legacy model_type "azure"
+                "all_files_ready": (
+                    (all_legacy or all_new or (all_exist and not has_one_legacy_model))
+                    if total_files > 1
+                    else all_exist
+                ),
                 "model_choice": request.model_choice,
             },
         }
@@ -2844,14 +2866,12 @@ async def _process_single_file(query: Query, gcs_handler: GCSHandler) -> Dict[st
     # Ensure embedding_type is populated from DB (fast path) if available
     try:
         if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
-            from rtl_rag_chatbot_api.common.db import find_embedding_type_by_file_id
+            from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
 
             with get_db_session() as db_session:
-                embedding_type_from_db = find_embedding_type_by_file_id(
-                    db_session, query.file_id
-                )
-                if embedding_type_from_db:
-                    file_info_single["embedding_type"] = embedding_type_from_db
+                file_info = get_file_info_by_file_id(db_session, query.file_id)
+                if file_info and file_info.embedding_type:
+                    file_info_single["embedding_type"] = file_info.embedding_type
     except Exception as e:
         logging.warning(
             f"Failed to enrich embedding_type from DB for {query.file_id}: {e}"
@@ -2904,6 +2924,7 @@ async def _check_file_embeddings(
             processed_results.append(
                 {
                     "file_id": file_id,
+                    "file_name": None,
                     "embeddings_exist": False,
                     "error": str(result),
                     "model_type": "azure",
@@ -3108,18 +3129,16 @@ async def _process_multi_files(query: Query, gcs_handler: GCSHandler) -> Dict[st
     # Enrich each file's embedding_type from DB when available (fast path)
     try:
         if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
-            from rtl_rag_chatbot_api.common.db import find_embedding_type_by_file_id
+            from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
 
             with get_db_session() as db_session:
                 for _fid in query.file_ids:
                     if _fid in all_file_infos:
-                        embedding_type_from_db = find_embedding_type_by_file_id(
-                            db_session, _fid
-                        )
-                        if embedding_type_from_db:
+                        file_info = get_file_info_by_file_id(db_session, _fid)
+                        if file_info and file_info.embedding_type:
                             all_file_infos[_fid][
                                 "embedding_type"
-                            ] = embedding_type_from_db
+                            ] = file_info.embedding_type
     except Exception as e:
         logging.warning(
             f"Failed to enrich embedding_type from DB for multi-file request {query.file_ids}: {e}"
