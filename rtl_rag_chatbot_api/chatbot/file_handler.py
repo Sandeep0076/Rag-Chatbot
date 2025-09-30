@@ -703,6 +703,7 @@ class FileHandler:
         username,
         google_result,  # Kept for backwards compatibility
         azure_result,
+        embedding_type,
     ):
         """Handle processing for files that already exist in the system.
 
@@ -733,12 +734,13 @@ class FileHandler:
                     self.configs, self.gcs_handler, SessionLocal
                 )
 
-                # Check and migrate if needed
+                # Check and migrate if needed (pass embedding_type to avoid duplicate DB lookup)
                 migration_result = (
                     await auto_migration_service.check_and_migrate_if_needed(
                         file_id=existing_file_id,
                         file_path=temp_file_path,  # Pass the temp file if available
                         embedding_handler=None,  # Will be created if needed
+                        embedding_type=embedding_type,  # Pass from first lookup
                     )
                 )
 
@@ -867,6 +869,7 @@ class FileHandler:
         existing_file_id: str,
         is_image: bool,
         username: str,
+        embedding_type: str,
     ) -> dict:
         """Handle short-circuit flow when embeddings already exist for the file hash."""
         logging.info(f"Found embeddings for: {original_filename}")
@@ -903,6 +906,7 @@ class FileHandler:
                 file_id=existing_file_id,
                 file_path=existing_temp_path,
                 embedding_handler=None,
+                embedding_type=embedding_type,  # Pass from first lookup
             )
 
             if migration_result.get("migrated"):
@@ -1045,6 +1049,7 @@ class FileHandler:
             (
                 existing_file_id,
                 azure_result,
+                embedding_type,
             ) = await self._check_for_existing_file(
                 file_hash, original_filename, file_id, is_tabular, is_database
             )
@@ -1067,6 +1072,7 @@ class FileHandler:
                     existing_file_id,
                     is_image,
                     username,
+                    embedding_type,
                 )
 
             # Only create directories and save file if we don't have existing embeddings
@@ -1148,6 +1154,7 @@ class FileHandler:
                 username,
                 google_result,
                 azure_result,
+                embedding_type,
             )
 
             if existing_file_result:
@@ -1215,7 +1222,9 @@ class FileHandler:
         """Check if a file with the same hash already exists and verify it's not a hash collision"""
         azure_result = {"embeddings_exist": False}
 
-        existing_file_id, _ = await self.find_existing_file_by_hash_async(file_hash)
+        existing_file_id, embedding_type = await self.find_existing_file_by_hash_async(
+            file_hash
+        )
         if not existing_file_id:
             return None, azure_result
 
@@ -1223,11 +1232,11 @@ class FileHandler:
         embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
         # Use only Azure embeddings for unified approach
         azure_result = await embedding_handler.check_embeddings_exist(
-            existing_file_id, "gpt_4o_mini"
+            existing_file_id, "gpt_4o_mini", embedding_type
         )
         logging.info(f"Existing file found with hash: {existing_file_id}")
 
-        return existing_file_id, azure_result
+        return existing_file_id, azure_result, embedding_type
 
     async def _save_file_locally(
         self, file_id: str, original_filename: str, file_content: bytes

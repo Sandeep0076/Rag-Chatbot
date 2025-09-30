@@ -2877,19 +2877,7 @@ async def _process_single_file(query: Query, gcs_handler: GCSHandler) -> Dict[st
                 " Please try uploading/selecting a different file.",
             )
 
-    # Ensure embedding_type is populated from DB (fast path) if available
-    try:
-        if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
-            from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
-
-            with get_db_session() as db_session:
-                file_info = get_file_info_by_file_id(db_session, query.file_id)
-                if file_info and file_info.embedding_type:
-                    file_info_single["embedding_type"] = file_info.embedding_type
-    except Exception as e:
-        logging.warning(
-            f"Failed to enrich embedding_type from DB for {query.file_id}: {e}"
-        )
+    # No DB enrichment here; keep chat hot path lean. Upload/check handle it.
 
     all_file_infos = {query.file_id: file_info_single}
     model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
@@ -3140,23 +3128,7 @@ async def _process_multi_files(query: Query, gcs_handler: GCSHandler) -> Dict[st
     # Get file info for all files
     all_file_infos = await _get_file_info_multi(query.file_ids, gcs_handler)
 
-    # Enrich each file's embedding_type from DB when available (fast path)
-    try:
-        if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
-            from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
-
-            with get_db_session() as db_session:
-                for _fid in query.file_ids:
-                    if _fid in all_file_infos:
-                        file_info = get_file_info_by_file_id(db_session, _fid)
-                        if file_info and file_info.embedding_type:
-                            all_file_infos[_fid][
-                                "embedding_type"
-                            ] = file_info.embedding_type
-    except Exception as e:
-        logging.warning(
-            f"Failed to enrich embedding_type from DB for multi-file request {query.file_ids}: {e}"
-        )
+    # No DB enrichment in chat path; upload/check handle embedding_type.
 
     # Determine if the query is tabular
     is_tabular = await _determine_tabular_status(tabular_files, non_tabular_files)
@@ -3455,51 +3427,8 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         logging.info(f"Graphic generation flag: {generate_visualization}")
         logging.info(f"For {file_id_logging}")
 
-        # ===== AUTO-MIGRATION CHECK FOR CHAT =====
-        # Check if any of the files being accessed have old embeddings and auto-migrate
-        from rtl_rag_chatbot_api.chatbot.auto_migration_service import (
-            AutoMigrationService,
-        )
-
-        auto_migration_service = AutoMigrationService(
-            configs, gcs_handler, SessionLocal
-        )
-
-        # Collect all file IDs being accessed
-        chat_file_ids = []
-        if query.file_id:
-            chat_file_ids.append(query.file_id)
-        if query.file_ids:
-            chat_file_ids.extend(query.file_ids)
-
-        if chat_file_ids:
-            logging.info(
-                f"Checking {len(chat_file_ids)} file(s) for migration before chat"
-            )
-
-            # Check and migrate files if needed
-            migration_results = (
-                await auto_migration_service.check_and_migrate_multiple_files(
-                    file_ids=chat_file_ids,
-                    embedding_handler=embedding_handler,
-                    max_concurrent=2,  # Limit concurrent migrations during chat
-                )
-            )
-
-            # Log migration results
-            migrated_files = [r for r in migration_results if r.get("migrated", False)]
-            if migrated_files:
-                logging.info(
-                    f"Auto-migrated {len(migrated_files)} file(s) before chat: "
-                    f"{[r.get('migration_result', {}).get('file_id') for r in migrated_files]}"
-                )
-
-                # Refresh file_data after migration to use new embeddings
-                file_data = await _process_file_info(
-                    query, gcs_handler, generate_visualization
-                )
-                all_file_infos = file_data["all_file_infos"]
-                logging.info("Refreshed file info after migration")
+        # Chat endpoint must be fast: no migration or DB lookups here. Upload and
+        # status/check endpoints handle migration and DB enrichment.
 
         model_info = initialized_models.get(model_key)
         model = model_info["model"] if model_info else None

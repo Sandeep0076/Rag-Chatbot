@@ -422,6 +422,7 @@ class AutoMigrationService:
         file_path: Optional[str] = None,
         embedding_handler: Optional[EmbeddingHandler] = None,
         background_tasks=None,
+        embedding_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Check if a file needs migration and migrate if necessary.
@@ -444,7 +445,14 @@ class AutoMigrationService:
                 "migration_result": dict (if migrated)
             }
         """
-        needs_migration, current_embedding_type = self.check_needs_migration(file_id)
+        # Check if migration is needed (use provided embedding_type if available)
+        if embedding_type is not None:
+            needs_migration = embedding_type == "azure"
+            current_embedding_type = embedding_type
+        else:
+            needs_migration, current_embedding_type = self.check_needs_migration(
+                file_id
+            )
 
         if not needs_migration:
             return {

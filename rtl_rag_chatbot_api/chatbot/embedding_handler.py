@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Import removed - gcs_handler should be passed as parameter to EmbeddingHandler constructor
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot
@@ -660,7 +660,7 @@ class EmbeddingHandler:
         }
 
     async def check_embeddings_exist(
-        self, file_id: str, model_choice: str
+        self, file_id: str, model_choice: str, embedding_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Check if embeddings exist for a specific file and model.
@@ -682,7 +682,17 @@ class EmbeddingHandler:
             # We now always use Azure embeddings regardless of model_choice
             model_type = "azure"  # Always use Azure embeddings for unified approach
 
-            # First, check db, as single source of truth
+            # Use provided embedding_type if available (from all_file_infos), otherwise check DB
+            if embedding_type:
+                logging.info(f"File {file_id} has embedding_type: '{embedding_type}'")
+                return {
+                    "embeddings_exist": True,
+                    "model_type": embedding_type,
+                    "file_id": file_id,
+                    "status": "completed",
+                }
+
+            # Fallback to DB lookup only if embedding_type not provided
             from rtl_rag_chatbot_api.app import get_db_session
             from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
 
