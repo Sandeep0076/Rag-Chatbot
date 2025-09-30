@@ -116,7 +116,7 @@ class EmbeddingHandler:
             "embeddings_ready": azure_result.get("success", False),
             "file_id": file_id,  # Ensure file_id consistency
             "embeddings_created_at": datetime.now().isoformat(),  # Track when embeddings were created
-            "embedding_type": "azure-3-large",  # Use new text-embedding-3-large for new uploads
+            "embedding_type": self.configs.chatbot.default_embedding_type,  # Use configurable default embedding type
         }
 
         # Ensure critical fields are present
@@ -179,7 +179,9 @@ class EmbeddingHandler:
                 return True, True, True
 
             # Check GCS Azure embeddings only
-            azure_gcs_prefix = f"file-embeddings/{file_id}/azure/"
+            azure_gcs_prefix = (
+                f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/azure/"
+            )
 
             azure_blobs = list(
                 self.gcs_handler.bucket.list_blobs(prefix=azure_gcs_prefix)
@@ -680,10 +682,45 @@ class EmbeddingHandler:
             # We now always use Azure embeddings regardless of model_choice
             model_type = "azure"  # Always use Azure embeddings for unified approach
 
-            # First check file_info.json for embedding status
+            # First, check db, as single source of truth
+            from rtl_rag_chatbot_api.app import get_db_session
+            from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
+
+            try:
+                with get_db_session() as db_session:
+                    # AIP-1060, https://rtldata.atlassian.net/browse/AIP-1060
+                    # take embedding type from database if available
+                    record = get_file_info_by_file_id(db_session, file_id)
+
+                    if record and record.embedding_type:
+                        logging.info(
+                            f"Database record for {file_id} shows embedding_type: {record.embedding_type}"
+                        )
+
+                        return {
+                            "embeddings_exist": True,
+                            "model_type": record.embedding_type,
+                            # AIP-1066, https://rtldata.atlassian.net/browse/AIP-1066
+                            "file_name": record.file_name,
+                            "file_id": file_id,
+                            "status": "completed",
+                        }
+                    else:
+                        logging.warning(
+                            f"No database record found for {file_id}. Checking local file_info.json next and then GCS."
+                        )
+            except Exception as db_error:
+                logging.error(
+                    f"Database error while checking embeddings: {str(db_error)}"
+                )
+                # we continue to check local and GCS as fallback
+                pass
+
+            # Second, check file_info.json for embedding status
             local_info_path = os.path.join("./chroma_db", file_id, "file_info.json")
             embeddings_status = "not_started"
             embeddings_exist = False
+            file_name = None
 
             # Check local embeddings first (most reliable and up-to-date source)
             # If local file_info.json exists, check it first
@@ -694,6 +731,9 @@ class EmbeddingHandler:
                         embeddings_status = file_info.get(
                             "embeddings_status", "not_started"
                         )
+                        # AIP-1066, https://rtldata.atlassian.net/browse/AIP-1066
+                        file_name = file_info.get("original_filename", None)
+                        model_type = file_info.get("embedding_type", model_type)
 
                     logging.info(
                         f"Local file_info.json for {file_id} shows status: {embeddings_status}"
@@ -728,6 +768,8 @@ class EmbeddingHandler:
                                 "embeddings_exist": True,
                                 "model_type": model_type,  # Return original model_type for compatibility
                                 "file_id": file_id,
+                                # AIP-1066, https://rtldata.atlassian.net/browse/AIP-1066
+                                "file_name": file_name if file_name else None,
                                 "status": embeddings_status,
                             }
                         else:
@@ -739,7 +781,9 @@ class EmbeddingHandler:
                     logging.warning(f"Error reading local file_info.json: {str(e)}")
 
             # If no valid local embeddings or status, check GCS as fallback
-            gcs_prefix = f"file-embeddings/{file_id}/azure/"
+            gcs_prefix = (
+                f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/azure/"
+            )
             blobs = list(self.gcs_handler.bucket.list_blobs(prefix=gcs_prefix))
 
             gcs_embeddings_exist = len(blobs) > 0 and any(
@@ -760,6 +804,8 @@ class EmbeddingHandler:
                         embeddings_status = file_info.get(
                             "embeddings_status", "not_started"
                         )
+                        file_name = file_info.get("original_filename", None)
+                        model_type = file_info.get("embedding_type", model_type)
 
             logging.info(
                 f"Final check for file {file_id} with {model_choice}:"
@@ -769,6 +815,8 @@ class EmbeddingHandler:
                 "embeddings_exist": embeddings_exist,
                 "model_type": model_type,  # Still return original model_type for compatibility
                 "file_id": file_id,
+                # AIP-1066, https://rtldata.atlassian.net/browse/AIP-1066
+                "file_name": file_name if file_name else None,
                 "status": embeddings_status,
             }
 
@@ -880,7 +928,7 @@ class EmbeddingHandler:
                 {
                     "metadata": (
                         file_info,
-                        f"file-embeddings/{file_id}/file_info.json",
+                        f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json",
                     )
                 },
             )
@@ -909,7 +957,7 @@ class EmbeddingHandler:
                         try:
                             local_path = os.path.join(root, file)
                             relative_path = os.path.relpath(local_path, "./chroma_db")
-                            gcs_path = f"file-embeddings/{relative_path}"
+                            gcs_path = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{relative_path}"
 
                             # Upload each file individually
                             self.gcs_handler.upload_to_gcs(
@@ -1358,7 +1406,7 @@ class EmbeddingHandler:
     def get_embeddings_info(self, file_id: str):
         # Retrieve embeddings info from GCS
         try:
-            info_blob_name = f"file-embeddings/{file_id}/file_info.json"
+            info_blob_name = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json"
             blob = self.gcs_handler.bucket.blob(info_blob_name)
             if blob.exists():
                 content = blob.download_as_text()
@@ -1485,7 +1533,10 @@ class EmbeddingHandler:
                         self.gcs_handler.upload_to_gcs(
                             self.configs.gcp_resource.bucket_name,
                             source=encrypted_db_path,
-                            destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db.encrypted",
+                            destination_blob_name=(
+                                f"{self.configs.gcp_resource.gcp_embeddings_folder}/"
+                                f"{file_id}/tabular_data.db.encrypted"
+                            ),
                         )
                     finally:
                         if os.path.exists(encrypted_db_path):
@@ -1512,7 +1563,7 @@ class EmbeddingHandler:
                         {
                             "metadata": (
                                 metadata,
-                                f"file-embeddings/{file_id}/file_info.json",
+                                f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json",
                             )
                         },
                     )
@@ -1538,7 +1589,9 @@ class EmbeddingHandler:
             )
             file_metadata["file_id"] = file_id
             file_metadata["migrated"] = True
-            file_metadata["embedding_type"] = "azure-3-large"
+            file_metadata[
+                "embedding_type"
+            ] = self.configs.chatbot.default_embedding_type
 
             result = await self.create_embeddings(
                 file_id=file_id,

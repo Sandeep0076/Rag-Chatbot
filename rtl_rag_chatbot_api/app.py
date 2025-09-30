@@ -104,7 +104,11 @@ combined_image_handler = CombinedImageGenerator(configs, dalle_handler, imagen_h
 if configs.use_file_hash_db:
     if os.getenv("DB_INSTANCE"):
         logging.info("Using DB_INSTANCE env variable to connect to database")
-        DATABASE_URL = f"postgresql://{os.getenv('DB_USERNAME')}:{os.getenv('DB_PASSWORD')}@127.0.0.1:5432/chatbot_ui"
+        DATABASE_URL = (
+            f"postgresql://{os.getenv('DB_USERNAME')}:"
+            f"{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST', '127.0.0.1')}:"
+            f"{os.getenv('DB_PORT', '5432')}/chatbot_ui"
+        )
         engine = create_engine(DATABASE_URL)
         SessionLocal = sessionmaker(bind=engine)
     else:
@@ -295,7 +299,11 @@ def get_db_session():
     Returns:
         Session: SQLAlchemy session.
     """
-    DATABASE_URL = f"postgresql://{os.getenv('DB_USERNAME')}:{os.getenv('DB_PASSWORD')}@127.0.0.1:5432/chatbot_ui"
+    DATABASE_URL = (
+        f"postgresql://{os.getenv('DB_USERNAME')}:"
+        f"{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST', '127.0.0.1')}:"
+        f"{os.getenv('DB_PORT', '5432')}/chatbot_ui"
+    )
     engine = create_engine(DATABASE_URL)
     Session = sessionmaker(bind=engine)
 
@@ -581,7 +589,7 @@ def process_tabular_file(
         {
             "metadata": (
                 file_metadata,
-                f"file-embeddings/{file_id}/file_info.json",
+                f"{configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json",
             )
         },
     )
@@ -1519,7 +1527,10 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
             gcs_handler.upload_to_gcs(
                 configs.gcp_resource.bucket_name,
                 source=encrypted_db_path,
-                destination_blob_name=f"file-embeddings/{file_id}/tabular_data.db.encrypted",
+                destination_blob_name=(
+                    f"{configs.gcp_resource.gcp_embeddings_folder}/"
+                    f"{file_id}/tabular_data.db.encrypted"
+                ),
             )
         finally:
             # Clean up encrypted file
@@ -1540,7 +1551,7 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
             {
                 "metadata": (
                     metadata,
-                    f"file-embeddings/{file_id}/file_info.json",
+                    f"{configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json",
                 )
             },
         )
@@ -1562,7 +1573,7 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
                 {
                     "metadata": (
                         metadata,
-                        f"file-embeddings/{file_id}/file_info.json",
+                        f"{configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json",
                     )
                 },
             )
@@ -2278,7 +2289,8 @@ async def create_embeddings_background(
                                 file_id,
                                 file_hash,
                                 original_filename,
-                                "azure-3-large",
+                                None,  # Use configurable default
+                                configs,
                             )
                             if result["status"] == "success":
                                 logging.info(
@@ -2390,14 +2402,29 @@ async def check_embeddings(
 
         # Create summary statistics
         all_exist = all(r["embeddings_exist"] for r in results)
+        all_legacy = all(r["model_type"] == "azure" for r in results)
+        all_new = all(r["model_type"] != "azure" for r in results)
+        has_one_legacy_model = any(r["model_type"] == "azure" for r in results)
+
         total_files = len(results)
+
+        if len(results) > 1 and not all_legacy and has_one_legacy_model:
+            results = list(
+                map(
+                    lambda r: {**r, "embeddings_exist": False}
+                    if r["model_type"] == "azure"
+                    else r,
+                    results,
+                )
+            )
+
         existing_files = sum(1 for r in results if r["embeddings_exist"])
 
         # AIP-923: this is a hotfix, so that the client can process the return
         # Currently the client accepts status 400 and a list of all embeddings with status
-        if existing_files != total_files:
-            # looks like at least one is missing
-            return JSONResponse(status_code=400, content=results)
+        # if existing_files != total_files:
+        # looks like at least one is missing
+        # return JSONResponse(status_code=400, content=results)
 
         return {
             "results": results,
@@ -2405,7 +2432,14 @@ async def check_embeddings(
                 "total_files": total_files,
                 "files_with_embeddings": existing_files,
                 "files_missing_embeddings": total_files - existing_files,
-                "all_files_ready": all_exist,
+                # AIP-1066, https://rtldata.atlassian.net/browse/AIP-1066
+                # if there are multiple files, we require all to be non-legacy.
+                # if there is one single file, we allow legacy model_type "azure"
+                "all_files_ready": (
+                    (all_legacy or all_new or (all_exist and not has_one_legacy_model))
+                    if total_files > 1
+                    else all_exist
+                ),
                 "model_choice": request.model_choice,
             },
         }
@@ -2829,6 +2863,20 @@ async def _process_single_file(query: Query, gcs_handler: GCSHandler) -> Dict[st
                 " Please try uploading/selecting a different file.",
             )
 
+    # Ensure embedding_type is populated from DB (fast path) if available
+    try:
+        if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
+            from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
+
+            with get_db_session() as db_session:
+                file_info = get_file_info_by_file_id(db_session, query.file_id)
+                if file_info and file_info.embedding_type:
+                    file_info_single["embedding_type"] = file_info.embedding_type
+    except Exception as e:
+        logging.warning(
+            f"Failed to enrich embedding_type from DB for {query.file_id}: {e}"
+        )
+
     all_file_infos = {query.file_id: file_info_single}
     model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
 
@@ -2876,6 +2924,7 @@ async def _check_file_embeddings(
             processed_results.append(
                 {
                     "file_id": file_id,
+                    "file_name": None,
                     "embeddings_exist": False,
                     "error": str(result),
                     "model_type": "azure",
@@ -3076,6 +3125,24 @@ async def _process_multi_files(query: Query, gcs_handler: GCSHandler) -> Dict[st
 
     # Get file info for all files
     all_file_infos = await _get_file_info_multi(query.file_ids, gcs_handler)
+
+    # Enrich each file's embedding_type from DB when available (fast path)
+    try:
+        if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
+            from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
+
+            with get_db_session() as db_session:
+                for _fid in query.file_ids:
+                    if _fid in all_file_infos:
+                        file_info = get_file_info_by_file_id(db_session, _fid)
+                        if file_info and file_info.embedding_type:
+                            all_file_infos[_fid][
+                                "embedding_type"
+                            ] = file_info.embedding_type
+    except Exception as e:
+        logging.warning(
+            f"Failed to enrich embedding_type from DB for multi-file request {query.file_ids}: {e}"
+        )
 
     # Determine if the query is tabular
     is_tabular = await _determine_tabular_status(tabular_files, non_tabular_files)
@@ -4442,7 +4509,7 @@ async def insert_file_info(
     file_id: str = Form(...),
     file_hash: str = Form(...),
     filename: str = Form(None),
-    embedding_type: str = Form("azure-3-large"),
+    embedding_type: str = Form(None),
     current_user=Depends(get_current_user),
 ):
     """Insert a new record into the FileInfo table."""
@@ -4460,7 +4527,7 @@ async def insert_file_info(
     # Use the context manager properly
     with get_db_session() as db:
         result = insert_file_info_record(
-            db, file_id, file_hash, filename, embedding_type
+            db, file_id, file_hash, filename, embedding_type, configs
         )
 
         if result["status"] == "success":
@@ -4675,7 +4742,8 @@ async def _prepare_migration_file_for_pipeline(
                         file_id,
                         file_hash,
                         base_name,
-                        "azure-3-large",
+                        None,  # Use configurable default
+                        configs,
                     )
     except Exception as _db_err:
         logging.warning(

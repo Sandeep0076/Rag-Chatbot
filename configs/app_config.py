@@ -31,7 +31,6 @@ class AzureEmbedding3LargeConfig(BaseModel):
     azure_embedding_3_large_api_version: str
     azure_embedding_3_large_deployment: str
     azure_embedding_3_large_model_name: str
-    embedding_dimension: Optional[int] = 3072
 
 
 class LLMHyperParams(BaseModel):
@@ -59,12 +58,14 @@ class ChatbotConfig(BaseModel):
     max_chunk_overlap: float
     chunk_size_limit: int
     n_neighbours: int
+    default_embedding_type: str = "azure-3-large"
 
 
 class GCPResourceConfig(BaseModel):
     gcp_project: str
     bucket_name: str
     embeddings_folder: str
+    gcp_embeddings_folder: str
 
 
 class GeminiConfig(BaseModel):

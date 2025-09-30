@@ -94,6 +94,10 @@ class AzureChatbot(BaseRAGHandler):
 
     def _get_embedding_config_for_file(self, file_id: str = None):
         """Get the appropriate embedding client and deployment based on file's embedding_type"""
+
+        # TODO ZL: this has to go to BaseRAGHandler or a common utility, since this class inherits from it
+        # and the functionality is same as in gemini_handler.py
+
         # Default to new embedding for new files
         default_client = self.embedding_client_03
         default_deployment = (
@@ -102,6 +106,8 @@ class AzureChatbot(BaseRAGHandler):
 
         if not file_id:
             return default_client, default_deployment
+
+        import logging
 
         # Check file_info to determine embedding type
         try:
@@ -112,12 +118,43 @@ class AzureChatbot(BaseRAGHandler):
                 and file_id in self.all_file_infos
             ):
                 file_info_data = self.all_file_infos[file_id]
-                embedding_type = file_info_data.get("embedding_type", "azure-3-large")
-                # For tabular files (no embedding_type), explicitly use new embedding
+
+                # ZL
+                # first check embedding type in database entry
+                from rtl_rag_chatbot_api.app import get_db_session
+                from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
+
+                embedding_type = None
+                if self.configs.use_file_hash_db:
+                    try:
+                        with get_db_session() as db_session:
+                            # AIP-1060, https://rtldata.atlassian.net/browse/AIP-1060
+                            # take embedding type from database if available
+                            record = get_file_info_by_file_id(db_session, file_id)
+
+                            if record and record.embedding_type:
+                                logging.info(
+                                    f"Found embedding_type '{record.embedding_type}' in database "
+                                    f"for file with hash {record.file_hash}"
+                                )
+
+                                embedding_type = record.embedding_type
+
+                    except Exception as e:
+                        logging.warning(
+                            f"Database lookup for embedding_type failed for file with hash {file_id}: {e}"
+                        )
+                        pass
+
+                if not embedding_type:
+                    # Default to configurable embedding for files without info
+                    embedding_type = file_info_data.get(
+                        "embedding_type", self.configs.chatbot.default_embedding_type
+                    )
+
+                # For tabular files (no embedding_type), explicitly use configurable default embedding
                 if file_info_data.get("is_tabular", False):
                     embedding_type = "azure-3-large"
-                    import logging
-
                     logging.info(
                         f"Tabular file {file_id} detected, using text-embedding-3-large"
                     )
@@ -131,23 +168,20 @@ class AzureChatbot(BaseRAGHandler):
                     with open(local_info_path, "r") as f:
                         file_info_data = json.load(f)
                         embedding_type = file_info_data.get(
-                            "embedding_type", "azure-3-large"
+                            "embedding_type",
+                            self.configs.chatbot.default_embedding_type,
                         )
-                        # For tabular files (no embedding_type), explicitly use new embedding
+                        # For tabular files (no embedding_type), explicitly use configurable default embedding
                         if file_info_data.get("is_tabular", False):
-                            embedding_type = "azure-3-large"
-                            import logging
-
+                            embedding_type = self.configs.chatbot.default_embedding_type
                             logging.info(
-                                f"Tabular file {file_id} detected, using text-embedding-3-large"
+                                f"Tabular file {file_id} detected, using {embedding_type}"
                             )
                 else:
-                    # Default to new embedding for files without info
-                    embedding_type = "azure-3-large"
+                    # Default to configurable embedding for files without info
+                    embedding_type = self.configs.chatbot.default_embedding_type
 
             # Return appropriate client and deployment based on embedding_type
-            import logging
-
             logging.info(f"File {file_id} has embedding_type: '{embedding_type}'")
 
             if embedding_type == "azure":
@@ -165,8 +199,6 @@ class AzureChatbot(BaseRAGHandler):
                     self.configs.azure_embedding_3_large.azure_embedding_3_large_deployment,
                 )
         except Exception as e:
-            import logging
-
             logging.warning(
                 f"Error getting embedding config for file {file_id}: {e}, using default"
             )
@@ -196,31 +228,21 @@ class AzureChatbot(BaseRAGHandler):
                     text_item if isinstance(text_item, str) else " ".join(text_item)
                 )
                 if not current_text.strip():  # Handle empty strings
+                    # OpenAI API errors on empty strings, return zero vector or skip
+                    # Default dimension for both models (ada-002: 1536, text-embedding-3-large: 1536)
                     logging.warning(
                         "Empty string encountered in get_embeddings, returning zero vector."
                     )
-                    dim = (
-                        getattr(
-                            self.configs.azure_embedding_3_large,
-                            "embedding_dimension",
-                            3072,
-                        )
-                        or 3072
-                    )
-                    batch_embeddings.append([0.0] * int(dim))
+                    dims_by_deployment = {
+                        "text-embedding-ada-002": 1536,
+                        "text-embedding-3-large": 3072,
+                    }
+                    zero_dim = dims_by_deployment.get(deployment, 3072)
+                    batch_embeddings.append([0.0] * zero_dim)
                     continue
-                dim = (
-                    getattr(
-                        self.configs.azure_embedding_3_large,
-                        "embedding_dimension",
-                        3072,
-                    )
-                    or 3072
-                )
                 response = embedding_client.embeddings.create(
                     model=deployment,
                     input=current_text,
-                    dimensions=int(dim),
                 )
                 batch_embeddings.append(response.data[0].embedding)
             return batch_embeddings

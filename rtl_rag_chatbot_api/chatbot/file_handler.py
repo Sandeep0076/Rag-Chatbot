@@ -90,7 +90,7 @@ class FileHandler:
         file_id: str,
         file_hash: str,
         filename: str = None,
-        embedding_type: str = "azure-3-large",
+        embedding_type: str = None,
     ):
         """
         Store file hash and filename in the database if the feature is enabled.
@@ -99,7 +99,7 @@ class FileHandler:
             file_id: The file ID
             file_hash: The file hash to store
             filename: The original filename to store (optional)
-            embedding_type: The embedding type to use (default: "azure-3-large")
+            embedding_type: The embedding type to use (if None, uses configurable default)
         """
         if self.use_file_hash_db:
             try:
@@ -108,7 +108,12 @@ class FileHandler:
 
                 with get_db_session() as db_session:
                     result = insert_file_info_record(
-                        db_session, file_id, file_hash, filename, embedding_type
+                        db_session,
+                        file_id,
+                        file_hash,
+                        filename,
+                        embedding_type,
+                        self.configs,
                     )
                     if result["status"] == "success":
                         logging.info(
@@ -367,10 +372,13 @@ class FileHandler:
             encrypted_db_path = await asyncio.to_thread(encrypt_file, db_path)
             try:
                 files_to_upload = {
-                    "metadata": (metadata, f"file-embeddings/{file_id}/file_info.json"),
+                    "metadata": (
+                        metadata,
+                        f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json",
+                    ),
                     "database": (
                         encrypted_db_path,
-                        f"file-embeddings/{file_id}/tabular_data.db.encrypted",
+                        f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/tabular_data.db.encrypted",
                     ),
                 }
                 await asyncio.to_thread(
@@ -387,7 +395,7 @@ class FileHandler:
 
         # Store file hash and filename in database if enabled for tabular files
         await self.store_file_hash_in_db(
-            file_id, file_hash, original_filename, "azure-3-large"
+            file_id, file_hash, original_filename, None  # Use configurable default
         )
 
         return {
@@ -1201,7 +1209,7 @@ class FileHandler:
             return actual_file_id, encrypted_file_path, metadata
 
         # For non-tabular files, check if there's already a different file in this directory
-        prefix = f"file-embeddings/{actual_file_id}/"
+        prefix = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{actual_file_id}/"
         has_conflict = False
 
         blobs = await asyncio.to_thread(

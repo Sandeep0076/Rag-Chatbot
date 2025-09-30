@@ -57,6 +57,7 @@ os.environ["chatbot"] = json.dumps(
         "max_chunk_overlap": os.getenv("MAX_CHUNK_OVERLAP", "0.2"),
         "chunk_size_limit": os.getenv("CHUNK_SIZE_LIMIT", "2000"),
         "n_neighbours": os.getenv("N_NEIGHBOURS", "5"),
+        "default_embedding_type": os.getenv("DEFAULT_EMBEDDING_TYPE", "azure-3-large"),
     }
 )
 
@@ -79,5 +80,6 @@ os.environ["gcp_resource"] = json.dumps(
         "gcp_project": os.getenv("GCP_PROJECT"),
         "bucket_name": os.getenv("BUCKET_NAME"),
         "embeddings_folder": os.getenv("EMBEDDINGS_FOLDER", "embeddings_folder/"),
+        "gcp_embeddings_folder": os.getenv("GCP_EMBEDDINGS_FOLDER", "file-embeddings"),
     }
 )

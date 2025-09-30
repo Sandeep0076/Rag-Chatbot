@@ -77,7 +77,7 @@ class GCSHandler:
         """Download files maintaining the original structure."""
         logging.info(f"=== Starting file download for file_id: {file_id} ===")
 
-        prefix = f"file-embeddings/{file_id}/"
+        prefix = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/"
         logging.info(f"GCS prefix: {prefix}")
 
         try:
@@ -93,68 +93,40 @@ class GCSHandler:
                     logging.info(f"Skipping directory blob: {blob.name}")
                     continue
 
-                logging.info(f"Processing blob {i + 1}/{len(blobs)}: {blob.name}")
-                logging.info(f"  Blob size: {blob.size} bytes")
-
                 # Maintain the exact same structure as in GCS
                 relative_path = blob.name[len(prefix) :]
                 local_path = os.path.join("chroma_db", file_id, relative_path)
 
-                logging.info(f"  Relative path: {relative_path}")
-                logging.info(f"  Local path: {local_path}")
-
                 # Handle encrypted files
                 if relative_path == "tabular_data.db.encrypted":
-                    logging.info(
-                        f"  Processing encrypted tabular database: {blob.name}"
-                    )
-
                     # Download to temporary encrypted file
                     encrypted_path = local_path
                     local_path = os.path.join("chroma_db", file_id, "tabular_data.db")
 
-                    logging.info(f"  Encrypted path: {encrypted_path}")
-                    logging.info(f"  Decrypted path: {local_path}")
-
                     # Ensure directory exists
                     os.makedirs(os.path.dirname(encrypted_path), exist_ok=True)
-                    logging.info(
-                        f"  Created directory: {os.path.dirname(encrypted_path)}"
-                    )
 
                     # Download and decrypt
                     try:
-                        logging.info("  Downloading encrypted file...")
                         blob.download_to_filename(encrypted_path)
-                        logging.info(
-                            f"  Downloaded encrypted file to: {encrypted_path}"
-                        )
 
                         # Verify downloaded file
                         if os.path.exists(encrypted_path):
                             downloaded_size = os.path.getsize(encrypted_path)
-                            logging.info(
-                                f"  Downloaded file size: {downloaded_size} bytes"
-                            )
                             if downloaded_size != blob.size:
                                 logging.warning(
                                     f"  Size mismatch: GCS={blob.size}, local={downloaded_size}"
                                 )
                         else:
-                            logging.error(
-                                f"  Downloaded file does not exist: {encrypted_path}"
-                            )
                             continue
 
-                        logging.info("  Decrypting file...")
                         decrypt_file(encrypted_path)
-                        logging.info(f"  Decrypted {blob.name} to {local_path}")
 
                         # Verify decrypted file
                         if os.path.exists(local_path):
                             decrypted_size = os.path.getsize(local_path)
                             logging.info(
-                                f"  Decrypted file size: {decrypted_size} bytes"
+                                f"  Decrypted file size is: {decrypted_size} bytes"
                             )
 
                             # Try to validate SQLite database
@@ -163,11 +135,8 @@ class GCSHandler:
 
                                 test_conn = sqlite3.connect(local_path, timeout=10)
                                 test_conn.close()
-                                logging.info("  SQLite database validation successful")
                             except sqlite3.Error as e:
-                                logging.error(
-                                    f"  SQLite database validation failed: {str(e)}"
-                                )
+                                logging.error(f"  SQLite validation failed: {str(e)}")
                         else:
                             logging.error(
                                 f"  Decrypted file does not exist: {local_path}"
@@ -175,38 +144,25 @@ class GCSHandler:
 
                     except Exception as e:
                         logging.error(f"  Error processing encrypted file: {str(e)}")
-                        import traceback
-
-                        logging.error(f"  Full traceback: {traceback.format_exc()}")
                         raise
                     finally:
                         # Clean up encrypted file
                         if os.path.exists(encrypted_path):
                             os.remove(encrypted_path)
-                            logging.info(
-                                f"  Cleaned up encrypted file {encrypted_path}"
-                            )
                         else:
                             logging.warning(
                                 f"  Encrypted file not found for cleanup: {encrypted_path}"
                             )
                 else:
                     # Handle regular files
-                    logging.info(f"  Processing regular file: {blob.name}")
-
                     os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                    logging.info(f"  Created directory: {os.path.dirname(local_path)}")
 
                     try:
                         blob.download_to_filename(local_path)
-                        logging.info(f"  Downloaded {blob.name} to {local_path}")
 
                         # Verify downloaded file
                         if os.path.exists(local_path):
                             downloaded_size = os.path.getsize(local_path)
-                            logging.info(
-                                f"  Downloaded file size: {downloaded_size} bytes"
-                            )
                             if downloaded_size != blob.size:
                                 logging.warning(
                                     f"  Size mismatch: GCS={blob.size}, local={downloaded_size}"
@@ -217,9 +173,6 @@ class GCSHandler:
                             )
                     except Exception as e:
                         logging.error(f"  Error downloading regular file: {str(e)}")
-                        import traceback
-
-                        logging.error(f"  Full traceback: {traceback.format_exc()}")
                         raise
 
             logging.info(
@@ -230,9 +183,6 @@ class GCSHandler:
             logging.error(
                 f"Error in download_files_from_folder_by_id for file_id {file_id}: {str(e)}"
             )
-            import traceback
-
-            logging.error(f"Full traceback: {traceback.format_exc()}")
             raise
 
     def download_encrypted_file_by_id(
@@ -248,7 +198,7 @@ class GCSHandler:
         Returns:
             Optional[str]: Path to the decrypted file if successful, None otherwise
         """
-        prefix = f"file-embeddings/{file_id}/"
+        prefix = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/"
         blobs = list(self.bucket.list_blobs(prefix=prefix))
 
         if not blobs:
@@ -327,7 +277,7 @@ class GCSHandler:
         """Upload files maintaining consistent folder structure."""
         try:
             base_path = f"./chroma_db/{file_id}/{embedding_type}"
-            gcs_base_path = f"file-embeddings/{file_id}/{embedding_type}"
+            gcs_base_path = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/{embedding_type}"
 
             # Upload embeddings
             files_to_upload = {}
@@ -390,7 +340,10 @@ class GCSHandler:
             blob_path (str): Path of the blob in GCS
         """
         local_path_parts = blob_path.split("/")
-        if len(local_path_parts) >= 3 and "file-embeddings" in blob_path:
+        if (
+            len(local_path_parts) >= 3
+            and (self.configs.gcp_resource.gcp_embeddings_folder) in blob_path
+        ):
             file_id = local_path_parts[1]
             filename = local_path_parts[-1]
             local_dir = f"./chroma_db/{file_id}"
@@ -418,7 +371,8 @@ class GCSHandler:
         # Handle file_info.json (both GCS upload and local storage)
         if (
             isinstance(source, dict)
-            and "file-embeddings" in destination_blob_name
+            and (self.configs.gcp_resource.gcp_embeddings_folder)
+            in destination_blob_name
             and destination_blob_name.endswith("/file_info.json")
         ):
             self._store_file_info_json_locally(destination_blob_name, source)
@@ -504,7 +458,8 @@ class GCSHandler:
 
             # Fallback to GCS lookup
             blobs = self._storage_client.list_blobs(
-                self.bucket_name, prefix="file-embeddings/"
+                self.bucket_name,
+                prefix=f"{self.configs.gcp_resource.gcp_embeddings_folder}/",
             )
 
             for blob in blobs:
@@ -512,7 +467,8 @@ class GCSHandler:
                     file_info = json.loads(blob.download_as_bytes().decode("utf-8"))
                     if file_info.get("file_hash") == file_hash:
                         return file_info.get("file_id"), file_info.get(
-                            "embedding_type", "azure-3-large"
+                            "embedding_type",
+                            self.configs.chatbot.default_embedding_type,
                         )
             logging.info(f"No file found with hash: {file_hash}")
             return None, None
@@ -521,13 +477,17 @@ class GCSHandler:
             return None, None
 
     def get_file_info(self, file_id: str):
-        blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
+        blob = self.bucket.blob(
+            f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json"
+        )
         if blob.exists():
             return json.loads(blob.download_as_bytes().decode("utf-8"))
         return {}
 
     def update_file_info(self, file_id: str, new_info: dict):
-        blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
+        blob = self.bucket.blob(
+            f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json"
+        )
         if blob.exists():
             current_info = json.loads(blob.download_as_bytes().decode("utf-8"))
 
@@ -610,7 +570,9 @@ class GCSHandler:
             file_id (str): The ID of the file to update
             username_list (list): The new list of usernames
         """
-        blob = self.bucket.blob(f"file-embeddings/{file_id}/file_info.json")
+        blob = self.bucket.blob(
+            f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/file_info.json"
+        )
         if blob.exists():
             # Get the current file info from GCS
             current_info = json.loads(blob.download_as_bytes().decode("utf-8"))
@@ -699,7 +661,7 @@ class GCSHandler:
             logging.info(f"Deleting embeddings for file_id: {file_id}")
 
             # Delete embeddings folder from GCS
-            prefix = f"file-embeddings/{file_id}/"
+            prefix = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/"
             blobs = self.bucket.list_blobs(prefix=prefix)
 
             for blob in blobs:
@@ -765,7 +727,7 @@ class GCSHandler:
         Returns:
             Optional[str]: The file_id if found, None otherwise
         """
-        prefix = "file-embeddings/"
+        prefix = f"{self.configs.gcp_resource.gcp_embeddings_folder}/"
         for blob in self.bucket.list_blobs(prefix=prefix):
             if blob.name.endswith("file_info.json"):
                 try:
@@ -806,7 +768,7 @@ class GCSHandler:
                 return file_info.get("embeddings_status", "in_progress")
 
             # Check if there are any blobs in the file-embeddings directory
-            prefix = f"file-embeddings/{file_id}/"
+            prefix = f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/"
             blobs = list(self.bucket.list_blobs(prefix=prefix, max_results=1))
             if blobs:
                 # If there are blobs but no file_info.json, assume embeddings are in progress

@@ -2172,7 +2172,9 @@ def main():
 
 def _parse_error_response(upload_response):
     """Parse error response from API and extract meaningful error message."""
-    if not upload_response:
+    # IMPORTANT: requests.Response is falsy for HTTP status >= 400.
+    # We only want to treat it as missing when it's actually None.
+    if upload_response is None:
         logging.error("_parse_error_response: No upload_response provided")
         return "Unknown error - no response from server"
 

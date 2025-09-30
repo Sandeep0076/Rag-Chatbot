@@ -70,12 +70,36 @@ def find_file_by_hash_db(session: Session, file_hash: str) -> Optional[tuple[str
         return None
 
 
+def get_file_info_by_file_id(session: Session, file_id: str) -> Optional[str]:
+    """
+    Get file info by file_id from database.
+
+    Args:
+        session: Database session
+        file_id: The file ID to search for
+    """
+    try:
+        logging.info(f"Looking up embedding_type for file_id '{file_id}' in database")
+        result = session.query(FileInfo).filter(FileInfo.file_id == file_id).first()
+
+        if result:
+            logging.info(f"Found database record file_id '{file_id}'")
+            return result
+        else:
+            logging.info(f"No database record found for file_id '{file_id}'")
+            return None
+    except Exception as e:
+        logging.error(f"Error getting embedding_type by file_id from database: {e}")
+        return None
+
+
 def insert_file_info_record(
     session: Session,
     file_id: str,
     file_hash: str,
     filename: str = None,
-    embedding_type: str = "azure-3-large",
+    embedding_type: str = None,
+    configs=None,
 ) -> Dict[str, Any]:
     """
     Insert a new record into the FileInfo table.
@@ -85,16 +109,29 @@ def insert_file_info_record(
         file_id: The file ID
         file_hash: The file hash
         filename: The original filename (optional)
-        embedding_type: The embedding type to use (default: "azure-3-large")
+        embedding_type: The embedding type to use (if None, uses configs.chatbot.default_embedding_type)
+        configs: Configuration object (optional, for getting default embedding type)
 
     Returns:
         Dict containing the result of the operation
     """
     try:
+        # Use configurable default embedding type if not provided
+        if embedding_type is None:
+            if (
+                configs
+                and hasattr(configs, "chatbot")
+                and hasattr(configs.chatbot, "default_embedding_type")
+            ):
+                embedding_type = configs.chatbot.default_embedding_type
+            else:
+                embedding_type = "azure-3-large"  # Fallback default
+
         # Generate a unique ID for the record
         record_id = str(uuid.uuid4())
         logging.warning(
-            f"ENTERED insert_file_info_record for file_id={file_id}, filename={filename}"
+            f"ENTERED insert_file_info_record for file_id={file_id}, "
+            f"filename={filename}, embedding_type={embedding_type}"
         )
 
         # Create new FileInfo record
@@ -299,6 +336,7 @@ def export_gcs_file_info_to_sql_text(
     output_file_path: str = "./gcs_file_info_inserts.text",
     bucket_name: str = "chatbot-storage-dev-gcs-eu",
     prefix: str = "file-embeddings/",
+    default_embedding_type: str = "azure-3-large",
 ) -> Dict[str, Any]:
     """
     Export INSERT statements for FileInfo records by scanning file_info.json files in GCS.
@@ -311,6 +349,7 @@ def export_gcs_file_info_to_sql_text(
         output_file_path: Path to write the .text file with SQL INSERT statements
         bucket_name: GCS bucket to scan (default: "chatbot-storage-dev-gcs-eu")
         prefix: GCS prefix to search for file_info.json (default: "file-embeddings/")
+        default_embedding_type: Default embedding type for files without one (default: "azure-3-large")
 
     Returns:
         Dict with summary information: total_scanned, total_written, output_file
@@ -370,7 +409,7 @@ def export_gcs_file_info_to_sql_text(
             file_hash = info.get("file_hash")
             # Map filename
             file_name_value = info.get("original_filename") or info.get("file_name")
-            embedding_type_value = info.get("embedding_type", "azure-3-large")
+            embedding_type_value = info.get("embedding_type", default_embedding_type)
 
             # Determine createdAt value
             created_at_str = info.get("embeddings_created_at")
