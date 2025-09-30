@@ -1420,66 +1420,47 @@ async def upload_file(
             if validation_response:
                 return validation_response
 
-        # ===== MIGRATION DECISION LOGIC - ONLY FOR MULTI-FILE SCENARIOS =====
-        from rtl_rag_chatbot_api.chatbot.migration_handler import (
-            plan_upload_with_migration,
+        # ===== AUTO-MIGRATION LOGIC - SIMPLE AND TRANSPARENT =====
+        # Check existing file IDs for old embeddings and auto-migrate if needed
+        from rtl_rag_chatbot_api.chatbot.auto_migration_service import (
+            AutoMigrationService,
         )
 
-        try:
-            is_multi_file_scenario, plan = await plan_upload_with_migration(
-                all_files, parsed_existing_file_ids, configs
+        auto_migration_service = AutoMigrationService(
+            configs, gcs_handler, SessionLocal
+        )
+
+        if parsed_existing_file_ids:
+            logging.info(
+                f"Checking {len(parsed_existing_file_ids)} existing file IDs for migration needs"
             )
-        except ValueError as e:
-            # Handle validation errors (e.g., invalid existing file IDs)
-            error_message = str(e)
-            if "Invalid file ID" in error_message:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "detail": {
-                            "message": error_message,
-                            "errors": [{"error": error_message}],
-                        }
-                    },
+
+            # Check and migrate existing files if they have old embeddings
+            migration_results = (
+                await auto_migration_service.check_and_migrate_multiple_files(
+                    file_ids=parsed_existing_file_ids,
+                    embedding_handler=embedding_handler,
+                    background_tasks=background_tasks,
+                    max_concurrent=3,  # Process up to 3 files concurrently
                 )
-            else:
-                raise
-
-        # If NOT a multi-file scenario, run the normal processing flow directly (single-file or simple case)
-        if not is_multi_file_scenario:
-            return await _process_normal_upload_flow(
-                all_files,
-                parsed_existing_file_ids,
-                is_image,
-                username,
-                background_tasks,
             )
 
-        # Multi-file: act on plan
-        action = plan.get("action")
-        if action == "error":
-            return JSONResponse(status_code=400, content=plan.get("error", {}))
+            # Log migration results
+            migrated_files = [r for r in migration_results if r.get("migrated", False)]
+            if migrated_files:
+                logging.info(
+                    f"Auto-migrated {len(migrated_files)} file(s) during upload: "
+                    f"{[r.get('migration_result', {}).get('file_id') for r in migrated_files]}"
+                )
 
-        if action == "fallthrough":
-            # Store migration context globally for downstream logic to augment document files
-            globals()["current_migration_context"] = plan.get("migration_context", {})
-
-        # Proceed with normal flow using possibly filtered files and updated existing IDs
+        # Proceed with normal upload flow
         response = await _process_normal_upload_flow(
-            plan.get("all_files", all_files),
-            plan.get("parsed_existing_file_ids", parsed_existing_file_ids),
+            all_files,
+            parsed_existing_file_ids,
             is_image,
             username,
             background_tasks,
-            is_migration=(plan.get("migration_context", {}) or {}).get(
-                "is_migration", False
-            ),
-            migration_context=plan.get("migration_context", {}),
         )
-
-        # Clear migration context after processing
-        if "current_migration_context" in globals():
-            del globals()["current_migration_context"]
 
         return response
 
@@ -2458,6 +2439,8 @@ async def get_embedding_status(file_id: str, current_user=Depends(get_current_us
     Get the current status of embeddings for a specific file.
     The frontend can poll this endpoint to know when embeddings are ready for chat.
 
+    Now also checks for old embeddings and triggers auto-migration if needed.
+
     Args:
         file_id: The ID of the file to check
         current_user: Authenticated user information
@@ -2468,8 +2451,31 @@ async def get_embedding_status(file_id: str, current_user=Depends(get_current_us
             - can_chat: Whether chat is available with this file
             - file_id: The checked file ID
             - message: Human-readable message about the current status
+            - migrated: Whether the file was migrated (optional)
     """
     try:
+        # ===== AUTO-MIGRATION CHECK FOR EMBEDDING STATUS =====
+        from rtl_rag_chatbot_api.chatbot.auto_migration_service import (
+            AutoMigrationService,
+        )
+
+        auto_migration_service = AutoMigrationService(
+            configs, gcs_handler, SessionLocal
+        )
+
+        # Check if file needs migration and migrate if necessary
+        migration_result = await auto_migration_service.check_and_migrate_if_needed(
+            file_id=file_id,
+            embedding_handler=embedding_handler,
+        )
+
+        migrated = migration_result.get("migrated", False)
+        if migrated:
+            logging.info(
+                f"Auto-migrated {file_id} during status check: "
+                f"{migration_result.get('migration_result', {})}"
+            )
+
         # Check local file_info.json first
         local_info_path = os.path.join("./chroma_db", file_id, "file_info.json")
 
@@ -2480,12 +2486,20 @@ async def get_embedding_status(file_id: str, current_user=Depends(get_current_us
             status = file_info.get("embeddings_status", "not_started")
             can_chat = status in ["ready_for_chat", "completed"]
 
-            return {
+            response = {
                 "status": status,
                 "can_chat": can_chat,
                 "file_id": file_id,
                 "message": "Ready for chat" if can_chat else "Embeddings not ready yet",
             }
+
+            if migrated:
+                response["migrated"] = True
+                response["embedding_type"] = migration_result.get(
+                    "embedding_type", "azure-3-large"
+                )
+
+            return response
 
         # If no local file, check GCS
         try:
@@ -3440,6 +3454,52 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
         logging.info(f"Graphic generation flag: {generate_visualization}")
         logging.info(f"For {file_id_logging}")
+
+        # ===== AUTO-MIGRATION CHECK FOR CHAT =====
+        # Check if any of the files being accessed have old embeddings and auto-migrate
+        from rtl_rag_chatbot_api.chatbot.auto_migration_service import (
+            AutoMigrationService,
+        )
+
+        auto_migration_service = AutoMigrationService(
+            configs, gcs_handler, SessionLocal
+        )
+
+        # Collect all file IDs being accessed
+        chat_file_ids = []
+        if query.file_id:
+            chat_file_ids.append(query.file_id)
+        if query.file_ids:
+            chat_file_ids.extend(query.file_ids)
+
+        if chat_file_ids:
+            logging.info(
+                f"Checking {len(chat_file_ids)} file(s) for migration before chat"
+            )
+
+            # Check and migrate files if needed
+            migration_results = (
+                await auto_migration_service.check_and_migrate_multiple_files(
+                    file_ids=chat_file_ids,
+                    embedding_handler=embedding_handler,
+                    max_concurrent=2,  # Limit concurrent migrations during chat
+                )
+            )
+
+            # Log migration results
+            migrated_files = [r for r in migration_results if r.get("migrated", False)]
+            if migrated_files:
+                logging.info(
+                    f"Auto-migrated {len(migrated_files)} file(s) before chat: "
+                    f"{[r.get('migration_result', {}).get('file_id') for r in migrated_files]}"
+                )
+
+                # Refresh file_data after migration to use new embeddings
+                file_data = await _process_file_info(
+                    query, gcs_handler, generate_visualization
+                )
+                all_file_infos = file_data["all_file_infos"]
+                logging.info("Refreshed file info after migration")
 
         model_info = initialized_models.get(model_key)
         model = model_info["model"] if model_info else None

@@ -285,6 +285,62 @@ def delete_file_info_by_file_id(session: Session, file_id: str) -> Dict[str, Any
         }
 
 
+def update_file_info_embedding_type(
+    session: Session, file_id: str, new_embedding_type: str
+) -> Dict[str, Any]:
+    """
+    Update the embedding_type for a file in the FileInfo table.
+
+    This is used after successful migration to update the database record
+    with the new embedding type.
+
+    Args:
+        session: Database session
+        file_id: The file ID to update
+        new_embedding_type: The new embedding type to set
+
+    Returns:
+        Dict containing the result of the update operation
+    """
+    try:
+        # Find the record to update
+        record = session.query(FileInfo).filter(FileInfo.file_id == file_id).first()
+
+        if not record:
+            logging.warning(f"No FileInfo record found for file_id: {file_id}")
+            return {
+                "status": "error",
+                "updated": False,
+                "message": f"No record found for file_id: {file_id}",
+            }
+
+        # Update the embedding_type
+        old_embedding_type = record.embedding_type
+        record.embedding_type = new_embedding_type
+        session.commit()
+
+        logging.info(
+            f"Successfully updated embedding_type for {file_id}: "
+            f"{old_embedding_type} -> {new_embedding_type}"
+        )
+        return {
+            "status": "success",
+            "updated": True,
+            "message": f"Successfully updated embedding_type to {new_embedding_type}",
+            "old_embedding_type": old_embedding_type,
+            "new_embedding_type": new_embedding_type,
+        }
+    except Exception as e:
+        logging.error(f"Error updating embedding_type for file_id {file_id}: {e}")
+        session.rollback()
+        return {
+            "status": "error",
+            "updated": False,
+            "message": str(e),
+            "details": "Database operation failed",
+        }
+
+
 def delete_all_file_info_records(session: Session) -> Dict[str, Any]:
     """
     Delete all records from the FileInfo table.
@@ -336,7 +392,7 @@ def export_gcs_file_info_to_sql_text(
     output_file_path: str = "./gcs_file_info_inserts.text",
     bucket_name: str = "chatbot-storage-dev-gcs-eu",
     prefix: str = "file-embeddings/",
-    default_embedding_type: str = "azure-3-large",
+    default_embedding_type: str = "azure",
 ) -> Dict[str, Any]:
     """
     Export INSERT statements for FileInfo records by scanning file_info.json files in GCS.

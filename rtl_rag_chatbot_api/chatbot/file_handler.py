@@ -719,6 +719,47 @@ class FileHandler:
 
         logging.info(f"Found embeddings for: {original_filename}")
 
+        # === AUTO-MIGRATION CHECK FOR EXISTING FILES ===
+        # Check if existing file has old embeddings and migrate if needed
+        # This ensures single-file uploads with old embeddings get migrated
+        if not is_tabular and not is_database:
+            try:
+                from rtl_rag_chatbot_api.app import SessionLocal
+                from rtl_rag_chatbot_api.chatbot.auto_migration_service import (
+                    AutoMigrationService,
+                )
+
+                auto_migration_service = AutoMigrationService(
+                    self.configs, self.gcs_handler, SessionLocal
+                )
+
+                # Check and migrate if needed
+                migration_result = (
+                    await auto_migration_service.check_and_migrate_if_needed(
+                        file_id=existing_file_id,
+                        file_path=temp_file_path,  # Pass the temp file if available
+                        embedding_handler=None,  # Will be created if needed
+                    )
+                )
+
+                if migration_result.get("migrated"):
+                    logging.info(
+                        f"Auto-migrated existing file {existing_file_id} during single-file upload: "
+                        f"{migration_result.get('migration_result', {}).get('old_embedding_type', 'azure')} → "
+                        f"{migration_result.get('embedding_type', 'azure-3-large')}"
+                    )
+                else:
+                    logging.info(
+                        f"No migration needed for {existing_file_id}: "
+                        f"embedding_type = {migration_result.get('embedding_type', 'unknown')}"
+                    )
+            except Exception as migration_error:
+                logging.error(
+                    f"Migration check failed for {existing_file_id}: {migration_error}",
+                    exc_info=True,
+                )
+                # Continue processing - don't block on migration failure
+
         # Update username list using the more comprehensive method
         # Use update_file_info which appends usernames (tracks frequency)
         # instead of update_username_list which deduplicates
@@ -750,7 +791,9 @@ class FileHandler:
         # Download embeddings if they exist remotely but not locally
         # Download embeddings from GCS only if Azure embeddings exist remotely
         # but the local cache is missing.
+        # (will get new embeddings if file was just migrated)
         if azure_result["embeddings_exist"] and not local_exists:
+            logging.info(f"Downloading embeddings for file {existing_file_id}")
             self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
 
         # For images, we only need the embeddings to chat
@@ -816,6 +859,174 @@ class FileHandler:
         except Exception as e:
             logging.warning(f"Error cleaning up directory {file_id}: {str(e)}")
 
+    async def _handle_existing_embeddings_early_return(
+        self,
+        file_id: str,
+        original_filename: str,
+        file_content: bytes,
+        existing_file_id: str,
+        is_image: bool,
+        username: str,
+    ) -> dict:
+        """Handle short-circuit flow when embeddings already exist for the file hash."""
+        logging.info(f"Found embeddings for: {original_filename}")
+
+        # Clean up any empty directory that might have been created for the new file_id
+        await self._cleanup_empty_directory(file_id)
+
+        # Persist uploaded content locally for migration (avoid GCS download)
+        existing_temp_path = None
+        try:
+            existing_temp_path = f"local_data/{existing_file_id}_{original_filename}"
+            os.makedirs(os.path.dirname(existing_temp_path), exist_ok=True)
+            async with aiofiles.open(existing_temp_path, "wb") as buffer:
+                await buffer.write(file_content)
+            logging.info(f"Saved uploaded file to {existing_temp_path} for migration")
+        except Exception as write_err:
+            logging.warning(
+                f"Failed to persist uploaded file for migration: {write_err}"
+            )
+            existing_temp_path = None
+
+        # Auto-migration check for existing files (non-blocking on failure)
+        try:
+            from rtl_rag_chatbot_api.app import SessionLocal
+            from rtl_rag_chatbot_api.chatbot.auto_migration_service import (
+                AutoMigrationService,
+            )
+
+            auto_migration_service = AutoMigrationService(
+                self.configs, self.gcs_handler, SessionLocal
+            )
+
+            migration_result = await auto_migration_service.check_and_migrate_if_needed(
+                file_id=existing_file_id,
+                file_path=existing_temp_path,
+                embedding_handler=None,
+            )
+
+            if migration_result.get("migrated"):
+                logging.info(
+                    f"Auto-migrated existing file {existing_file_id} during upload: "
+                    f"{migration_result.get('migration_result', {}).get('old_embedding_type', 'azure')} → "
+                    f"{migration_result.get('embedding_type', 'azure-3-large')}"
+                )
+        except Exception as migration_error:
+            logging.error(
+                f"Migration check failed for {existing_file_id}: {migration_error}"
+            )
+
+        # Ensure local embeddings are present (download if needed)
+        local_exists = await self._check_local_embeddings(existing_file_id)
+        logging.info(f"Local embeddings exist: {local_exists}")
+        if not local_exists:
+            logging.info(f"Downloading embeddings for file {existing_file_id}")
+            self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
+
+        # Track username usage
+        self.gcs_handler.update_file_info(existing_file_id, {"username": username})
+        logging.info(
+            f"Appended username '{username}' for existing file (tracks upload frequency)"
+        )
+
+        # Return early with existing file information
+        return {
+            "status": "success",
+            "file_id": existing_file_id,
+            "is_image": is_image,
+            "embeddings_exist": True,
+            "temp_file_path": None,
+        }
+
+    async def _validate_and_cache_text(
+        self,
+        temp_file_path: str,
+        file_id: str,
+        original_filename: str,
+        file_extension: str,
+        is_image: bool,
+    ):
+        """Extract, validate, and cache document text. Returns error dict or None to continue."""
+        try:
+            base_handler = BaseRAGHandler(self.configs, self.gcs_handler)
+            extracted_text = base_handler.extract_text_from_file(temp_file_path)
+
+            # Check if extraction returned an error
+            if extracted_text.startswith("ERROR:"):
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                await self._cleanup_empty_directory(file_id)
+
+                error_msg = extracted_text[7:]
+                logging.error(
+                    f"Text extraction failed for {original_filename}: {error_msg}"
+                )
+                return {
+                    "status": "error",
+                    "message": error_msg,
+                    "file_id": file_id,
+                    "is_image": is_image,
+                    "embeddings_exist": False,
+                    "temp_file_path": None,
+                }
+
+            # Log extraction stats
+            word_count = len(extracted_text.split())
+            logging.info(
+                f"Text extraction completed for {original_filename}: "
+                f"{len(extracted_text)} characters, {word_count} words"
+            )
+
+            # Store extracted text and pass to embedding handler
+            self.extracted_text_cache = extracted_text
+            self.store_extracted_text(file_id, extracted_text)
+
+            # Validate text length
+            cleaned_text = extracted_text.strip()
+            if len(cleaned_text) < 100:
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                await self._cleanup_empty_directory(file_id)
+
+                error_msg = (
+                    f"Insufficient text content extracted from {file_extension} file. "
+                    f"Only {len(cleaned_text)} characters found (minimum 100 required). "
+                    f"The document may be empty, corrupted, or contain only images/non-text content."
+                )
+                logging.error(
+                    f"Text validation failed for {original_filename}: {error_msg}"
+                )
+                return {
+                    "status": "error",
+                    "message": error_msg,
+                    "file_id": file_id,
+                    "is_image": is_image,
+                    "embeddings_exist": False,
+                    "temp_file_path": None,
+                }
+
+            logging.info(
+                f"Text validation passed for {original_filename} ({len(extracted_text)} characters)"
+            )
+            return None
+        except Exception as e:
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            await self._cleanup_empty_directory(file_id)
+
+            error_msg = f"Failed to validate text content: {str(e)}"
+            logging.error(
+                f"Text validation failed for {original_filename}: {error_msg}"
+            )
+            return {
+                "status": "error",
+                "message": error_msg,
+                "file_id": file_id,
+                "is_image": is_image,
+                "embeddings_exist": False,
+                "temp_file_path": None,
+            }
+
     async def process_file(
         self, file: UploadFile, file_id: str, is_image: bool, username: str
     ) -> dict:
@@ -849,34 +1060,14 @@ class FileHandler:
 
             # If we have an existing file with embeddings, handle it immediately without creating new directories
             if embeddings_exist:
-                logging.info(f"Found embeddings for: {original_filename}")
-
-                # Clean up any empty directory that might have been created for the new file_id
-                await self._cleanup_empty_directory(file_id)
-
-                # Download embeddings if they exist remotely but not locally
-                # This ensures embeddings are available for immediate chat use
-                local_exists = await self._check_local_embeddings(existing_file_id)
-                if not local_exists:
-                    logging.info(f"Downloading embeddings for file {existing_file_id}")
-                    self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
-
-                # Update username list using the more comprehensive method
-                self.gcs_handler.update_file_info(
-                    existing_file_id, {"username": username}
+                return await self._handle_existing_embeddings_early_return(
+                    file_id,
+                    original_filename,
+                    file_content,
+                    existing_file_id,
+                    is_image,
+                    username,
                 )
-                logging.info(
-                    f"Appended username '{username}' for existing file (tracks upload frequency)"
-                )
-
-                # Return early with existing file information
-                return {
-                    "status": "success",
-                    "file_id": existing_file_id,  # Use existing file ID
-                    "is_image": is_image,
-                    "embeddings_exist": True,
-                    "temp_file_path": None,
-                }
 
             # Only create directories and save file if we don't have existing embeddings
             # Create directories and save file
@@ -888,90 +1079,15 @@ class FileHandler:
             # Validate text content for document files before encryption
             file_extension = os.path.splitext(original_filename)[1].lower()
             if file_extension in [".pdf", ".doc", ".docx", ".txt"] and not is_image:
-                try:
-                    # Create a base handler for text extraction
-                    base_handler = BaseRAGHandler(self.configs, self.gcs_handler)
-                    extracted_text = base_handler.extract_text_from_file(temp_file_path)
-
-                    # Check if extraction returned an error
-                    if extracted_text.startswith("ERROR:"):
-                        # Clean up temp file and directory before returning error
-                        if os.path.exists(temp_file_path):
-                            os.remove(temp_file_path)
-                        await self._cleanup_empty_directory(file_id)
-
-                        error_msg = extracted_text[7:]  # Remove "ERROR: " prefix
-                        logging.error(
-                            f"Text extraction failed for {original_filename}: {error_msg}"
-                        )
-                        return {
-                            "status": "error",
-                            "message": error_msg,
-                            "file_id": file_id,
-                            "is_image": is_image,
-                            "embeddings_exist": False,
-                            "temp_file_path": None,
-                        }
-
-                    # Calculate word count for extracted text
-                    word_count = len(extracted_text.split())
-                    logging.info(
-                        f"Text extraction completed for {original_filename}: "
-                        f"{len(extracted_text)} characters, {word_count} words"
-                    )
-
-                    # Store extracted text in a temporary variable for metadata
-                    self.extracted_text_cache = extracted_text
-                    # Store extracted text for embedding handler to avoid duplicate extraction
-                    self.store_extracted_text(file_id, extracted_text)
-
-                    # Validate text length for document files (minimum 100 characters)
-                    cleaned_text = extracted_text.strip()
-                    if len(cleaned_text) < 100:
-                        # Clean up temp file and directory before returning error
-                        if os.path.exists(temp_file_path):
-                            os.remove(temp_file_path)
-                        await self._cleanup_empty_directory(file_id)
-
-                        error_msg = (
-                            f"Insufficient text content extracted from {file_extension} file. "
-                            f"Only {len(cleaned_text)} characters found (minimum 100 required). "
-                            f"The document may be empty, corrupted, or contain only images/non-text content."
-                        )
-                        logging.error(
-                            f"Text validation failed for {original_filename}: {error_msg}"
-                        )
-                        return {
-                            "status": "error",
-                            "message": error_msg,
-                            "file_id": file_id,
-                            "is_image": is_image,
-                            "embeddings_exist": False,
-                            "temp_file_path": None,
-                        }
-
-                    logging.info(
-                        f"Text validation passed for {original_filename} ({len(extracted_text)} characters)"
-                    )
-
-                except Exception as e:
-                    # Clean up temp file and directory before returning error
-                    if os.path.exists(temp_file_path):
-                        os.remove(temp_file_path)
-                    await self._cleanup_empty_directory(file_id)
-
-                    error_msg = f"Failed to validate text content: {str(e)}"
-                    logging.error(
-                        f"Text validation failed for {original_filename}: {error_msg}"
-                    )
-                    return {
-                        "status": "error",
-                        "message": error_msg,
-                        "file_id": file_id,
-                        "is_image": is_image,
-                        "embeddings_exist": False,
-                        "temp_file_path": None,
-                    }
+                validation_result = await self._validate_and_cache_text(
+                    temp_file_path,
+                    file_id,
+                    original_filename,
+                    file_extension,
+                    is_image,
+                )
+                if validation_result is not None:
+                    return validation_result
 
             # Handle file encryption
             encrypted_file_path = await self._handle_file_encryption(
