@@ -33,4 +33,3 @@ temp_files/
 .coverage.*
 .env
 GEMINI.md
-tests/manual/
