@@ -72,14 +72,11 @@ def find_file_by_hash_db(session: Session, file_hash: str) -> Optional[tuple[str
 
 def get_file_info_by_file_id(session: Session, file_id: str) -> Optional[str]:
     """
-    Get embedding_type by file_id from database.
+    Get file info by file_id from database.
 
     Args:
         session: Database session
         file_id: The file ID to search for
-
-    Returns:
-        Optional[str]: The embedding type if found, None otherwise
     """
     try:
         logging.info(f"Looking up embedding_type for file_id '{file_id}' in database")
