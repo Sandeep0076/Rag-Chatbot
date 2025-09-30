@@ -1445,7 +1445,46 @@ async def upload_file(
                 )
             )
 
-            # Log migration results
+            # Check for migration failures
+            failed_migrations = [
+                r
+                for r in migration_results
+                if isinstance(r, dict)
+                and isinstance(r.get("migration_result"), dict)
+                and r.get("migration_result", {}).get("status") == "error"
+            ]
+            if failed_migrations:
+                failed_file_ids = [
+                    r.get("migration_result", {}).get("file_id") or r.get("file_id")
+                    for r in failed_migrations
+                ]
+                error_messages = [
+                    r.get("migration_result", {}).get("message") or r.get("message")
+                    for r in failed_migrations
+                ]
+
+                logging.error(
+                    f"Migration failed for {len(failed_migrations)} file(s): {failed_file_ids}"
+                )
+
+                # Fail the request so the frontend does not show success
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "status": "error",
+                        "message": (
+                            "Migration failed for existing files. Please re-upload the original files "
+                            "to create new embeddings. Files: "
+                            + ", ".join(failed_file_ids)
+                            + ". Errors: "
+                            + "; ".join(error_messages)
+                        ),
+                        "failed_file_ids": failed_file_ids,
+                        "error_type": "migration_failed",
+                    },
+                )
+
+            # Log successful migrations
             migrated_files = [r for r in migration_results if r.get("migrated", False)]
             if migrated_files:
                 logging.info(

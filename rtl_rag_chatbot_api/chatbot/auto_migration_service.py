@@ -225,8 +225,12 @@ class AutoMigrationService:
                     if not file_path or not os.path.exists(file_path):
                         return {
                             "status": "error",
-                            "message": f"Failed to download file {file_id} for migration",
+                            "message": (
+                                f"File {file_id} needs migration but the original encrypted file is "
+                                f"missing from storage. Please re-upload the original file to create new embeddings."
+                            ),
                             "file_id": file_id,
+                            "error_type": "missing_encrypted_file",
                         }
 
             # Step 2: Delete old embeddings (both local and GCS)

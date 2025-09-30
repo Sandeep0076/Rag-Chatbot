@@ -853,11 +853,12 @@ class EmbeddingHandler:
             )
 
             # Use asyncio.to_thread for IO-bound operations
+            # Always create new embeddings under the newer embedding type
             result = await asyncio.to_thread(
                 azure_handler.create_and_store_embeddings,
                 chunks,
                 file_id,
-                "azure",
+                "azure-3-large",
                 is_embedding=True,
             )
 
