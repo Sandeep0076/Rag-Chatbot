@@ -45,9 +45,7 @@ class FileEncryptionManager:
         Returns:
             Optional[str]: Path to the encrypted file if created, None if not needed or if operation failed
         """
-        if is_tabular or is_database:
-            # We don't encrypt tabular or database files using this method
-            return None
+        # Encrypt all file types including tabular and database files
 
         # Check if encrypted file exists in GCS
         encrypted_file_exists = await asyncio.to_thread(

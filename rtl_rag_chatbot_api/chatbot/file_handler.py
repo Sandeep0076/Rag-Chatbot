@@ -1278,18 +1278,17 @@ class FileHandler:
         if existing_file_id:
             return None
 
-        # Encrypt the original uploaded file (tabular files are handled separately)
-        if not is_tabular and not is_database:
-            # Check if the temp_file_path actually exists (it might not if we skipped file saving)
-            if os.path.exists(temp_file_path):
-                # Use the FileEncryptionManager to handle encryption
-                (
-                    success,
-                    encrypted_file_path,
-                ) = await self.encryption_manager.encrypt_and_upload(
-                    temp_file_path, original_filename, file_id
-                )
-                return encrypted_file_path
+        # Encrypt the original uploaded file for all file types
+        # Check if the temp_file_path actually exists (it might not if we skipped file saving)
+        if os.path.exists(temp_file_path):
+            # Use the FileEncryptionManager to handle encryption
+            (
+                success,
+                encrypted_file_path,
+            ) = await self.encryption_manager.encrypt_and_upload(
+                temp_file_path, original_filename, file_id
+            )
+            return encrypted_file_path
 
         return None
 
