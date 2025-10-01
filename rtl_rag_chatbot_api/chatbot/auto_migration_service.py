@@ -243,6 +243,28 @@ class AutoMigrationService:
                 )
                 # Continue anyway - we'll overwrite
 
+            # Step 2.5: Ensure encrypted original exists after deletion
+            # The cleanup deletes all blobs under the embeddings prefix, including the encrypted original.
+            # Re-upload it if missing so downstream flows are consistent.
+            try:
+                from rtl_rag_chatbot_api.chatbot.utils.file_encryption_manager import (
+                    FileEncryptionManager,
+                )
+
+                enc_mgr = FileEncryptionManager(self.gcs_handler)
+                base_name = os.path.basename(original_filename)
+                await enc_mgr.ensure_file_encryption(
+                    file_id=file_id,
+                    original_filename=base_name,
+                    temp_file_path=file_path,
+                    is_tabular=False,
+                    is_database=False,
+                )
+            except Exception as enc_err:
+                logger.warning(
+                    f"Failed to ensure encrypted original for {file_id} after cleanup: {enc_err}"
+                )
+
             # Step 3: Create new embeddings with azure-3-large
             logger.info(
                 f"Creating new embeddings for {file_id} with {NEW_EMBEDDING_TYPE}"

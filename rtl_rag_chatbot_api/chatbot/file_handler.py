@@ -891,6 +891,22 @@ class FileHandler:
             )
             existing_temp_path = None
 
+        # Ensure encrypted original exists in GCS for existing-file early return path
+        try:
+            await self.encryption_manager.ensure_file_encryption(
+                existing_file_id,
+                original_filename,
+                existing_temp_path
+                if existing_temp_path
+                else f"local_data/{existing_file_id}_{original_filename}",
+                False,
+                False,
+            )
+        except Exception as enc_err:
+            logging.warning(
+                f"Failed to ensure encryption for existing file {existing_file_id}: {enc_err}"
+            )
+
         # Auto-migration check for existing files (non-blocking on failure)
         try:
             from rtl_rag_chatbot_api.app import SessionLocal
