@@ -672,7 +672,7 @@ class FileHandler:
         # With unified Azure embeddings used for both Azure GPT and Gemini models,
         # we only need to verify the Azure directory. Requiring the legacy
         # `google` directory falsely flags missing embeddings and triggers an
-        # unnecessary GCS download.
+        # unnecessary GCS download. `google` directory is no longer used.
         sqlite_path = os.path.join(azure_path, "chroma.sqlite3")
         return os.path.exists(sqlite_path)
 
@@ -1226,7 +1226,7 @@ class FileHandler:
             file_hash
         )
         if not existing_file_id:
-            return None, azure_result
+            return None, azure_result, None
 
         # Get embedding status for existing file
         embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)
