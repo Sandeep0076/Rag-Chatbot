@@ -357,6 +357,21 @@ class AutoMigrationService:
                 f"Creating new embeddings for {file_id} with {NEW_EMBEDDING_TYPE}"
             )
 
+            # Ensure ChromaDB directory exists with proper permissions
+            chroma_db_path = f"./chroma_db/{file_id}/azure"
+            os.makedirs(chroma_db_path, exist_ok=True)
+
+            # Set proper permissions for the directory (read, write, execute for owner and group)
+            try:
+                os.chmod(chroma_db_path, 0o755)
+                logger.info(
+                    f"Set proper permissions for ChromaDB directory: {chroma_db_path}"
+                )
+            except Exception as perm_error:
+                logger.warning(
+                    f"Could not set permissions for {chroma_db_path}: {perm_error}"
+                )
+
             # Create or use provided embedding handler
             if not embedding_handler:
                 embedding_handler = EmbeddingHandler(self.configs, self.gcs_handler)

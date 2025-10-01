@@ -3339,7 +3339,6 @@ async def _process_file_info(
         file_id: _filter_context_from_file_info(file_info)
         for file_id, file_info in all_file_infos.items()
     }
-    logging.info(f"Filtered context for LLM: {filtered_all_file_infos}")
 
     # Return consolidated result with consistent structure
     return {
