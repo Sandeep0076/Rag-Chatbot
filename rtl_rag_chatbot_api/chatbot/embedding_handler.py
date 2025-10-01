@@ -76,14 +76,12 @@ class EmbeddingHandler:
         # Ensure azure_result and gemini_result are dictionaries
         # If they're not, convert them to dictionaries with appropriate fields
         if not isinstance(azure_result, dict):
-            logging.warning(f"azure_result is not a dictionary: {azure_result}")
             azure_result = {
                 "success": False,
                 "error": str(azure_result) if azure_result else "Unknown error",
             }
 
         if not isinstance(gemini_result, dict):
-            logging.warning(f"gemini_result is not a dictionary: {gemini_result}")
             gemini_result = {
                 "success": False,
                 "error": str(gemini_result) if gemini_result else "Unknown error",
@@ -490,9 +488,6 @@ class EmbeddingHandler:
 
             # Manage temp_metadata to prevent cross-file contamination
             self._manage_temp_metadata_isolation(file_id)
-
-            # Log final metadata being used
-            logging.info(f"Using metadata for file_id {file_id}: {file_metadata}")
 
             # Process embeddings with timeout handling
             azure_result, gemini_result = await self._process_embeddings_with_timeout(
@@ -1085,10 +1080,6 @@ class EmbeddingHandler:
         temp_metadata = self.gcs_handler.get_file_info(file_id)
         if not temp_metadata:
             raise ValueError(f"No metadata found for file_id: {file_id}")
-
-        logging.info(
-            f"Retrieved metadata from GCS for file_id {file_id}: {temp_metadata}"
-        )
         return temp_metadata
 
     def _extract_and_chunk_text(
