@@ -858,7 +858,7 @@ class EmbeddingHandler:
                 azure_handler.create_and_store_embeddings,
                 chunks,
                 file_id,
-                "azure-3-large",
+                "azure",  # Always 'azure' in the unified embedding approach
                 is_embedding=True,
             )
 
