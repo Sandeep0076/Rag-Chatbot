@@ -152,6 +152,82 @@ class AutoMigrationService:
 
         return needs_migration, embedding_type
 
+    async def _handle_image_analysis_for_migration(
+        self, file_id: str, file_path: str, file_info: Dict[str, Any]
+    ) -> str:
+        """
+        Handle image analysis for migration of legacy image files.
+
+        Args:
+            file_id: The file ID being migrated
+            file_path: Path to the original image file
+            file_info: File metadata dictionary
+
+        Returns:
+            Path to the file to use for embeddings (analysis file or original)
+        """
+        logger.info(
+            f"Detected image file {file_id}, performing image analysis before migration"
+        )
+
+        # Import image analysis functionality
+        from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
+
+        # Perform image analysis
+        try:
+            analysis_result = await analyze_images(file_path)
+
+            if "error" in analysis_result:
+                logger.error(
+                    f"Image analysis failed for {file_id}: {analysis_result['error']}"
+                )
+                return file_path  # Return original file path on error
+
+            # Save analysis results to local files
+            gpt4_analysis = analysis_result.get("gpt4_analysis", "")
+            if not gpt4_analysis:
+                logger.warning(
+                    f"No GPT-4 analysis content for {file_id}, proceeding with original file"
+                )
+                return file_path
+
+            # Create analysis file path
+            analysis_file_path = f"local_data/{file_id}_gpt4_analysis.txt"
+            os.makedirs(os.path.dirname(analysis_file_path), exist_ok=True)
+
+            with open(analysis_file_path, "w", encoding="utf-8") as f:
+                f.write(gpt4_analysis)
+
+            logger.info(
+                f"Successfully wrote GPT-4 analysis file. Size: {len(gpt4_analysis)} bytes"
+            )
+
+            # Update file_info with analysis paths
+            file_info.update(
+                {
+                    "gpt4_analysis_path": analysis_file_path,
+                    "gemini_analysis_path": f"local_data/{file_id}_gemini_analysis.txt",  # Placeholder
+                    "has_analysis": True,
+                }
+            )
+
+            # Create placeholder Gemini analysis file
+            gemini_analysis_path = f"local_data/{file_id}_gemini_analysis.txt"
+            with open(gemini_analysis_path, "w", encoding="utf-8") as f:
+                f.write("Gemini analysis placeholder - using unified Azure embeddings")
+
+            logger.info(
+                "Successfully wrote Gemini (Placeholder) analysis file. Size: 76 bytes"
+            )
+
+            # Use the analysis file for embeddings instead of the original image
+            logger.info(f"Using analysis file for embeddings: {analysis_file_path}")
+            return analysis_file_path
+
+        except Exception as analysis_error:
+            logger.error(f"Image analysis failed for {file_id}: {str(analysis_error)}")
+            return file_path  # Return original file path on error
+
     async def migrate_file(
         self,
         file_id: str,
@@ -265,7 +341,18 @@ class AutoMigrationService:
                     f"Failed to ensure encrypted original for {file_id} after cleanup: {enc_err}"
                 )
 
-            # Step 3: Create new embeddings with azure-3-large
+            # Step 3: Check if this is an image file and perform image analysis if needed
+            is_image = file_info.get("is_image", False)
+            if is_image:
+                file_path = await self._handle_image_analysis_for_migration(
+                    file_id, file_path, file_info
+                )
+            else:
+                logger.info(
+                    f"Non-image file {file_id}, proceeding with direct migration"
+                )
+
+            # Step 4: Create new embeddings with azure-3-large
             logger.info(
                 f"Creating new embeddings for {file_id} with {NEW_EMBEDDING_TYPE}"
             )
@@ -302,7 +389,7 @@ class AutoMigrationService:
                         "file_id": file_id,
                     }
 
-            # Step 4: Update database with new embedding type
+            # Step 5: Update database with new embedding type
             logger.info(f"Updating database with new embedding type for {file_id}")
             update_result = await self._update_embedding_type_in_db(
                 file_id, NEW_EMBEDDING_TYPE, file_hash

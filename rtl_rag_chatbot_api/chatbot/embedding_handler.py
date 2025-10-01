@@ -847,6 +847,12 @@ class EmbeddingHandler:
                 chroma_manager=self.chroma_manager,  # Pass the shared manager
             )
 
+            # Force re-embedding to always use Azure 3 Large regardless of legacy metadata
+            # By providing embedding_type via all_file_infos, AzureChatbot will select the 3-large deployment
+            azure_handler.all_file_infos = {
+                file_id: {"embedding_type": "azure-3-large"}
+            }
+
             # Use asyncio.to_thread for IO-bound operations
             # Always create new embeddings under the newer embedding type
             result = await asyncio.to_thread(
