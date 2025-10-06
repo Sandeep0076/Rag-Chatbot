@@ -5,6 +5,7 @@ from typing import List
 import openai
 
 from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
+from rtl_rag_chatbot_api.common.errors import ModelInitializationError
 
 
 class AzureChatbot(BaseRAGHandler):
@@ -56,13 +57,17 @@ class AzureChatbot(BaseRAGHandler):
             self.embedding_type = "azure"  # Default/assumed for AzureChatbot
             logging.info(f"AzureChatbot initialized for single-file: {self.file_id}")
         else:
-            raise ValueError(
-                "AzureChatbot requires either file_id or file_ids for initialization."
+            raise ModelInitializationError(
+                "AzureChatbot requires either file_id or file_ids for initialization.",
+                details={"file_id": file_id, "file_ids": file_ids},
             )
 
         self.model_config = self.configs.azure_llm.models.get(model_choice)
         if not self.model_config:
-            raise ValueError(f"Configuration for model {model_choice} not found")
+            raise ModelInitializationError(
+                f"Configuration for model {model_choice} not found",
+                details={"model_choice": model_choice},
+            )
 
         self._initialize_azure_clients()
 
@@ -439,8 +444,12 @@ class AzureChatbot(BaseRAGHandler):
                 exc_info=True,
             )
             # Provide a more generic error to the user via the API
-            raise Exception(
-                f"Failed to get answer due to an internal error. Details: {str(e)}"
+            from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
+
+            raise BaseAppError(
+                ErrorRegistry.ERROR_LLM_GENERATION_FAILED,
+                f"Failed to get answer due to an internal error. Details: {str(e)}",
+                details={"file_id": self.file_id},
             )
 
     def get_n_nearest_neighbours(self, query: str, n_neighbours: int = 3) -> List[str]:

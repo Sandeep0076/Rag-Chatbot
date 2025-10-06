@@ -5,6 +5,8 @@ from typing import Any, Dict
 import plotly.express as px
 import plotly.graph_objects as go
 
+from rtl_rag_chatbot_api.common.errors import ChartGenerationError
+
 
 class UniversalChartGenerator:
     """
@@ -49,8 +51,9 @@ class UniversalChartGenerator:
         charts_allowed = list(REQUIREMENTS.keys())
         chart_type = config["chart_type"].lower()
         if chart_type not in REQUIREMENTS:
-            raise ValueError(
-                f"Unsupported chart type: {chart_type}, please choose one of {charts_allowed}"
+            raise ChartGenerationError(
+                f"Unsupported chart type: {chart_type}, please choose one of {charts_allowed}",
+                details={"chart_type": chart_type, "supported_types": charts_allowed},
             )
 
         data = config["data"]
@@ -59,7 +62,10 @@ class UniversalChartGenerator:
             all(d in data.get("datasets", [{}])[0] or d in data for d in group)
             for group in required
         ):
-            raise ValueError(f"Missing required fields for {chart_type}: {required}")
+            raise ChartGenerationError(
+                f"Missing required fields for {chart_type}: {required}",
+                details={"chart_type": chart_type, "required_fields": required},
+            )
 
         # Set defaults
         config.setdefault("labels", {})

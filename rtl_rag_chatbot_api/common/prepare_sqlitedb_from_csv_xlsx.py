@@ -7,6 +7,13 @@ from typing import List, Optional
 import pandas as pd
 from sqlalchemy import create_engine, inspect
 
+from rtl_rag_chatbot_api.common.errors import (
+    CsvAllTablesEmptyError,
+    CsvInvalidOrEmptyError,
+    CsvNoTablesError,
+    TabularInvalidDataError,
+)
+
 
 class PrepareSQLFromTabularData:
     """
@@ -171,8 +178,9 @@ class PrepareSQLFromTabularData:
             df, successful_encoding = self._read_csv_with_encoding(encodings)
 
             if df is None or df.empty:
-                raise ValueError(
-                    f"Failed to read CSV file or file is empty: {self.file_path}"
+                raise CsvInvalidOrEmptyError(
+                    f"Failed to read CSV file or file is empty: {self.file_path}",
+                    details={"file_path": self.file_path},
                 )
 
             # Clean column names and remove any completely empty columns
@@ -181,11 +189,17 @@ class PrepareSQLFromTabularData:
 
             # Skip if all data was removed
             if df.empty:
-                raise ValueError("CSV file has no valid data after cleaning")
+                raise CsvAllTablesEmptyError(
+                    "CSV file has no valid data after cleaning",
+                    details={"file_path": self.file_path},
+                )
 
             # Validate that we have some data
             if len(df.columns) == 0:
-                raise ValueError("CSV file has no valid columns")
+                raise CsvInvalidOrEmptyError(
+                    "CSV file has no valid columns",
+                    details={"file_path": self.file_path},
+                )
 
             # Get table name from file name
             base_name = os.path.splitext(self.file_name)[0]
@@ -201,14 +215,20 @@ class PrepareSQLFromTabularData:
 
         except Exception as e:
             logging.error(f"Error processing CSV file: {str(e)}")
-            raise ValueError(f"Failed to process CSV file: {str(e)}")
+            raise CsvInvalidOrEmptyError(
+                f"Failed to process CSV file: {str(e)}",
+                details={"file_path": self.file_path},
+            )
 
     def _handle_excel_file(self):
         """Handle Excel file processing."""
         try:
             excel_file = pd.ExcelFile(self.file_path)
             if not excel_file.sheet_names:
-                raise ValueError("Excel file contains no sheets")
+                raise CsvNoTablesError(
+                    "Excel file contains no sheets",
+                    details={"file_path": self.file_path},
+                )
 
             processed_sheets = 0
             for sheet_name in excel_file.sheet_names:
@@ -249,20 +269,32 @@ class PrepareSQLFromTabularData:
                     continue
 
             if processed_sheets == 0:
-                raise ValueError("No valid data found in any sheet of the Excel file")
+                raise CsvAllTablesEmptyError(
+                    "No valid data found in any sheet of the Excel file",
+                    details={"file_path": self.file_path},
+                )
 
             logging.info(f"Successfully processed {processed_sheets} sheets")
 
         except Exception as e:
             logging.error(f"Error processing Excel file: {str(e)}")
-            raise ValueError(f"Failed to process Excel file: {str(e)}")
+            raise TabularInvalidDataError(
+                f"Failed to process Excel file: {str(e)}",
+                details={"file_path": self.file_path},
+            )
 
     def _handle_sqlite_file(self):
         """Handle SQLite file processing."""
         if not self._is_valid_sqlite_db(self.file_path):
-            raise ValueError(f"Invalid SQLite database file: {self.file_path}")
+            raise TabularInvalidDataError(
+                f"Invalid SQLite database file: {self.file_path}",
+                details={"file_path": self.file_path},
+            )
         if not self._copy_db_file():
-            raise ValueError(f"Failed to copy database file to {self.db_path}")
+            raise TabularInvalidDataError(
+                f"Failed to copy database file to {self.db_path}",
+                details={"file_path": self.file_path, "target": self.db_path},
+            )
         logging.info(f"SQLite database copied successfully to {self.db_path}")
 
     def _validate_tables(self):
@@ -270,7 +302,10 @@ class PrepareSQLFromTabularData:
         inspector = inspect(self.engine)
         tables = inspector.get_table_names()
         if not tables:
-            raise ValueError("No tables were created in the database")
+            raise CsvNoTablesError(
+                "No tables were created in the database",
+                details={"file_path": self.file_path},
+            )
         logging.info(
             f"File processed successfully. Created tables: {', '.join(tables)}"
         )
@@ -302,7 +337,19 @@ class PrepareSQLFromTabularData:
             elif self.file_extension in [".db", ".sqlite", ".sqlite3"]:
                 self._handle_sqlite_file()
             else:
-                raise ValueError(f"Unsupported file type: {self.file_extension}")
+                from rtl_rag_chatbot_api.common.errors import (
+                    BaseAppError,
+                    ErrorRegistry,
+                )
+
+                raise BaseAppError(
+                    ErrorRegistry.ERROR_FILE_TYPE_UNSUPPORTED,
+                    f"Unsupported file type: {self.file_extension}",
+                    details={
+                        "file_path": self.file_path,
+                        "extension": self.file_extension,
+                    },
+                )
 
             self._validate_tables()
 
@@ -355,7 +402,10 @@ class PrepareSQLFromTabularData:
 
         except Exception as e:
             logging.error(f"Error saving DataFrame to SQL: {str(e)}")
-            raise ValueError(f"Failed to save data to table '{table_name}': {str(e)}")
+            raise TabularInvalidDataError(
+                f"Failed to save data to table '{table_name}': {str(e)}",
+                details={"table_name": table_name},
+            )
 
     def _validate_db(self):
         """
@@ -364,13 +414,22 @@ class PrepareSQLFromTabularData:
         """
         try:
             if not os.path.exists(self.db_path):
-                raise ValueError(f"Database file does not exist at {self.db_path}")
+                from rtl_rag_chatbot_api.common.errors import (
+                    BaseAppError,
+                    ErrorRegistry,
+                )
+
+                raise BaseAppError(
+                    ErrorRegistry.ERROR_FILE_NOT_FOUND,
+                    f"Database file does not exist at {self.db_path}",
+                    details={"db_path": self.db_path},
+                )
 
             insp = inspect(self.engine)
             table_names = insp.get_table_names()
 
             if not table_names:
-                raise ValueError(
+                raise CsvNoTablesError(
                     "No tables found in the database. This could be because:\n"
                     "1. The input file was empty or contained no valid data\n"
                     "2. All sheets/tables were skipped due to data validation\n"
@@ -424,7 +483,7 @@ class PrepareSQLFromTabularData:
             conn.close()
 
             if total_rows == 0:
-                raise ValueError(
+                raise CsvAllTablesEmptyError(
                     "Database contains tables but no data. This could be because:\n"
                     "1. The input file contained only headers\n"
                     "2. All data was filtered out during cleaning\n"

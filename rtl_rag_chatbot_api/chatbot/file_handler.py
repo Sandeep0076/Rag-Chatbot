@@ -16,6 +16,11 @@ from rtl_rag_chatbot_api.chatbot.utils.file_encryption_manager import (
     FileEncryptionManager,
 )
 from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
+from rtl_rag_chatbot_api.common.errors import (
+    CsvAllTablesEmptyError,
+    CsvNoTablesError,
+    TabularInvalidDataError,
+)
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
 )
@@ -246,9 +251,10 @@ class FileHandler:
         # Check if pipeline failed
         if not pipeline_success:
             logging.error(f"Failed to prepare database from file: {original_filename}")
-            raise ValueError(
+            raise TabularInvalidDataError(
                 f"Failed to process tabular file: {original_filename}. "
-                f"The file may be corrupted, empty, or in an unsupported format."
+                f"The file may be corrupted, empty, or in an unsupported format.",
+                details={"filename": original_filename, "file_id": file_id},
             )
 
         # Extract database_summary directly without using TabularDataHandler
@@ -329,9 +335,10 @@ class FileHandler:
                 logging.error(
                     f"No tables found in the database for file: {original_filename}"
                 )
-                raise ValueError(
+                raise CsvNoTablesError(
                     f"No tables found in the database for file: {original_filename}. "
-                    f"The file may be empty or corrupted."
+                    f"The file may be empty or corrupted.",
+                    details={"filename": original_filename, "file_id": file_id},
                 )
 
             # Check if all tables are empty
@@ -340,9 +347,10 @@ class FileHandler:
                 logging.error(
                     f"All tables are empty in the database for file: {original_filename}"
                 )
-                raise ValueError(
+                raise CsvAllTablesEmptyError(
                     f"All tables are empty in the database for file: {original_filename}. "
-                    f"Please check if the file contains valid data."
+                    f"Please check if the file contains valid data.",
+                    details={"filename": original_filename, "file_id": file_id},
                 )
 
             metadata["database_summary"] = database_summary
@@ -357,13 +365,16 @@ class FileHandler:
                 exc_info=True,
             )
             # Re-raise the exception to prevent continuing with invalid data
-            if isinstance(e, ValueError):
-                # Re-raise ValueError as-is (our validation errors)
+            if isinstance(
+                e, (TabularInvalidDataError, CsvNoTablesError, CsvAllTablesEmptyError)
+            ):
+                # Re-raise our custom errors as-is
                 raise
             else:
                 # Wrap other exceptions with a descriptive message
-                raise ValueError(
-                    f"Failed to analyze database structure for file: {original_filename}. {str(e)}"
+                raise TabularInvalidDataError(
+                    f"Failed to analyze database structure for file: {original_filename}. {str(e)}",
+                    details={"filename": original_filename, "file_id": file_id},
                 )
 
         # Upload metadata and encrypted database
@@ -516,9 +527,10 @@ class FileHandler:
                         logging.error(
                             f"No tables found in the existing database for file_id: {existing_file_id}"
                         )
-                        raise ValueError(
+                        raise CsvNoTablesError(
                             f"No tables found in the existing database for file_id: {existing_file_id}. "
-                            f"The database may be corrupted."
+                            f"The database may be corrupted.",
+                            details={"file_id": existing_file_id},
                         )
 
                     # Check if all tables are empty
@@ -527,9 +539,10 @@ class FileHandler:
                         logging.error(
                             f"All tables are empty in the existing database for file_id: {existing_file_id}"
                         )
-                        raise ValueError(
+                        raise CsvAllTablesEmptyError(
                             f"All tables are empty in the existing database for file_id: {existing_file_id}. "
-                            f"Please check if the database contains valid data."
+                            f"Please check if the database contains valid data.",
+                            details={"file_id": existing_file_id},
                         )
 
                     # Update file_info.json with database_summary

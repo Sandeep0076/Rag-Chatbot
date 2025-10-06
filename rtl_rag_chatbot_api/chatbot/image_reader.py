@@ -250,6 +250,12 @@ def construct_endpoint_url() -> str:
     # Extract the deployment name from the endpoint
 
     if not endpoint:
-        raise ValueError("AZURE_ENDPOINT environment variable not set")
+        from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
+
+        raise BaseAppError(
+            ErrorRegistry.ERROR_MODEL_INITIALIZATION_FAILED,
+            "AZURE_ENDPOINT environment variable not set",
+            details={"missing_env": "AZURE_ENDPOINT"},
+        )
 
     return endpoint

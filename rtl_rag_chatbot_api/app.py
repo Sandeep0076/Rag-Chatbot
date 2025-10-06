@@ -48,6 +48,14 @@ from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
+from rtl_rag_chatbot_api.common.errors import (
+    EmbeddingCreationError,
+    FileUploadError,
+    SafetyFilterError,
+    TabularInvalidDataError,
+    UrlExtractionError,
+    register_exception_handlers,
+)
 from rtl_rag_chatbot_api.common.models import (
     ChatRequest,
     CleanupRequest,
@@ -203,6 +211,9 @@ async def start_scheduler(app: FastAPI):
 app = FastAPI(
     title=title, description=description, version="3.1.0", lifespan=start_scheduler
 )
+
+# Register centralized exception handlers
+register_exception_handlers(app)
 
 # Initialize ChromaDBManager at app level
 chroma_manager = ChromaDBManager()
@@ -405,9 +416,8 @@ async def process_url_content(
     # Check if URL processing returned an error status
     if url_result.get("status") == "error":
         logging.error(f"Error processing URLs: {url_result.get('message')}")
-        raise HTTPException(
-            status_code=400,
-            detail=url_result.get("message", "Error processing URLs"),
+        raise UrlExtractionError(
+            url_result.get("message", "Error processing URLs"), details={"urls": urls}
         )
 
     # Format the response for multiple file IDs
@@ -979,14 +989,10 @@ async def process_document_type_file(
             # Log the error
             logging.error(f"Embedding creation failed for file {file_id}: {error_msg}")
 
-            # Raise HTTPException with error information
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": f"Failed to create embeddings for file {filename}",
-                    "error": error_msg,
-                    "file_id": file_id,
-                },
+            # Raise structured error
+            raise EmbeddingCreationError(
+                f"Failed to create embeddings for file {filename}: {error_msg}",
+                details={"file_id": file_id, "filename": filename},
             )
 
         logging.info(f"Completed embedding creation for single file: {file_id}")
@@ -1153,11 +1159,10 @@ async def process_document_files_parallel(
                 f"Embedding creation failed for {len(error_results)} files: {error_messages}"
             )
 
-            # Raise HTTPException with detailed error information
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": f"Failed to create embeddings for {len(error_results)} file(s)",
+            # Raise structured error with detailed information
+            raise EmbeddingCreationError(
+                f"Failed to create embeddings for {len(error_results)} file(s)",
+                details={
                     "errors": error_messages,
                     "total_files": len(files_to_process),
                     "failed_files": len(error_results),
@@ -1404,9 +1409,15 @@ async def upload_file(
                 )
             except Exception as e:
                 logging.error(f"Error parsing existing_file_ids: {str(e)}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid format for existing_file_ids: {str(e)}",
+                from rtl_rag_chatbot_api.common.errors import (
+                    BaseAppError,
+                    ErrorRegistry,
+                )
+
+                raise BaseAppError(
+                    ErrorRegistry.ERROR_BAD_REQUEST,
+                    f"Invalid format for existing_file_ids: {str(e)}",
+                    details={"input": existing_file_ids},
                 )
 
         # Combine files from both parameters
@@ -1468,17 +1479,15 @@ async def upload_file(
                 )
 
                 # Fail the request so the frontend does not show success
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "status": "error",
-                        "message": (
-                            "Migration failed for existing files. Please re-upload the original files "
-                            "to create new embeddings. Files: "
-                            + ", ".join(failed_file_ids)
-                            + ". Errors: "
-                            + "; ".join(error_messages)
-                        ),
+                raise EmbeddingCreationError(
+                    (
+                        "Migration failed for existing files. Please re-upload the original files "
+                        "to create new embeddings. Files: "
+                        + ", ".join(failed_file_ids)
+                        + ". Errors: "
+                        + "; ".join(error_messages)
+                    ),
+                    details={
                         "failed_file_ids": failed_file_ids,
                         "error_type": "migration_failed",
                     },
@@ -1509,7 +1518,9 @@ async def upload_file(
         raise http_ex
     except Exception as e:
         logging.exception(f"Unexpected error in upload_file: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+        raise FileUploadError(
+            f"File upload failed: {str(e)}", details={"error_type": "upload_failure"}
+        )
 
 
 async def prepare_sqlite_db(file_id: str, temp_file_path: str):
@@ -1538,7 +1549,10 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
         success = data_preparer.run_pipeline()
 
         if not success:
-            raise ValueError("Failed to prepare database from input file")
+            raise TabularInvalidDataError(
+                "Failed to prepare database from input file",
+                details={"file_id": file_id, "file_path": temp_file_path},
+            )
 
         # Encrypt the database before upload
         encrypted_db_path = encrypt_file(db_path)
@@ -1716,7 +1730,7 @@ async def process_existing_file_ids_in_parallel(
             logging.error(
                 f"Error in parallel processing of existing file IDs: {error_message}"
             )
-            raise HTTPException(status_code=400, detail=detailed_errors)
+            raise EmbeddingCreationError(error_message, details=detailed_errors)
 
         return processed_results
 
@@ -1726,8 +1740,9 @@ async def process_existing_file_ids_in_parallel(
         logging.error(
             f"Unexpected error in parallel processing of existing file IDs: {str(e)}"
         )
-        raise HTTPException(
-            status_code=500, detail=f"Unexpected error processing file IDs: {str(e)}"
+        raise EmbeddingCreationError(
+            f"Unexpected error processing file IDs: {str(e)}",
+            details={"error_type": "parallel_processing_failure"},
         )
 
 
@@ -1924,7 +1939,7 @@ async def process_migration_file_ids_in_parallel(
                 "successfully_processed": [result[0] for result in processed_results],
             }
             logging.error(f"Error in migration processing: {error_message}")
-            raise HTTPException(status_code=400, detail=detailed_errors)
+            raise EmbeddingCreationError(error_message, details=detailed_errors)
 
         return processed_results
 
@@ -1932,8 +1947,9 @@ async def process_migration_file_ids_in_parallel(
         raise
     except Exception as e:
         logging.error(f"Unexpected error in migration processing: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Migration processing error: {str(e)}"
+        raise EmbeddingCreationError(
+            f"Migration processing error: {str(e)}",
+            details={"error_type": "migration_failure"},
         )
 
 
@@ -2469,7 +2485,10 @@ async def check_embeddings(
         raise
     except Exception as e:
         logging.error(f"Error checking embeddings: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise EmbeddingCreationError(
+            f"Error checking embeddings: {str(e)}",
+            details={"error_type": "embedding_check_failed"},
+        )
 
 
 @app.get("/embeddings/status/{file_id}", response_model=Dict[str, Any])
@@ -2571,7 +2590,10 @@ async def get_embedding_status(file_id: str, current_user=Depends(get_current_us
 
     except Exception as e:
         logging.error(f"Error checking embedding status: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise EmbeddingCreationError(
+            f"Error checking embedding status: {str(e)}",
+            details={"error_type": "embedding_status_check_failed"},
+        )
 
 
 def check_db_existence(
@@ -3524,27 +3546,26 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
     except HTTPException:
         raise
     except GeminiSafetyFilterError as e:
-        # Handle Gemini safety filter errors with a proper error response
+        # Handle Gemini safety filter errors with structured error
         logging.warning(
             f"Gemini safety filter blocked response for {file_id_logging}: {str(e)}"
         )
-        return {
-            "answer": f"I apologize, but I cannot provide a response to this question. {str(e)}",
-            "source_files": [],
-            "error_type": "safety_filter",
-            "error_message": str(e),
-        }
+        raise SafetyFilterError(
+            f"Content blocked by safety filters: {str(e)}",
+            details={"file_id": file_id_logging},
+        )
     except Exception as e:
         logging.error(
             f"Error in chat endpoint: {str(e)} for {file_id_logging}", exc_info=True
         )
-        error_message = str(e)
-        if "coroutine" in error_message.lower() or "async" in error_message.lower():
-            error_message = (
-                "Internal server error: An unexpected issue occurred "
-                "while processing your request. Please try again."
-            )
-        raise HTTPException(status_code=500, detail=error_message)
+        # Raise structured error instead of generic HTTPException
+        from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
+
+        raise BaseAppError(
+            ErrorRegistry.ERROR_LLM_GENERATION_FAILED,
+            f"Chat request failed: {str(e)}",
+            details={"file_id": file_id_logging},
+        )
 
 
 @app.get("/available-models")

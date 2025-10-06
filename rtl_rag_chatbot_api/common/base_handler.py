@@ -12,6 +12,12 @@ from pdf2image import convert_from_path
 from pdfminer.high_level import extract_text
 
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
+from rtl_rag_chatbot_api.common.errors import (
+    DocTextTooShortError,
+    DocTextValidationError,
+    PdfTextExtractionError,
+    TxtExtractionError,
+)
 from rtl_rag_chatbot_api.common.text_extractor import TextExtractor
 
 logging.basicConfig(level=logging.INFO)
@@ -352,9 +358,10 @@ class BaseRAGHandler:
 
             # Check if extracted text is too short
             if len(text.strip()) < 100:
-                return (
-                    "ERROR: Unable to extract sufficient text from this file "
-                    "(less than 100 characters). Please try using the 'Chat with Image' feature instead."
+                raise DocTextTooShortError(
+                    "Unable to extract sufficient text from this file (less than 100 characters). "
+                    "Please try using the 'Chat with Image' feature instead.",
+                    details={"file_path": file_path, "text_length": len(text.strip())},
                 )
 
             return text
@@ -362,7 +369,7 @@ class BaseRAGHandler:
         except Exception as e:
             error_msg = f"Error extracting text from {file_path}: {str(e)}"
             logging.error(error_msg)
-            return f"ERROR: {error_msg}"
+            raise DocTextValidationError(error_msg, details={"file_path": file_path})
 
     def _save_extracted_text_for_diagnosis(self, file_path: str, extracted_text: str):
         """Save extracted text to a diagnostic file for testing purposes."""
@@ -434,12 +441,22 @@ class BaseRAGHandler:
             logging.warning(
                 "UTF-8 decoding failed, attempting with 'utf-8' and ignore errors"
             )
-            with open(file_path, "rb") as file:
-                text = file.read().decode("utf-8", errors="ignore")
-                logging.info(
-                    f"Successfully extracted {len(text)} characters from TXT file using fallback encoding"
+            try:
+                with open(file_path, "rb") as file:
+                    text = file.read().decode("utf-8", errors="ignore")
+                    logging.info(
+                        f"Successfully extracted {len(text)} characters from TXT file using fallback encoding"
+                    )
+                    return text
+            except Exception as e:
+                raise TxtExtractionError(
+                    f"Failed to extract text from TXT file: {str(e)}",
+                    details={"file_path": file_path},
                 )
-                return text
+        except Exception as e:
+            raise TxtExtractionError(
+                f"Failed to read TXT file: {str(e)}", details={"file_path": file_path}
+            )
 
     def extract_text_from_pdf(self, file_path: str) -> str:
         """Extract text from PDF using pdfminer or OCR if necessary."""
@@ -464,12 +481,16 @@ class BaseRAGHandler:
                             "The file might be scanned, corrupted, or password-protected."
                         )
                         logging.error(error_msg)
-                        return f"ERROR: {error_msg}"
+                        raise PdfTextExtractionError(
+                            error_msg, details={"file_path": file_path, "method": "ocr"}
+                        )
 
                 except Exception as ocr_error:
                     error_msg = f"OCR extraction failed: {str(ocr_error)}"
                     logging.error(error_msg)
-                    return f"ERROR: {error_msg}"
+                    raise PdfTextExtractionError(
+                        error_msg, details={"file_path": file_path, "method": "ocr"}
+                    )
 
             logging.info(
                 f"Text extraction completed successfully. Word count: {word_count}"
@@ -477,7 +498,10 @@ class BaseRAGHandler:
             return text
         except Exception as e:
             logging.error(f"Error in extract_text_from_pdf: {str(e)}")
-            return "ERROR: Unable to read this PDF file. Please ensure it's a valid PDF and try again."
+            raise PdfTextExtractionError(
+                "Unable to read this PDF file. Please ensure it's a valid PDF and try again.",
+                details={"file_path": file_path, "error": str(e)},
+            )
 
     def split_text(self, text: str) -> List[str]:
         """Split text into chunks based on token limits."""

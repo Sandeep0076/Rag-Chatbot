@@ -3,6 +3,8 @@ import os
 
 from cryptography.fernet import Fernet
 
+from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
+
 
 def get_encryption_key():
     """
@@ -10,7 +12,11 @@ def get_encryption_key():
     """
     key = os.environ.get("ENCRYPTION_KEY")
     if not key:
-        raise ValueError("Encryption key not found in environment variables")
+        raise BaseAppError(
+            ErrorRegistry.ERROR_ENCRYPTION_FAILED,
+            "Encryption key not found in environment variables",
+            details={"missing_env": "ENCRYPTION_KEY"},
+        )
     return key.encode()
 
 

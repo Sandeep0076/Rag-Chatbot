@@ -14,6 +14,7 @@ from vertexai.preview.generative_models import (
 from vertexai.preview.language_models import TextEmbeddingModel
 
 from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
+from rtl_rag_chatbot_api.common.errors import ModelInitializationError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -228,9 +229,13 @@ class GeminiHandler(BaseRAGHandler):
 
         actual_model = model_mapping.get(model_choice)
         if not actual_model:
-            raise ValueError(
+            raise ModelInitializationError(
                 f"Invalid model choice: {model_choice}. "
-                f"Available models: {list(model_mapping.keys())}"
+                f"Available models: {list(model_mapping.keys())}",
+                details={
+                    "model_choice": model_choice,
+                    "available_models": list(model_mapping.keys()),
+                },
             )
 
         # Use VertexAI approach for all Gemini models (including 2.5)
@@ -491,8 +496,9 @@ class GeminiHandler(BaseRAGHandler):
             # Ensure model is initialized
             if self.generative_model is None:
                 if not self.model_choice:
-                    raise ValueError(
-                        "Model choice not set. Cannot initialize Gemini model."
+                    raise ModelInitializationError(
+                        "Model choice not set. Cannot initialize Gemini model.",
+                        details={"model_choice": self.model_choice},
                     )
                 self._initialize_gemini_model(self.model_choice, self.temperature)
 
@@ -729,9 +735,13 @@ def get_gemini_non_rag_response(
 
         model_name = model_mapping.get(model_choice)
         if not model_name:
-            raise ValueError(
+            raise ModelInitializationError(
                 f"Invalid Gemini model choice: {model_choice}. "
-                f"Available models: {list(model_mapping.keys())}"
+                f"Available models: {list(model_mapping.keys())}",
+                details={
+                    "model_choice": model_choice,
+                    "available_models": list(model_mapping.keys()),
+                },
             )
 
         # Use VertexAI approach for all Gemini models (including 2.5)

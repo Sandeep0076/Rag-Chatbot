@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot
 from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
+from rtl_rag_chatbot_api.common.errors import EmbeddingCreationError
 
 logging.basicConfig(level=logging.INFO)
 
@@ -222,7 +223,16 @@ class EmbeddingHandler:
                 temp_metadata = self.gcs_handler.get_file_info(file_id)
 
             if not temp_metadata:
-                raise ValueError(f"No metadata found for file_id: {file_id}")
+                from rtl_rag_chatbot_api.common.errors import (
+                    BaseAppError,
+                    ErrorRegistry,
+                )
+
+                raise BaseAppError(
+                    ErrorRegistry.ERROR_FILE_NOT_FOUND,
+                    f"No metadata found for file_id: {file_id}",
+                    details={"file_id": file_id},
+                )
 
             # Check embeddings status
             gcs_status, local_status, all_valid = self.embeddings_exist(file_id)
@@ -255,7 +265,9 @@ class EmbeddingHandler:
                     f"Creating new embeddings for image analysis file : {gpt4_path}"
                 )
                 if not gpt4_path:
-                    raise ValueError("Missing analysis path for image")
+                    raise EmbeddingCreationError(
+                        "Missing analysis path for image", details={"file_id": file_id}
+                    )
 
                 # Only pass single analysis file – unified embeddings.
                 return await self.create_and_upload_embeddings(
@@ -829,7 +841,10 @@ class EmbeddingHandler:
             logging.error(
                 f"Error checking embeddings for {file_id} with {model_choice}: {str(e)}"
             )
-            raise Exception(f"Error checking embeddings: {str(e)}")
+            raise EmbeddingCreationError(
+                f"Error checking embeddings: {str(e)}",
+                details={"file_id": file_id, "model_choice": model_choice},
+            )
 
     async def _create_azure_embeddings(self, file_id: str, chunks: List[str]):
         """Creates embeddings using Azure OpenAI."""
@@ -1085,7 +1100,13 @@ class EmbeddingHandler:
         """Helper method to get metadata from GCS with error handling."""
         temp_metadata = self.gcs_handler.get_file_info(file_id)
         if not temp_metadata:
-            raise ValueError(f"No metadata found for file_id: {file_id}")
+            from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
+
+            raise BaseAppError(
+                ErrorRegistry.ERROR_FILE_NOT_FOUND,
+                f"No metadata found for file_id: {file_id}",
+                details={"file_id": file_id},
+            )
         return temp_metadata
 
     def _extract_and_chunk_text(
@@ -1107,8 +1128,8 @@ class EmbeddingHandler:
         else:
             logging.info("No pre-extracted text found, extracting from file")
             text = base_handler.extract_text_from_file(file_path)
-            if text.startswith("ERROR:"):
-                raise Exception(f"Error extracting text: {text[7:]}")
+            # Text extraction errors now raise structured exceptions from base_handler
+            # No need to check for ERROR: prefix anymore
 
         # Save extracted text to diagnostic file
         self._save_extracted_text_for_diagnosis(file_path, text)

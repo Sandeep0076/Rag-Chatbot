@@ -1543,7 +1543,9 @@ def _handle_chat_response(chat_response):
             }
             st.session_state.messages.append(ai_message)
     else:
-        st.error(f"Request failed: {chat_response.text}")
+        # Parse structured error if available
+        error_msg = _parse_error_response(chat_response)
+        st.error(f"Chat failed: {error_msg}")
 
 
 def _get_chat_payload(previous_messages):
@@ -2171,7 +2173,7 @@ def main():
 
 
 def _parse_error_response(upload_response):
-    """Parse error response from API and extract meaningful error message."""
+    """Parse error response from API and extract meaningful error message with code and key."""
     # IMPORTANT: requests.Response is falsy for HTTP status >= 400.
     # We only want to treat it as missing when it's actually None.
     if upload_response is None:
@@ -2187,7 +2189,20 @@ def _parse_error_response(upload_response):
         logging.info(f"_parse_error_response: Parsed JSON: {error_data}")
 
         if isinstance(error_data, dict):
-            # Extract the most meaningful error message
+            # First check for structured error format (code, key, message)
+            code = error_data.get("code") or error_data.get("error_code")
+            key = error_data.get("key") or error_data.get("error_key")
+            message = error_data.get("message")
+
+            # If we have structured error, format it nicely
+            if code and key and message:
+                error_msg = f"Error {code}: {key} - {message}"
+                logging.info(
+                    f"_parse_error_response: Using structured error: {error_msg}"
+                )
+                return error_msg
+
+            # Fallback to legacy error handling
             if "error" in error_data:
                 error_msg = error_data["error"]
                 logging.info(f"_parse_error_response: Using 'error' field: {error_msg}")
@@ -2201,6 +2216,18 @@ def _parse_error_response(upload_response):
             elif "detail" in error_data and isinstance(error_data["detail"], dict):
                 # Handle HTTPException detail format
                 detail = error_data["detail"]
+                # Check if detail has structured error
+                detail_code = detail.get("code") or detail.get("error_code")
+                detail_key = detail.get("key") or detail.get("error_key")
+                detail_message = detail.get("message")
+
+                if detail_code and detail_key and detail_message:
+                    error_msg = f"Error {detail_code}: {detail_key} - {detail_message}"
+                    logging.info(
+                        f"_parse_error_response: Using structured error from detail: {error_msg}"
+                    )
+                    return error_msg
+
                 if "error" in detail:
                     error_msg = detail["error"]
                     logging.info(
