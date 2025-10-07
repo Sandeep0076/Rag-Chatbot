@@ -202,10 +202,17 @@ def display_dalle_image(dalle_result, col):
                 unsafe_allow_html=True,
             )
         else:
-            st.error(
-                f"Failed to generate DALL-E image: "
-                f"{dalle_result.get('error', 'Unknown error')}"
+            # Extract structured error if available
+            error_code = dalle_result.get("code") or dalle_result.get("error_code")
+            error_key = dalle_result.get("key") or dalle_result.get("error_key")
+            error_msg = dalle_result.get("message") or dalle_result.get(
+                "error", "Unknown error"
             )
+
+            if error_code and error_key:
+                st.error(f"DALL-E Error {error_code}: {error_key} - {error_msg}")
+            else:
+                st.error(f"Failed to generate DALL-E image: {error_msg}")
 
 
 def display_imagen_image(imagen_result, prompt, col):
@@ -256,10 +263,17 @@ def display_imagen_image(imagen_result, prompt, col):
                         "<br>", unsafe_allow_html=True
                     )  # Add space between download buttons
         else:
-            st.error(
-                f"Failed to generate Imagen image: "
-                f"{imagen_result.get('error', 'Unknown error')}"
+            # Extract structured error if available
+            error_code = imagen_result.get("code") or imagen_result.get("error_code")
+            error_key = imagen_result.get("key") or imagen_result.get("error_key")
+            error_msg = imagen_result.get("message") or imagen_result.get(
+                "error", "Unknown error"
             )
+
+            if error_code and error_key:
+                st.error(f"Imagen Error {error_code}: {error_key} - {error_msg}")
+            else:
+                st.error(f"Failed to generate Imagen image: {error_msg}")
 
 
 def display_combined_model_results(result, prompt):
@@ -340,6 +354,37 @@ def display_single_model_results(result, current_model):
             st.markdown("---")
 
 
+def _parse_image_error_response(response):
+    """Parse error response from image generation API and extract meaningful error message."""
+    try:
+        error_data = response.json()
+        if isinstance(error_data, dict):
+            # Check for structured error format
+            code = error_data.get("code") or error_data.get("error_code")
+            key = error_data.get("key") or error_data.get("error_key")
+            message = error_data.get("message")
+
+            if code and key and message:
+                return f"Error {code}: {key} - {message}"
+
+            # Fallback to detail or error fields
+            if "detail" in error_data:
+                detail = error_data["detail"]
+                if isinstance(detail, dict):
+                    detail_code = detail.get("code") or detail.get("error_code")
+                    detail_key = detail.get("key") or detail.get("error_key")
+                    detail_message = detail.get("message")
+                    if detail_code and detail_key and detail_message:
+                        return f"Error {detail_code}: {detail_key} - {detail_message}"
+                    return detail.get("message", str(detail))
+                return str(detail)
+
+            return error_data.get("error", response.text)
+        return response.text
+    except Exception:
+        return response.text
+
+
 def generate_image(current_model, prompt, selected_size, num_images):
     """Call the appropriate API endpoint to generate an image."""
     API_URL = "http://localhost:8080"
@@ -383,7 +428,9 @@ def generate_image(current_model, prompt, selected_size, num_images):
             if response.status_code == 200:
                 return response.json()
             else:
-                st.error(f"Error: {response.text}")
+                # Parse structured error response
+                error_msg = _parse_image_error_response(response)
+                st.error(f"Image generation failed: {error_msg}")
                 return None
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")

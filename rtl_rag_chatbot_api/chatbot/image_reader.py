@@ -72,7 +72,8 @@ Highlight Findings: Summarize the most important findings, insights, and correla
 Contextual Discussion: Provide context for the data, discuss potential conclusions, and address any limitations
 or uncertainties in the interpretation. If the image does not contain text, graph, chart or table,
  describe all the even the minute details and ovservations  what the image shows.
-Do not write anything that you cannot see the image."""
+Do not write anything that you cannot see the image. Ensure that the response does not exceed a maximum
+ limit of 5000 words """
 
 
 def create_gpt4_payload(encoded_image: str, temperature: float = 0.7) -> Dict[str, Any]:
@@ -249,6 +250,12 @@ def construct_endpoint_url() -> str:
     # Extract the deployment name from the endpoint
 
     if not endpoint:
-        raise ValueError("AZURE_ENDPOINT environment variable not set")
+        from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
+
+        raise BaseAppError(
+            ErrorRegistry.ERROR_MODEL_INITIALIZATION_FAILED,
+            "AZURE_ENDPOINT environment variable not set",
+            details={"missing_env": "AZURE_ENDPOINT"},
+        )
 
     return endpoint

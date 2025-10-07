@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import Column, DateTime, ForeignKey, String
 from sqlalchemy.orm import Session, declarative_base
@@ -91,6 +91,42 @@ def get_file_info_by_file_id(session: Session, file_id: str) -> Optional[str]:
     except Exception as e:
         logging.error(f"Error getting embedding_type by file_id from database: {e}")
         return None
+
+
+def get_file_infos_batch(
+    session: Session, file_ids: List[str]
+) -> Dict[str, Optional[str]]:
+    """
+    Get file info for multiple file_ids in a single database query (batch lookup).
+
+    Args:
+        session: Database session
+        file_ids: List of file IDs to search for
+
+    Returns:
+        Dictionary mapping file_id to embedding_type (or None if not found)
+    """
+    try:
+        logging.info(f"Batch lookup for {len(file_ids)} file_ids in database")
+        results = session.query(FileInfo).filter(FileInfo.file_id.in_(file_ids)).all()
+
+        file_info_map = {}
+        for result in results:
+            file_info_map[result.file_id] = result.embedding_type
+            logging.info(
+                f"Found database record file_id '{result.file_id}' with embedding_type: {result.embedding_type}"
+            )
+
+        # Add None for file_ids not found in database
+        for file_id in file_ids:
+            if file_id not in file_info_map:
+                file_info_map[file_id] = None
+                logging.debug(f"No database record found for file_id '{file_id}'")
+
+        return file_info_map
+    except Exception as e:
+        logging.error(f"Error getting file info batch from database: {e}")
+        return {file_id: None for file_id in file_ids}
 
 
 def insert_file_info_record(
@@ -285,6 +321,62 @@ def delete_file_info_by_file_id(session: Session, file_id: str) -> Dict[str, Any
         }
 
 
+def update_file_info_embedding_type(
+    session: Session, file_id: str, new_embedding_type: str
+) -> Dict[str, Any]:
+    """
+    Update the embedding_type for a file in the FileInfo table.
+
+    This is used after successful migration to update the database record
+    with the new embedding type.
+
+    Args:
+        session: Database session
+        file_id: The file ID to update
+        new_embedding_type: The new embedding type to set
+
+    Returns:
+        Dict containing the result of the update operation
+    """
+    try:
+        # Find the record to update
+        record = session.query(FileInfo).filter(FileInfo.file_id == file_id).first()
+
+        if not record:
+            logging.warning(f"No FileInfo record found for file_id: {file_id}")
+            return {
+                "status": "error",
+                "updated": False,
+                "message": f"No record found for file_id: {file_id}",
+            }
+
+        # Update the embedding_type
+        old_embedding_type = record.embedding_type
+        record.embedding_type = new_embedding_type
+        session.commit()
+
+        logging.info(
+            f"Successfully updated embedding_type for {file_id}: "
+            f"{old_embedding_type} -> {new_embedding_type}"
+        )
+        return {
+            "status": "success",
+            "updated": True,
+            "message": f"Successfully updated embedding_type to {new_embedding_type}",
+            "old_embedding_type": old_embedding_type,
+            "new_embedding_type": new_embedding_type,
+        }
+    except Exception as e:
+        logging.error(f"Error updating embedding_type for file_id {file_id}: {e}")
+        session.rollback()
+        return {
+            "status": "error",
+            "updated": False,
+            "message": str(e),
+            "details": "Database operation failed",
+        }
+
+
 def delete_all_file_info_records(session: Session) -> Dict[str, Any]:
     """
     Delete all records from the FileInfo table.
@@ -336,7 +428,7 @@ def export_gcs_file_info_to_sql_text(
     output_file_path: str = "./gcs_file_info_inserts.text",
     bucket_name: str = "chatbot-storage-dev-gcs-eu",
     prefix: str = "file-embeddings/",
-    default_embedding_type: str = "azure-3-large",
+    default_embedding_type: str = "azure",
 ) -> Dict[str, Any]:
     """
     Export INSERT statements for FileInfo records by scanning file_info.json files in GCS.

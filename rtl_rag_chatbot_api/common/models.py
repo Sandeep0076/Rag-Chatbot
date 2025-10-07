@@ -3,6 +3,8 @@ from typing import List, Optional, Union
 
 from pydantic import BaseModel, Field
 
+from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
+
 
 class Query(BaseModel):
     text: List[str]
@@ -72,7 +74,11 @@ class EmbeddingsCheckRequest(BaseModel):
         super().__init__(**data)
         # Ensure file_ids is not empty
         if not self.file_ids:
-            raise ValueError("file_ids must contain at least one file ID")
+            raise BaseAppError(
+                ErrorRegistry.ERROR_BAD_REQUEST,
+                "file_ids must contain at least one file ID",
+                details={"file_ids": self.file_ids},
+            )
 
 
 class ChatRequest(BaseModel):

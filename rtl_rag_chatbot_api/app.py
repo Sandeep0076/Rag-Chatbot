@@ -48,6 +48,14 @@ from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
+from rtl_rag_chatbot_api.common.errors import (
+    EmbeddingCreationError,
+    FileUploadError,
+    SafetyFilterError,
+    TabularInvalidDataError,
+    UrlExtractionError,
+    register_exception_handlers,
+)
 from rtl_rag_chatbot_api.common.models import (
     ChatRequest,
     CleanupRequest,
@@ -203,6 +211,9 @@ async def start_scheduler(app: FastAPI):
 app = FastAPI(
     title=title, description=description, version="3.1.0", lifespan=start_scheduler
 )
+
+# Register centralized exception handlers
+register_exception_handlers(app)
 
 # Initialize ChromaDBManager at app level
 chroma_manager = ChromaDBManager()
@@ -405,9 +416,8 @@ async def process_url_content(
     # Check if URL processing returned an error status
     if url_result.get("status") == "error":
         logging.error(f"Error processing URLs: {url_result.get('message')}")
-        raise HTTPException(
-            status_code=400,
-            detail=url_result.get("message", "Error processing URLs"),
+        raise UrlExtractionError(
+            url_result.get("message", "Error processing URLs"), details={"urls": urls}
         )
 
     # Format the response for multiple file IDs
@@ -979,14 +989,10 @@ async def process_document_type_file(
             # Log the error
             logging.error(f"Embedding creation failed for file {file_id}: {error_msg}")
 
-            # Raise HTTPException with error information
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": f"Failed to create embeddings for file {filename}",
-                    "error": error_msg,
-                    "file_id": file_id,
-                },
+            # Raise structured error
+            raise EmbeddingCreationError(
+                f"Failed to create embeddings for file {filename}: {error_msg}",
+                details={"file_id": file_id, "filename": filename},
             )
 
         logging.info(f"Completed embedding creation for single file: {file_id}")
@@ -1153,11 +1159,10 @@ async def process_document_files_parallel(
                 f"Embedding creation failed for {len(error_results)} files: {error_messages}"
             )
 
-            # Raise HTTPException with detailed error information
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": f"Failed to create embeddings for {len(error_results)} file(s)",
+            # Raise structured error with detailed information
+            raise EmbeddingCreationError(
+                f"Failed to create embeddings for {len(error_results)} file(s)",
+                details={
                     "errors": error_messages,
                     "total_files": len(files_to_process),
                     "failed_files": len(error_results),
@@ -1404,9 +1409,15 @@ async def upload_file(
                 )
             except Exception as e:
                 logging.error(f"Error parsing existing_file_ids: {str(e)}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid format for existing_file_ids: {str(e)}",
+                from rtl_rag_chatbot_api.common.errors import (
+                    BaseAppError,
+                    ErrorRegistry,
+                )
+
+                raise BaseAppError(
+                    ErrorRegistry.ERROR_BAD_REQUEST,
+                    f"Invalid format for existing_file_ids: {str(e)}",
+                    details={"input": existing_file_ids},
                 )
 
         # Combine files from both parameters
@@ -1420,66 +1431,84 @@ async def upload_file(
             if validation_response:
                 return validation_response
 
-        # ===== MIGRATION DECISION LOGIC - ONLY FOR MULTI-FILE SCENARIOS =====
-        from rtl_rag_chatbot_api.chatbot.migration_handler import (
-            plan_upload_with_migration,
+        # ===== AUTO-MIGRATION LOGIC - SIMPLE AND TRANSPARENT =====
+        # Check existing file IDs for old embeddings and auto-migrate if needed
+        from rtl_rag_chatbot_api.chatbot.auto_migration_service import (
+            AutoMigrationService,
         )
 
-        try:
-            is_multi_file_scenario, plan = await plan_upload_with_migration(
-                all_files, parsed_existing_file_ids, configs
+        auto_migration_service = AutoMigrationService(
+            configs, gcs_handler, SessionLocal
+        )
+
+        if parsed_existing_file_ids:
+            logging.info(
+                f"Checking {len(parsed_existing_file_ids)} existing file IDs for migration needs"
             )
-        except ValueError as e:
-            # Handle validation errors (e.g., invalid existing file IDs)
-            error_message = str(e)
-            if "Invalid file ID" in error_message:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "detail": {
-                            "message": error_message,
-                            "errors": [{"error": error_message}],
-                        }
+
+            # Check and migrate existing files if they have old embeddings
+            migration_results = (
+                await auto_migration_service.check_and_migrate_multiple_files(
+                    file_ids=parsed_existing_file_ids,
+                    embedding_handler=embedding_handler,
+                    background_tasks=background_tasks,
+                    max_concurrent=3,  # Process up to 3 files concurrently
+                )
+            )
+
+            # Check for migration failures
+            failed_migrations = [
+                r
+                for r in migration_results
+                if isinstance(r, dict)
+                and isinstance(r.get("migration_result"), dict)
+                and r.get("migration_result", {}).get("status") == "error"
+            ]
+            if failed_migrations:
+                failed_file_ids = [
+                    r.get("migration_result", {}).get("file_id") or r.get("file_id")
+                    for r in failed_migrations
+                ]
+                error_messages = [
+                    r.get("migration_result", {}).get("message") or r.get("message")
+                    for r in failed_migrations
+                ]
+
+                logging.error(
+                    f"Migration failed for {len(failed_migrations)} file(s): {failed_file_ids}"
+                )
+
+                # Fail the request so the frontend does not show success
+                raise EmbeddingCreationError(
+                    (
+                        "Migration failed for existing files. Please re-upload the original files "
+                        "to create new embeddings. Files: "
+                        + ", ".join(failed_file_ids)
+                        + ". Errors: "
+                        + "; ".join(error_messages)
+                    ),
+                    details={
+                        "failed_file_ids": failed_file_ids,
+                        "error_type": "migration_failed",
                     },
                 )
-            else:
-                raise
 
-        # If NOT a multi-file scenario, run the normal processing flow directly (single-file or simple case)
-        if not is_multi_file_scenario:
-            return await _process_normal_upload_flow(
-                all_files,
-                parsed_existing_file_ids,
-                is_image,
-                username,
-                background_tasks,
-            )
+            # Log successful migrations
+            migrated_files = [r for r in migration_results if r.get("migrated", False)]
+            if migrated_files:
+                logging.info(
+                    f"Auto-migrated {len(migrated_files)} file(s) during upload: "
+                    f"{[r.get('migration_result', {}).get('file_id') for r in migrated_files]}"
+                )
 
-        # Multi-file: act on plan
-        action = plan.get("action")
-        if action == "error":
-            return JSONResponse(status_code=400, content=plan.get("error", {}))
-
-        if action == "fallthrough":
-            # Store migration context globally for downstream logic to augment document files
-            globals()["current_migration_context"] = plan.get("migration_context", {})
-
-        # Proceed with normal flow using possibly filtered files and updated existing IDs
+        # Proceed with normal upload flow
         response = await _process_normal_upload_flow(
-            plan.get("all_files", all_files),
-            plan.get("parsed_existing_file_ids", parsed_existing_file_ids),
+            all_files,
+            parsed_existing_file_ids,
             is_image,
             username,
             background_tasks,
-            is_migration=(plan.get("migration_context", {}) or {}).get(
-                "is_migration", False
-            ),
-            migration_context=plan.get("migration_context", {}),
         )
-
-        # Clear migration context after processing
-        if "current_migration_context" in globals():
-            del globals()["current_migration_context"]
 
         return response
 
@@ -1489,7 +1518,9 @@ async def upload_file(
         raise http_ex
     except Exception as e:
         logging.exception(f"Unexpected error in upload_file: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+        raise FileUploadError(
+            f"File upload failed: {str(e)}", details={"error_type": "upload_failure"}
+        )
 
 
 async def prepare_sqlite_db(file_id: str, temp_file_path: str):
@@ -1518,7 +1549,10 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
         success = data_preparer.run_pipeline()
 
         if not success:
-            raise ValueError("Failed to prepare database from input file")
+            raise TabularInvalidDataError(
+                "Failed to prepare database from input file",
+                details={"file_id": file_id, "file_path": temp_file_path},
+            )
 
         # Encrypt the database before upload
         encrypted_db_path = encrypt_file(db_path)
@@ -1696,7 +1730,7 @@ async def process_existing_file_ids_in_parallel(
             logging.error(
                 f"Error in parallel processing of existing file IDs: {error_message}"
             )
-            raise HTTPException(status_code=400, detail=detailed_errors)
+            raise EmbeddingCreationError(error_message, details=detailed_errors)
 
         return processed_results
 
@@ -1706,8 +1740,9 @@ async def process_existing_file_ids_in_parallel(
         logging.error(
             f"Unexpected error in parallel processing of existing file IDs: {str(e)}"
         )
-        raise HTTPException(
-            status_code=500, detail=f"Unexpected error processing file IDs: {str(e)}"
+        raise EmbeddingCreationError(
+            f"Unexpected error processing file IDs: {str(e)}",
+            details={"error_type": "parallel_processing_failure"},
         )
 
 
@@ -1904,7 +1939,7 @@ async def process_migration_file_ids_in_parallel(
                 "successfully_processed": [result[0] for result in processed_results],
             }
             logging.error(f"Error in migration processing: {error_message}")
-            raise HTTPException(status_code=400, detail=detailed_errors)
+            raise EmbeddingCreationError(error_message, details=detailed_errors)
 
         return processed_results
 
@@ -1912,8 +1947,9 @@ async def process_migration_file_ids_in_parallel(
         raise
     except Exception as e:
         logging.error(f"Unexpected error in migration processing: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Migration processing error: {str(e)}"
+        raise EmbeddingCreationError(
+            f"Migration processing error: {str(e)}",
+            details={"error_type": "migration_failure"},
         )
 
 
@@ -2449,7 +2485,10 @@ async def check_embeddings(
         raise
     except Exception as e:
         logging.error(f"Error checking embeddings: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise EmbeddingCreationError(
+            f"Error checking embeddings: {str(e)}",
+            details={"error_type": "embedding_check_failed"},
+        )
 
 
 @app.get("/embeddings/status/{file_id}", response_model=Dict[str, Any])
@@ -2457,6 +2496,8 @@ async def get_embedding_status(file_id: str, current_user=Depends(get_current_us
     """
     Get the current status of embeddings for a specific file.
     The frontend can poll this endpoint to know when embeddings are ready for chat.
+
+    Now also checks for old embeddings and triggers auto-migration if needed.
 
     Args:
         file_id: The ID of the file to check
@@ -2468,8 +2509,31 @@ async def get_embedding_status(file_id: str, current_user=Depends(get_current_us
             - can_chat: Whether chat is available with this file
             - file_id: The checked file ID
             - message: Human-readable message about the current status
+            - migrated: Whether the file was migrated (optional)
     """
     try:
+        # ===== AUTO-MIGRATION CHECK FOR EMBEDDING STATUS =====
+        from rtl_rag_chatbot_api.chatbot.auto_migration_service import (
+            AutoMigrationService,
+        )
+
+        auto_migration_service = AutoMigrationService(
+            configs, gcs_handler, SessionLocal
+        )
+
+        # Check if file needs migration and migrate if necessary
+        migration_result = await auto_migration_service.check_and_migrate_if_needed(
+            file_id=file_id,
+            embedding_handler=embedding_handler,
+        )
+
+        migrated = migration_result.get("migrated", False)
+        if migrated:
+            logging.info(
+                f"Auto-migrated {file_id} during status check: "
+                f"{migration_result.get('migration_result', {})}"
+            )
+
         # Check local file_info.json first
         local_info_path = os.path.join("./chroma_db", file_id, "file_info.json")
 
@@ -2480,12 +2544,20 @@ async def get_embedding_status(file_id: str, current_user=Depends(get_current_us
             status = file_info.get("embeddings_status", "not_started")
             can_chat = status in ["ready_for_chat", "completed"]
 
-            return {
+            response = {
                 "status": status,
                 "can_chat": can_chat,
                 "file_id": file_id,
                 "message": "Ready for chat" if can_chat else "Embeddings not ready yet",
             }
+
+            if migrated:
+                response["migrated"] = True
+                response["embedding_type"] = migration_result.get(
+                    "embedding_type", "azure-3-large"
+                )
+
+            return response
 
         # If no local file, check GCS
         try:
@@ -2518,7 +2590,10 @@ async def get_embedding_status(file_id: str, current_user=Depends(get_current_us
 
     except Exception as e:
         logging.error(f"Error checking embedding status: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise EmbeddingCreationError(
+            f"Error checking embedding status: {str(e)}",
+            details={"error_type": "embedding_status_check_failed"},
+        )
 
 
 def check_db_existence(
@@ -2863,19 +2938,7 @@ async def _process_single_file(query: Query, gcs_handler: GCSHandler) -> Dict[st
                 " Please try uploading/selecting a different file.",
             )
 
-    # Ensure embedding_type is populated from DB (fast path) if available
-    try:
-        if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
-            from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
-
-            with get_db_session() as db_session:
-                file_info = get_file_info_by_file_id(db_session, query.file_id)
-                if file_info and file_info.embedding_type:
-                    file_info_single["embedding_type"] = file_info.embedding_type
-    except Exception as e:
-        logging.warning(
-            f"Failed to enrich embedding_type from DB for {query.file_id}: {e}"
-        )
+    # No DB enrichment here; keep chat hot path lean. Upload/check handle it.
 
     all_file_infos = {query.file_id: file_info_single}
     model_key = f"{query.file_id}_{query.user_id}_{query.model_choice}"
@@ -3117,8 +3180,7 @@ async def _process_multi_files(query: Query, gcs_handler: GCSHandler) -> Dict[st
             detail="No files specified for this chat session. Please upload files first.",
         )
 
-    # Check if embeddings exist for all files (batch check)
-    await _check_file_embeddings(query.file_ids, query.model_choice)
+    # Skip redundant embeddings existence checks here; initialization will ensure local cache
 
     # Check each file to see if it's tabular
     tabular_files, non_tabular_files = await _classify_file_types(query.file_ids)
@@ -3126,23 +3188,7 @@ async def _process_multi_files(query: Query, gcs_handler: GCSHandler) -> Dict[st
     # Get file info for all files
     all_file_infos = await _get_file_info_multi(query.file_ids, gcs_handler)
 
-    # Enrich each file's embedding_type from DB when available (fast path)
-    try:
-        if hasattr(configs, "use_file_hash_db") and configs.use_file_hash_db:
-            from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
-
-            with get_db_session() as db_session:
-                for _fid in query.file_ids:
-                    if _fid in all_file_infos:
-                        file_info = get_file_info_by_file_id(db_session, _fid)
-                        if file_info and file_info.embedding_type:
-                            all_file_infos[_fid][
-                                "embedding_type"
-                            ] = file_info.embedding_type
-    except Exception as e:
-        logging.warning(
-            f"Failed to enrich embedding_type from DB for multi-file request {query.file_ids}: {e}"
-        )
+    # No DB enrichment in chat path; upload/check handle embedding_type.
 
     # Determine if the query is tabular
     is_tabular = await _determine_tabular_status(tabular_files, non_tabular_files)
@@ -3315,7 +3361,6 @@ async def _process_file_info(
         file_id: _filter_context_from_file_info(file_info)
         for file_id, file_info in all_file_infos.items()
     }
-    logging.info(f"Filtered context for LLM: {filtered_all_file_infos}")
 
     # Return consolidated result with consistent structure
     return {
@@ -3441,6 +3486,8 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         logging.info(f"Graphic generation flag: {generate_visualization}")
         logging.info(f"For {file_id_logging}")
 
+        # Do not perform DB enrichment of embedding_type during chat; upload/check handle this
+
         model_info = initialized_models.get(model_key)
         model = model_info["model"] if model_info else None
 
@@ -3499,27 +3546,26 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
     except HTTPException:
         raise
     except GeminiSafetyFilterError as e:
-        # Handle Gemini safety filter errors with a proper error response
+        # Handle Gemini safety filter errors with structured error
         logging.warning(
             f"Gemini safety filter blocked response for {file_id_logging}: {str(e)}"
         )
-        return {
-            "answer": f"I apologize, but I cannot provide a response to this question. {str(e)}",
-            "source_files": [],
-            "error_type": "safety_filter",
-            "error_message": str(e),
-        }
+        raise SafetyFilterError(
+            f"Content blocked by safety filters: {str(e)}",
+            details={"file_id": file_id_logging},
+        )
     except Exception as e:
         logging.error(
             f"Error in chat endpoint: {str(e)} for {file_id_logging}", exc_info=True
         )
-        error_message = str(e)
-        if "coroutine" in error_message.lower() or "async" in error_message.lower():
-            error_message = (
-                "Internal server error: An unexpected issue occurred "
-                "while processing your request. Please try again."
-            )
-        raise HTTPException(status_code=500, detail=error_message)
+        # Raise structured error instead of generic HTTPException
+        from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
+
+        raise BaseAppError(
+            ErrorRegistry.ERROR_LLM_GENERATION_FAILED,
+            f"Chat request failed: {str(e)}",
+            details={"file_id": file_id_logging},
+        )
 
 
 @app.get("/available-models")

@@ -14,6 +14,7 @@ from vertexai.preview.generative_models import (
 from vertexai.preview.language_models import TextEmbeddingModel
 
 from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
+from rtl_rag_chatbot_api.common.errors import ModelInitializationError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -228,9 +229,13 @@ class GeminiHandler(BaseRAGHandler):
 
         actual_model = model_mapping.get(model_choice)
         if not actual_model:
-            raise ValueError(
+            raise ModelInitializationError(
                 f"Invalid model choice: {model_choice}. "
-                f"Available models: {list(model_mapping.keys())}"
+                f"Available models: {list(model_mapping.keys())}",
+                details={
+                    "model_choice": model_choice,
+                    "available_models": list(model_mapping.keys()),
+                },
             )
 
         # Use VertexAI approach for all Gemini models (including 2.5)
@@ -304,32 +309,8 @@ class GeminiHandler(BaseRAGHandler):
             ):
                 file_info_data = self.all_file_infos[file_id]
 
-                # ZL
-                # first check embedding type in database entry
-                from rtl_rag_chatbot_api.app import get_db_session
-                from rtl_rag_chatbot_api.common.db import get_file_info_by_file_id
-
-                embedding_type = None
-                if self.configs.use_file_hash_db:
-                    try:
-                        with get_db_session() as db_session:
-                            # AIP-1060, https://rtldata.atlassian.net/browse/AIP-1060
-                            # take embedding type from database if available
-                            record = get_file_info_by_file_id(db_session, file_id)
-
-                            if record and record.embedding_type:
-                                logging.info(
-                                    f"Found embedding_type '{record.embedding_type}' in database "
-                                    f"for file with hash {record.file_hash}"
-                                )
-
-                                embedding_type = record.embedding_type
-
-                    except Exception as e:
-                        logging.warning(
-                            f"Database lookup for embedding_type failed for file with hash {file_id}: {e}"
-                        )
-                        pass
+                # Use embedding_type from all_file_infos (enriched in chat endpoint)
+                embedding_type = file_info_data.get("embedding_type")
 
                 if not embedding_type:
                     # Default to configurable embedding for files without info
@@ -515,8 +496,9 @@ class GeminiHandler(BaseRAGHandler):
             # Ensure model is initialized
             if self.generative_model is None:
                 if not self.model_choice:
-                    raise ValueError(
-                        "Model choice not set. Cannot initialize Gemini model."
+                    raise ModelInitializationError(
+                        "Model choice not set. Cannot initialize Gemini model.",
+                        details={"model_choice": self.model_choice},
                     )
                 self._initialize_gemini_model(self.model_choice, self.temperature)
 
@@ -753,9 +735,13 @@ def get_gemini_non_rag_response(
 
         model_name = model_mapping.get(model_choice)
         if not model_name:
-            raise ValueError(
+            raise ModelInitializationError(
                 f"Invalid Gemini model choice: {model_choice}. "
-                f"Available models: {list(model_mapping.keys())}"
+                f"Available models: {list(model_mapping.keys())}",
+                details={
+                    "model_choice": model_choice,
+                    "available_models": list(model_mapping.keys()),
+                },
             )
 
         # Use VertexAI approach for all Gemini models (including 2.5)

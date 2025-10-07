@@ -166,21 +166,24 @@ Check if embeddings exist for a specific file and model.
 {
   "results": [
     {
-      "embeddings_exist": true,
-      "model_type": "azure",
       "file_id": "uuid-string-1",
-      "status": "ready_for_chat"
+      "file_name": "document.pdf",
+      "embeddings_exist": true,
+      "model_type": "gpt_4o_mini",
+      "status": "completed"
     },
     {
+      "file_id": "uuid-string-2",
+      "file_name": "report.docx",
       "embeddings_exist": false,
       "model_type": "azure",
-      "file_id": "uuid-string-2",
       "status": "not_started"
     },
     {
-      "embeddings_exist": true,
-      "model_type": "azure",
       "file_id": "uuid-string-3",
+      "file_name": "data.csv",
+      "embeddings_exist": true,
+      "model_type": "gpt_4o_mini",
       "status": "completed"
     }
   ],
@@ -193,6 +196,33 @@ Check if embeddings exist for a specific file and model.
   }
 }
 ```
+
+#### Response Field Descriptions
+
+**Results Array (per file):**
+- `file_id` (string): The unique identifier of the file
+- `file_name` (string): Original filename (null if not available)
+- `embeddings_exist` (boolean): Whether embeddings exist for this file
+- `model_type` (string): Type of model used ("azure" for legacy models, others for new models)
+- `status` (string): Current status - "completed", "in_progress", "not_started", or "error"
+- `error` (string): Error message (only present if there was an error)
+
+**Summary Object:**
+- `total_files` (integer): Total number of files checked
+- `files_with_embeddings` (integer): Number of files that have embeddings
+- `files_missing_embeddings` (integer): Number of files missing embeddings
+- `all_files_ready` (boolean): Whether all files are ready for chat
+- `model_choice` (string): The model choice that was checked
+
+#### Important Notes
+
+1. **Legacy Model Handling**: If multiple files are checked and any use the legacy "azure" model, those files will be marked as `embeddings_exist: false` to enforce migration to newer models.
+
+2. **Single File Exception**: For single file checks, legacy Azure models are allowed and won't be marked as missing.
+
+3. **Parallel Processing**: All files are checked concurrently for better performance.
+
+4. **Error Handling**: Individual file errors are returned in the results without failing the entire request.
 
 #### Usage Example
 1. Create a new request in Postman

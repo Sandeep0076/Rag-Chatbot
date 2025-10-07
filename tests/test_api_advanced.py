@@ -44,6 +44,25 @@ def client():
         yield c
 
 
+def assert_structured_error(response_json, expected_status_code=None):
+    """
+    Helper function to validate structured error responses.
+    Checks for new structured error format (status, code, key, message).
+    Falls back to legacy validation if structured fields not present.
+    """
+    if "code" in response_json and "key" in response_json:
+        # New structured error format
+        assert response_json.get("status") == "error"
+        assert isinstance(response_json.get("code"), int)
+        assert isinstance(response_json.get("key"), str)
+        assert "message" in response_json
+        # Backward compatibility: check that error_code and error_key exist
+        assert response_json.get("error_code") == response_json.get("code")
+        assert response_json.get("error_key") == response_json.get("key")
+        return True
+    return False
+
+
 class TestAdvancedMultiFileScenarios:
     """Advanced tests for error handling, edge cases, and complex scenarios."""
 
@@ -95,6 +114,10 @@ class TestAdvancedMultiFileScenarios:
 
         # Should handle gracefully (may return 200 or 400)
         assert response.status_code in [200, 400]
+        if response.status_code == 400:
+            response_json = response.json()
+            if assert_structured_error(response_json):
+                print(f"Structured error returned: {response_json.get('key')}")
         print("System handled invalid file format gracefully")
 
     def test_empty_file_upload(self, client):
@@ -111,6 +134,10 @@ class TestAdvancedMultiFileScenarios:
 
         # System should handle empty files gracefully (may return 200 or 400)
         assert response.status_code in [200, 400]
+        if response.status_code == 400:
+            response_json = response.json()
+            if assert_structured_error(response_json):
+                print(f"Structured error returned: {response_json.get('key')}")
         print("System handled empty file upload")
 
     def test_invalid_existing_file_ids(self, client):
@@ -130,11 +157,21 @@ class TestAdvancedMultiFileScenarios:
         # Should return 400 error for invalid file IDs
         assert response.status_code == 400
         response_json = response.json()
-        # New behavior: detail contains message and errors array
-        detail = response_json.get("detail", {})
-        message = (detail.get("message") or "").lower()
-        errors = detail.get("errors") or []
-        assert ("invalid file" in message) or (len(errors) > 0)
+        # Check for structured error response
+        if assert_structured_error(response_json):
+            print(
+                f"Structured error: {response_json.get('code')} - {response_json.get('key')}"
+            )
+        else:
+            # Legacy format or FastAPI validation error
+            detail = response_json.get("detail", {})
+            if isinstance(detail, dict):
+                message = (detail.get("message") or "").lower()
+                errors = detail.get("errors") or []
+                assert ("invalid file" in message) or (len(errors) > 0)
+            else:
+                # FastAPI validation error returns detail as string
+                assert "invalid" in str(detail).lower()
         print("System correctly rejected invalid existing file IDs")
 
     def test_partial_failure_existing_and_new_files(self, client):
@@ -167,6 +204,11 @@ class TestAdvancedMultiFileScenarios:
 
         # Should fail due to invalid file ID
         assert response.status_code == 400
+        response_json = response.json()
+        if assert_structured_error(response_json):
+            print(
+                f"Structured error: {response_json.get('code')} - {response_json.get('key')}"
+            )
         print("System correctly handled mixed valid/invalid file IDs")
 
     @patch("rtl_rag_chatbot_api.chatbot.gcs_handler.GCSHandler.upload_to_gcs")
@@ -244,9 +286,14 @@ class TestAdvancedMultiFileScenarios:
         response_json = response.json()
         # May succeed with empty results or error status
         if response.status_code == 400:
-            print(
-                f"Invalid URLs correctly rejected: {response_json.get('detail', 'unknown')}"
-            )
+            if assert_structured_error(response_json):
+                print(
+                    f"Structured error: {response_json.get('code')} - {response_json.get('key')}"
+                )
+            else:
+                print(
+                    f"Invalid URLs correctly rejected: {response_json.get('detail', 'unknown')}"
+                )
         else:
             print(f"Invalid URL handling: {response_json.get('status', 'unknown')}")
 

@@ -47,3 +47,14 @@ The following files have been updated to use the configurable default:
 - If the environment variable is not set, the system defaults to `azure-3-large`
 - Existing files retain their original embedding type
 - The change only affects new file uploads
+
+## Auto-Migration to New Embeddings
+
+The system now includes **automatic migration** from legacy `azure` embeddings to `azure-3-large`:
+
+- **Transparent**: Happens automatically during file upload, chat, or status check
+- **Database-First**: Always uses database as single source of truth for embedding type
+- **All Scenarios**: Works for single files, multi-files, and all-legacy files
+- **No Manual Work**: Users don't need to do anything
+
+For more details, see [Auto-Migration Guide](auto-migration-guide.md)
