@@ -83,3 +83,13 @@ os.environ["gcp_resource"] = json.dumps(
         "gcp_embeddings_folder": os.getenv("GCP_EMBEDDINGS_FOLDER", "file-embeddings"),
     }
 )
+
+os.environ["vertexai_imagen"] = json.dumps(
+    {
+        "model_name": os.getenv(
+            "VERTEXAI__IMAGEN__MODEL_NAME", "imagen-3.0-generate-002"
+        ),
+        "project": os.getenv("VERTEXAI__IMAGEN__PROJECT", "dat-itowe-dev"),
+        "location": os.getenv("VERTEXAI__IMAGEN__LOCATION", "europe-west4"),
+    }
+)
