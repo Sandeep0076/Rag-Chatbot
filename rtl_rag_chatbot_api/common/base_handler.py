@@ -4,7 +4,10 @@ import os
 import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from queue import Queue
+from threading import Lock, Semaphore
 from typing import List
 
 import pytesseract
@@ -21,6 +24,51 @@ from rtl_rag_chatbot_api.common.errors import (
 from rtl_rag_chatbot_api.common.text_extractor import TextExtractor
 
 logging.basicConfig(level=logging.INFO)
+
+
+class RateLimiter:
+    """Thread-safe rate limiter for API requests."""
+
+    def __init__(self, max_requests_per_second: int):
+        self.max_requests_per_second = max_requests_per_second
+        self.semaphore = Semaphore(max_requests_per_second)
+        self.request_times = Queue(maxsize=max_requests_per_second)
+        self.lock = Lock()
+
+    def acquire(self):
+        """Acquire a permit to make a request."""
+        with self.lock:
+            now = time.time()
+
+            # Clean up old request times
+            while not self.request_times.empty():
+                try:
+                    oldest_time = self.request_times.queue[0]
+                    if now - oldest_time > 1.0:
+                        self.request_times.get_nowait()
+                    else:
+                        break
+                except Exception as e:
+                    logging.error(f"Error in RateLimiter: {str(e)}")
+                    break
+
+            # If we've hit our limit, wait until we can make another request
+            if self.request_times.full():
+                oldest_time = self.request_times.queue[0]
+                wait_time = max(0, 1.0 - (now - oldest_time))
+                if wait_time > 0:
+                    time.sleep(wait_time)
+                    now = time.time()
+
+            # Acquire the semaphore and record the request time
+            self.semaphore.acquire()
+            if self.request_times.full():
+                self.request_times.get_nowait()  # Make room if needed
+            self.request_times.put(now)
+
+    def release(self):
+        """Release a permit after request completion."""
+        self.semaphore.release()
 
 
 class BaseRAGHandler:
@@ -118,6 +166,20 @@ class BaseRAGHandler:
         """Abstract method to be implemented by child classes."""
         raise NotImplementedError("Subclasses must implement get_embeddings")
 
+    def _process_chunk_batch(
+        self, chunks: List[str], rate_limiter: RateLimiter
+    ) -> List[List[float]]:
+        """Process a batch of chunks to get their embeddings with rate limiting."""
+        embeddings = []
+        for chunk in chunks:
+            rate_limiter.acquire()
+            try:
+                embedding = self.get_embeddings([chunk])[0]
+                embeddings.append(embedding)
+            finally:
+                rate_limiter.release()
+        return embeddings
+
     def get_answer(self, query: str) -> str:
         """Abstract method to be implemented by child classes."""
         raise NotImplementedError("Subclasses must implement get_answer")
@@ -126,192 +188,107 @@ class BaseRAGHandler:
         self, chunks: List[str], file_id: str, subfolder: str, is_embedding: bool = True
     ) -> str:
         """
-        Create embeddings for text chunks and store them in ChromaDB with batch processing.
+        Create embeddings for text chunks and store them in ChromaDB with parallel processing.
 
-        Processes text chunks into embeddings while handling token limits and batch sizes.
-        Uses configured chunk size (chunk_size_limit) for optimal RAG performance.
-        Implements automatic chunk splitting for oversized text segments.
+        Uses thread-based parallelism with rate limiting:
+        - Processes up to 5 batches in parallel
+        - Each batch contains up to 5 chunks (configurable via self.BATCH_SIZE)
+        - Respects Azure's 8000 token limit per request
+        - Maintains rate limit of 10 requests per second
+        - Uses thread pool for parallel processing
+        - Maintains ChromaDB consistency with sequential updates
 
         Args:
             chunks (List[str]): List of text chunks to be embedded
             file_id (str): Unique identifier for the file being processed
-            subfolder (str): Storage subfolder (standardized on 'azure' for unified embedding approach)
+            subfolder (str): Storage subfolder for embeddings storage
+            is_embedding (bool): Flag for embedding creation mode
 
         Returns:
             str: Status string ('completed' on success)
         """
         try:
-            # Get collection with explicit subfolder path
+            # Get collection and initialize tracking
             collection = self.chroma_manager.get_collection(
                 file_id=file_id,
-                embedding_type=subfolder,  # Always 'azure' in the unified embedding approach
+                embedding_type=subfolder,
                 collection_name=self.collection_name,
-                user_id=None,  # No user filtering for embeddings creation
+                user_id=None,
                 is_embedding=is_embedding,
             )
 
+            # Initialize resources and constants
+            rate_limiter = RateLimiter(10)  # 10 requests per second
+            AZURE_EMBEDDING_LIMIT = 8000  # Azure's token limit per request
+            MAX_WORKERS = 3  # Number of parallel threads
             processed_count = 0
-            total_chunks = len(chunks)
-            batch_to_process = []
-            batch_ids = []
-            embedding_id = str(
-                uuid.uuid4()
-            )  # Generate a unique ID for embeddings folder
+            embedding_id = str(uuid.uuid4())
 
-            # Use configured chunk size for optimal RAG performance
-            max_chunk_size = self.max_tokens
+            # Prepare chunks for processing
+            prepared_chunks = []
+            chunk_ids = []
 
-            # Azure text-embedding-ada-002 has a maximum context length of 8192 tokens
-            # For safety, we'll use a slightly lower limit
-            AZURE_EMBEDDING_LIMIT = 8000
-
-            for i in range(0, total_chunks):
-                chunk = chunks[i]
+            # Pre-process chunks to handle token limits
+            for i, chunk in enumerate(chunks):
                 chunk_tokens = len(self.simple_tokenize(chunk))
-
-                # Safety check: If chunk is still too large even after splitting,
-                # log a warning and attempt to split it further
-                if chunk_tokens > max_chunk_size:
-                    logging.warning(
-                        f"Chunk {i} has {chunk_tokens} tokens, exceeding limit of {max_chunk_size}. "
-                        f"Attempting to split further."
+                if chunk_tokens > AZURE_EMBEDDING_LIMIT:
+                    # Split large chunks into smaller ones
+                    smaller_chunks = self.split_large_chunk(
+                        chunk, AZURE_EMBEDDING_LIMIT - 100
                     )
-                    sub_chunks = self.split_large_chunk(chunk, max_chunk_size)
-                    for sub_idx, sub_chunk in enumerate(sub_chunks):
-                        sub_chunk_tokens = len(self.simple_tokenize(sub_chunk))
-                        if sub_chunk_tokens <= max_chunk_size:
-                            batch_to_process.append(sub_chunk)
-                            batch_ids.append(f"{embedding_id}_{i}_sub{sub_idx}")
-                        else:
-                            # If even after splitting, chunk is too large, truncate it as last resort
-                            logging.error(
-                                f"Sub-chunk {sub_idx} still has {sub_chunk_tokens} tokens. "
-                                f"Truncating to {max_chunk_size} tokens."
-                            )
-                            truncated_chunk = self.truncate_text(
-                                sub_chunk, max_chunk_size
-                            )
-                            batch_to_process.append(truncated_chunk)
-                            batch_ids.append(
-                                f"{embedding_id}_{i}_sub{sub_idx}_truncated"
-                            )
+                    for j, small_chunk in enumerate(smaller_chunks):
+                        prepared_chunks.append(small_chunk)
+                        chunk_ids.append(f"{embedding_id}_{i}_split_{j}")
                 else:
-                    batch_to_process.append(chunk)
-                    batch_ids.append(f"{embedding_id}_{i}")
+                    prepared_chunks.append(chunk)
+                    chunk_ids.append(f"{embedding_id}_{i}")
 
-                # Calculate total tokens in current batch
-                batch_total_tokens = sum(
-                    len(self.simple_tokenize(b)) for b in batch_to_process
-                )
+            logging.info(f"Prepared {len(prepared_chunks)} chunks for processing")
 
-                # Process batch if:
-                # 1. We've reached BATCH_SIZE chunks, OR
-                # 2. Adding the next chunk would exceed Azure's token limit, OR
-                # 3. We're at the last chunk
-                should_process_batch = (
-                    len(batch_to_process) >= self.BATCH_SIZE
-                    or batch_total_tokens > AZURE_EMBEDDING_LIMIT
-                    or i == total_chunks - 1
-                )
+            # Process chunks in parallel using ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = []
 
-                if should_process_batch and batch_to_process:
+                # Submit chunks in batches
+                for i in range(0, len(prepared_chunks), self.BATCH_SIZE):
+                    batch_end = min(i + self.BATCH_SIZE, len(prepared_chunks))
+                    batch = prepared_chunks[i:batch_end]
+                    batch_ids = chunk_ids[i:batch_end]
+
+                    # Submit the batch for processing
+                    future = executor.submit(
+                        self._process_chunk_batch, batch, rate_limiter
+                    )
+                    futures.append((future, batch, batch_ids))
+
+                # Process results as they complete
+                for future, batch, ids in futures:
                     try:
-                        # Log batch details before processing
-                        batch_token_counts = [
-                            len(self.simple_tokenize(b)) for b in batch_to_process
-                        ]
-                        logging.info(
-                            f"Processing batch {i // self.BATCH_SIZE + 1} with {len(batch_to_process)} chunks, "
-                            f"token counts: {batch_token_counts}, total: {batch_total_tokens}"
+                        embeddings = future.result()
+
+                        # Add to ChromaDB (this remains sequential for consistency)
+                        collection.add(
+                            documents=batch,
+                            embeddings=embeddings,
+                            metadatas=[
+                                {"source": file_id, "embedding_id": embedding_id}
+                                for _ in batch
+                            ],
+                            ids=ids,
                         )
 
-                        # For large chunks that approach Azure's limit, process them individually
-                        if (
-                            batch_total_tokens > AZURE_EMBEDDING_LIMIT
-                            and len(batch_to_process) > 1
-                        ):
-                            logging.info(
-                                f"Batch total ({batch_total_tokens}) exceeds Azure limit. "
-                                f"Processing chunks individually."
-                            )
-                            for idx, single_chunk in enumerate(batch_to_process):
-                                single_chunk_tokens = len(
-                                    self.simple_tokenize(single_chunk)
-                                )
-                                if single_chunk_tokens > AZURE_EMBEDDING_LIMIT:
-                                    logging.error(
-                                        f"Single chunk has {single_chunk_tokens} tokens, "
-                                        f"exceeding Azure limit of {AZURE_EMBEDDING_LIMIT}"
-                                    )
-                                    # Split this chunk further
-                                    smaller_chunks = self.split_large_chunk(
-                                        single_chunk, AZURE_EMBEDDING_LIMIT - 100
-                                    )
-                                    for small_idx, small_chunk in enumerate(
-                                        smaller_chunks
-                                    ):
-                                        embeddings = self.get_embeddings([small_chunk])
-                                        collection.add(
-                                            documents=[small_chunk],
-                                            embeddings=embeddings,
-                                            metadatas=[
-                                                {
-                                                    "source": file_id,
-                                                    "embedding_id": embedding_id,
-                                                }
-                                            ],
-                                            ids=[f"{batch_ids[idx]}_split_{small_idx}"],
-                                        )
-                                        processed_count += 1
-                                else:
-                                    embeddings = self.get_embeddings([single_chunk])
-                                    collection.add(
-                                        documents=[single_chunk],
-                                        embeddings=embeddings,
-                                        metadatas=[
-                                            {
-                                                "source": file_id,
-                                                "embedding_id": embedding_id,
-                                            }
-                                        ],
-                                        ids=[batch_ids[idx]],
-                                    )
-                                    processed_count += 1
-                        else:
-                            # Normal batch processing for smaller batches
-                            embeddings = self.get_embeddings(batch_to_process)
-                            collection.add(
-                                documents=batch_to_process,
-                                embeddings=embeddings,
-                                metadatas=[
-                                    {"source": file_id, "embedding_id": embedding_id}
-                                    for _ in batch_to_process
-                                ],
-                                ids=batch_ids,
-                            )
-                            processed_count += len(batch_to_process)
-
+                        processed_count += len(batch)
                         logging.info(
-                            f"Processed {processed_count}/{total_chunks} chunks"
+                            f"Processed {processed_count}/{len(prepared_chunks)} chunks"
                         )
                     except Exception as e:
-                        logging.error(f"Error processing batch at chunk {i}: {str(e)}")
-                        # Log the problematic batch details for debugging
-                        problematic_counts = [
-                            len(self.simple_tokenize(b)) for b in batch_to_process
-                        ]
-                        logging.error(
-                            f"Problematic batch had {len(batch_to_process)} items "
-                            f"with token counts: {problematic_counts}"
-                        )
-                    finally:
-                        batch_to_process = []
-                        batch_ids = []
+                        logging.error(f"Error processing batch: {str(e)}")
+                        raise
 
-            # Store the embedding_id for reference
             self.embedding_id = embedding_id
-            logging.info(f"For {self.file_id}  embeddings are created successfully")
+            logging.info(f"Successfully created embeddings for {file_id}")
             return "completed"
+
         except Exception as e:
             logging.error(f"Error in create_and_store_embeddings: {str(e)}")
             raise
