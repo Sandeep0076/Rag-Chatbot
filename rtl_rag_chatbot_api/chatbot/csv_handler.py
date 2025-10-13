@@ -7,6 +7,7 @@ from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain_community.utilities import SQLDatabase
 from langchain_google_vertexai import ChatVertexAI
+from langchain_google_vertexai.model_garden import ChatAnthropicVertex
 from langchain_openai import AzureChatOpenAI
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
@@ -465,6 +466,21 @@ class TabularDataHandler:
                 max_output_tokens=4096,
                 top_p=1,
                 top_k=40,
+            )
+
+        # Handle Anthropic (Vertex) models
+        if self.model_choice == "Claude Sonnet 4":
+            model_config = self.config.anthropic
+            if not model_config:
+                raise ValueError("Configuration for Anthropic model not found")
+            model_name = model_config.model_sonnet
+            logging.info(f"Using Anthropic Vertex model: {model_name}")
+            return ChatAnthropicVertex(
+                model=model_name,
+                project=model_config.project,
+                location=model_config.location,
+                temperature=self.temperature,
+                max_output_tokens=4096,
             )
 
         # Handle Azure OpenAI models

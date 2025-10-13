@@ -40,6 +40,19 @@ class ModelHandler:
                     collection_name=collection_name,
                     user_id=user_id,
                 )
+            elif model_choice == "Claude Sonnet 4":
+                from rtl_rag_chatbot_api.chatbot.anthropic_handler import (
+                    AnthropicHandler,
+                )
+
+                model = AnthropicHandler(self.configs, self.gcs_handler)
+                model.initialize(
+                    model=model_choice,
+                    file_id=file_id,
+                    embedding_type=storage_folder,
+                    collection_name=collection_name,
+                    user_id=user_id,
+                )
             else:
                 model = AzureChatbot(self.configs, self.gcs_handler)
                 model.initialize(

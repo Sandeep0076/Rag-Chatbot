@@ -92,6 +92,13 @@ class VertexAIImagenConfig(BaseModel):
     model_config = {"protected_namespaces": ()}
 
 
+class AnthropicConfig(BaseModel):
+    model_sonnet: str = "claude-sonnet-4@20250514"
+    project: str = "dat-itowe-dev"
+    location: str = "europe-west1"
+    model_config = {"protected_namespaces": ()}
+
+
 class CleanupConfig(BaseModel):
     staleness_threshold_minutes: int = 240  # 4 hours default
     min_cleanup_interval: int = 30  # 30 minutes default
@@ -108,6 +115,7 @@ class Config(BaseSettings):
     gemini: GeminiConfig
     azure_dalle_3: AzureDalle3Config
     vertexai_imagen: VertexAIImagenConfig = Field(default_factory=VertexAIImagenConfig)
+    anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig)
     cleanup: CleanupConfig = Field(default_factory=lambda: CleanupConfig())
 
     # Feature flags

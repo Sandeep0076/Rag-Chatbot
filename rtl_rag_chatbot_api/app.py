@@ -22,7 +22,7 @@ from fastapi import BackgroundTasks, Body, Depends, FastAPI, File, Form, HTTPExc
 from fastapi import Query as QueryParam
 from fastapi import Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from starlette_exporter import PrometheusMiddleware, handle_metrics
@@ -2698,6 +2698,20 @@ def initialize_rag_model(
             temperature=temperature,
         )
         # Note: GeminiHandler with constructor params doesn't need separate initialize() call
+    elif query.model_choice == "Claude Sonnet 4":
+        # Anthropic (Vertex) handler
+        from rtl_rag_chatbot_api.chatbot.anthropic_handler import AnthropicHandler
+
+        all_file_infos = {query.file_id: file_info}
+        model = AnthropicHandler(
+            configs=configs,
+            gcs_handler=gcs_handler,
+            model_choice=query.model_choice,
+            file_id=query.file_id,
+            all_file_infos=all_file_infos,
+            user_id=query.user_id,
+            temperature=temperature,
+        )
     else:
         # For AzureChatbot, all initialization happens in the constructor
         # Pass all required parameters directly, including file info for context
@@ -3577,6 +3591,7 @@ async def get_available_models(current_user=Depends(get_current_user)):
     # Get available models from config
     azure_models = list(configs.azure_llm.models.keys())
     gemini_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
+    anthropic_models = ["Claude Sonnet 4"]
     # Add individual image models and the combined option
     image_models = [
         "dall-e-3",
@@ -3588,8 +3603,11 @@ async def get_available_models(current_user=Depends(get_current_user)):
 
     # Return combined list with model categories
     return {
-        "models": azure_models + gemini_models + image_models,
-        "model_types": {"text": azure_models + gemini_models, "image": image_models},
+        "models": azure_models + gemini_models + anthropic_models + image_models,
+        "model_types": {
+            "text": azure_models + gemini_models + anthropic_models,
+            "image": image_models,
+        },
     }
 
 
@@ -3876,6 +3894,45 @@ async def get_gemini_response_stream(
         return StreamingResponse(
             model.get_gemini_response_stream(request.message), media_type="text/plain"
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
+
+@app.post("/chat/anthropic")
+async def get_anthropic_response(
+    request: ChatRequest, current_user=Depends(get_current_user)
+):
+    """
+    Get a non-RAG response from an Anthropic (Vertex) model.
+
+    Args:
+        request (ChatRequest): Request body containing:
+            - prompt (str): The prompt to send to the model
+            - model (str): The Anthropic model to use. Must be "Claude Sonnet 4".
+            - temperature (float, optional): The sampling temperature. Defaults to 0.8.
+        current_user: Authenticated user information
+
+    Returns:
+        PlainTextResponse: A non-streaming response with the model's output
+    """
+    try:
+        # Validate model choice
+        if request.model != "Claude Sonnet 4":
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid model choice. Use 'Claude Sonnet 4'.",
+            )
+
+        from rtl_rag_chatbot_api.chatbot import get_anthropic_non_rag_response
+
+        answer = get_anthropic_non_rag_response(
+            config=configs,
+            prompt=request.message,
+            model_choice=request.model,
+            temperature=request.temperature or 0.8,
+            max_tokens=4096,
+        )
+        return PlainTextResponse(answer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
@@ -4206,13 +4263,27 @@ def _create_rag_model_for_multi_file(
         is_gemini: Whether this is a Gemini model
 
     Returns:
-        Model instance (GeminiHandler or Chatbot)
+        Model instance (GeminiHandler, AnthropicHandler, or Chatbot)
     """
     if is_gemini:
         logging.info(
             f"Using GeminiHandler for multi-file with model: {query.model_choice}"
         )
         return GeminiHandler(
+            configs=configs,
+            gcs_handler=gcs_handler,
+            model_choice=query.model_choice,
+            file_ids=query.file_ids,  # type: ignore
+            all_file_infos=all_file_infos,
+            user_id=query.user_id,
+        )
+    elif query.model_choice == "Claude Sonnet 4":
+        logging.info(
+            f"Using AnthropicHandler for multi-file with model: {query.model_choice}"
+        )
+        from rtl_rag_chatbot_api.chatbot.anthropic_handler import AnthropicHandler
+
+        return AnthropicHandler(
             configs=configs,
             gcs_handler=gcs_handler,
             model_choice=query.model_choice,

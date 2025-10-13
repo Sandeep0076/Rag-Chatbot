@@ -765,3 +765,54 @@ def test_generate_imagen3_images(client):
     print(
         "Memory optimization: Using single image_urls array instead of duplicate fields"
     )
+
+
+def test_chat_with_doc_anthropic(client):
+    """
+    Tests the full pipeline for uploading and chatting with a single .txt
+    file using an Anthropic model.
+    """
+    print("\n--- Running Test: Chat with Doc (Anthropic) ---")
+    with open(MOCK_TXT_FILE, "rb") as f:
+        files = {"file": ("mock_txt.txt", f, "text/plain")}
+        upload_response = client.post(
+            "/file/upload", data={"username": "testuser"}, files=files
+        )
+
+    assert upload_response.status_code == 200
+    upload_json = upload_response.json()
+    file_id = upload_json.get("file_id")
+    session_id = upload_json.get("session_id")
+    assert file_id and session_id
+    print(f"Uploaded document. Received file_id: {file_id}")
+
+    # Re-implementing polling loop for simplicity as in other standalone tests
+    print(f"Polling for status of file_id: {file_id}...")
+    start_time = time.time()
+    while time.time() - start_time < 60:
+        status_response = client.get(f"/embeddings/status/{file_id}")
+        assert status_response.status_code == 200
+        if status_response.json().get("can_chat"):
+            print(f"Success! Document {file_id} is ready for chat.")
+            break
+        time.sleep(3)
+    else:
+        pytest.fail(f"Timeout waiting for document {file_id} to process.")
+
+    # Chat with the processed document using Anthropic Sonnet
+    chat_data = {
+        "text": ["How many mangoes are there in Garden"],
+        "file_id": file_id,
+        "session_id": session_id,
+        "model_choice": "Claude Sonnet 4",
+        "user_id": "testuser",
+    }
+    chat_response = client.post("/file/chat", json=chat_data)
+
+    assert chat_response.status_code == 200
+    response_json = chat_response.json()
+    response_text = response_json.get("response", "").lower()
+    print(f"Received chat response for document: '{response_text}'")
+
+    # Assert that the correct answer is in the response (case-insensitive)
+    assert any(val in response_text for val in ["50", "fifty"])
