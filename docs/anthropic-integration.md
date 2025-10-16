@@ -14,7 +14,7 @@ This document summarizes how Anthropic Claude models are integrated into the RAG
 
 - **Endpoints**:
 
-  - `POST /file/chat` with `model_choice = "Claude Sonnet 4"` (RAG chat over your uploaded files)
+  - `POST /file/chat` with `model_choice = "claude-sonnet-4@20250514"` (RAG chat over your uploaded files)
 
   - `POST /chat/anthropic` for a non-RAG plain LLM response using Anthropic on Vertex AI
 
@@ -48,7 +48,7 @@ File: `rtl_rag_chatbot_api/chatbot/anthropic_handler.py`
 
 - Initializes an `AnthropicVertex` client using `configs.anthropic.project` and `configs.anthropic.location`.
 
-- Maps `model_choice` → concrete model ID via config (`"Claude Sonnet 4"` → `configs.anthropic.model_sonnet`).
+- Maps `model_choice` → concrete model ID via config (`"claude-sonnet-4@20250514"` → `configs.anthropic.model_sonnet`).
 
 - Private `_call_model(prompt: str)` issues `client.messages.create(...)` with `max_tokens` and `temperature`.
 
@@ -64,7 +64,7 @@ File: `rtl_rag_chatbot_api/chatbot/anthropic_handler.py`
 
 `rtl_rag_chatbot_api/chatbot/csv_handler.py`
 
-- Uses `ChatAnthropicVertex` when `model_choice == "Claude Sonnet 4"`, leveraging the same config values.
+- Uses `ChatAnthropicVertex` when `model_choice == "claude-sonnet-4@20250514"`, leveraging the same config values.
 
 ## API Usage
 
@@ -79,14 +79,14 @@ Request JSON example:
   "text": ["How many mangoes are there in Garden"],
   "file_id": "<your-file-id>",
   "session_id": "<your-session-id>",
-  "model_choice": "Claude Sonnet 4",
+  "model_choice": "claude-sonnet-4@20250514",
   "user_id": "<your-username>"
 }
 ```
 
 Notes:
 
-- `model_choice` must be exactly `"Claude Sonnet 4"` for Anthropic usage.
+- `model_choice` must be exactly `"claude-sonnet-4@20250514"` for Anthropic usage.
 
 - The system will route to `AnthropicHandler` and use RAG context built from your uploaded document(s).
 
@@ -99,7 +99,7 @@ Request JSON example:
 ```json
 {
   "message": "Explain RAG in simple terms",
-  "model": "Claude Sonnet 4",
+  "model": "claude-sonnet-4@20250514",
   "temperature": 0.8
 }
 ```
@@ -108,13 +108,13 @@ Notes:
 
 - This endpoint does not use embeddings/context, it is a direct model call.
 
-- The server validates `model == "Claude Sonnet 4"`.
+- The server validates `model == "claude-sonnet-4@20250514"`.
 
 ### Discover available models
 
 Endpoint: `GET /available-models`
 
-Response includes `"Claude Sonnet 4"` in the `models` array and under `model_types.text`.
+Response includes `"claude-sonnet-4@20250514"` in the `models` array and under `model_types.text`.
 
 ## Environment and Auth
 
@@ -130,7 +130,7 @@ Response includes `"Claude Sonnet 4"` in the `models` array and under `model_typ
 
 ## Troubleshooting
 
-- 400 error on `/chat/anthropic`: verify `model` is exactly `"Claude Sonnet 4"`.
+- 400 error on `/chat/anthropic`: verify `model` is exactly `"claude-sonnet-4@20250514"`.
 
 - Permission errors: confirm Vertex AI access to Anthropic models and correct `project`/`location`.
 
