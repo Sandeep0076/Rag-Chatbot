@@ -469,11 +469,18 @@ class TabularDataHandler:
             )
 
         # Handle Anthropic (Vertex) models
-        if self.model_choice == "claude-sonnet-4@20250514":
+        if self.model_choice in ["claude-sonnet-4@20250514", "claude-sonnet-4-5"]:
             model_config = self.config.anthropic
             if not model_config:
                 raise ValueError("Configuration for Anthropic model not found")
-            model_name = model_config.model_sonnet
+
+            # Map model choice to actual model name
+            model_mapping = {
+                "claude-sonnet-4@20250514": model_config.model_sonnet,
+                "claude-sonnet-4-5": model_config.model_sonnet_45,
+            }
+            model_name = model_mapping[self.model_choice]
+
             logging.info(f"Using Anthropic Vertex model: {model_name}")
             return ChatAnthropicVertex(
                 model=model_name,

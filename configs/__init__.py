@@ -99,6 +99,7 @@ os.environ["anthropic"] = json.dumps(
         "model_sonnet": os.getenv(
             "ANTHROPIC__MODEL_SONNET", "claude-sonnet-4@20250514"
         ),
+        "model_sonnet_45": os.getenv("ANTHROPIC__MODEL_SONNET_45", "claude-sonnet-4-5"),
         "project": os.getenv("ANTHROPIC__PROJECT", "dat-itowe-dev"),
         "location": os.getenv("ANTHROPIC__LOCATION", "europe-west1"),
     }
