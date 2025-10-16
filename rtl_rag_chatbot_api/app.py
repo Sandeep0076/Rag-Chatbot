@@ -2698,7 +2698,7 @@ def initialize_rag_model(
             temperature=temperature,
         )
         # Note: GeminiHandler with constructor params doesn't need separate initialize() call
-    elif query.model_choice == "Claude Sonnet 4":
+    elif query.model_choice == "claude-sonnet-4@20250514":
         # Anthropic (Vertex) handler
         from rtl_rag_chatbot_api.chatbot.anthropic_handler import AnthropicHandler
 
@@ -3591,7 +3591,7 @@ async def get_available_models(current_user=Depends(get_current_user)):
     # Get available models from config
     azure_models = list(configs.azure_llm.models.keys())
     gemini_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
-    anthropic_models = ["Claude Sonnet 4"]
+    anthropic_models = ["claude-sonnet-4@20250514"]
     # Add individual image models and the combined option
     image_models = [
         "dall-e-3",
@@ -3908,7 +3908,7 @@ async def get_anthropic_response(
     Args:
         request (ChatRequest): Request body containing:
             - prompt (str): The prompt to send to the model
-            - model (str): The Anthropic model to use. Must be "Claude Sonnet 4".
+            - model (str): The Anthropic model to use. Must be "claude-sonnet-4@20250514".
             - temperature (float, optional): The sampling temperature. Defaults to 0.8.
         current_user: Authenticated user information
 
@@ -3917,10 +3917,10 @@ async def get_anthropic_response(
     """
     try:
         # Validate model choice
-        if request.model != "Claude Sonnet 4":
+        if request.model != "claude-sonnet-4@20250514":
             raise HTTPException(
                 status_code=400,
-                detail="Invalid model choice. Use 'Claude Sonnet 4'.",
+                detail="Invalid model choice. Use 'claude-sonnet-4@20250514'.",
             )
 
         from rtl_rag_chatbot_api.chatbot import get_anthropic_non_rag_response
@@ -4277,7 +4277,7 @@ def _create_rag_model_for_multi_file(
             all_file_infos=all_file_infos,
             user_id=query.user_id,
         )
-    elif query.model_choice == "Claude Sonnet 4":
+    elif query.model_choice == "claude-sonnet-4@20250514":
         logging.info(
             f"Using AnthropicHandler for multi-file with model: {query.model_choice}"
         )
