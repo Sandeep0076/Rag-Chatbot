@@ -93,3 +93,13 @@ os.environ["vertexai_imagen"] = json.dumps(
         "location": os.getenv("VERTEXAI__IMAGEN__LOCATION", "europe-west4"),
     }
 )
+
+os.environ["anthropic"] = json.dumps(
+    {
+        "model_sonnet": os.getenv(
+            "ANTHROPIC__MODEL_SONNET", "claude-sonnet-4@20250514"
+        ),
+        "project": os.getenv("ANTHROPIC__PROJECT", "dat-itowe-dev"),
+        "location": os.getenv("ANTHROPIC__LOCATION", "europe-west1"),
+    }
+)
