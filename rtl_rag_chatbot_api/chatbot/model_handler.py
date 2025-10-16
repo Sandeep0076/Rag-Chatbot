@@ -40,7 +40,7 @@ class ModelHandler:
                     collection_name=collection_name,
                     user_id=user_id,
                 )
-            elif model_choice == "Claude Sonnet 4":
+            elif model_choice.lower() in ["claude-sonnet-4@20250514"]:
                 from rtl_rag_chatbot_api.chatbot.anthropic_handler import (
                     AnthropicHandler,
                 )
