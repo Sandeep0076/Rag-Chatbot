@@ -56,7 +56,7 @@ class AnthropicHandler(VertexAIRAGHandler):
     def _initialize_model(self, model_choice: str):
         """Initialize Anthropic model mapping using config."""
         model_mapping = {
-            "Claude Sonnet 4": self.configs.anthropic.model_sonnet,
+            "claude-sonnet-4@20250514": self.configs.anthropic.model_sonnet,
         }
         actual_model = model_mapping.get(model_choice)
         if not actual_model:
@@ -101,7 +101,7 @@ def get_anthropic_non_rag_response(
     """Get a response from Anthropic Vertex model without using RAG context."""
     try:
         model_mapping = {
-            "Claude Sonnet 4": config.anthropic.model_sonnet,
+            "claude-sonnet-4@20250514": config.anthropic.model_sonnet,
         }
         model_name = model_mapping.get(model_choice)
         if not model_name:

@@ -804,7 +804,7 @@ def test_chat_with_doc_anthropic(client):
         "text": ["How many mangoes are there in Garden"],
         "file_id": file_id,
         "session_id": session_id,
-        "model_choice": "Claude Sonnet 4",
+        "model_choice": "claude-sonnet-4@20250514",
         "user_id": "testuser",
     }
     chat_response = client.post("/file/chat", json=chat_data)

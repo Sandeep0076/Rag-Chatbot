@@ -469,7 +469,7 @@ class TabularDataHandler:
             )
 
         # Handle Anthropic (Vertex) models
-        if self.model_choice == "Claude Sonnet 4":
+        if self.model_choice == "claude-sonnet-4@20250514":
             model_config = self.config.anthropic
             if not model_config:
                 raise ValueError("Configuration for Anthropic model not found")
