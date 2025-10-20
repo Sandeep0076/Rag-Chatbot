@@ -94,6 +94,7 @@ class VertexAIImagenConfig(BaseModel):
 
 class AnthropicConfig(BaseModel):
     model_sonnet: str = "claude-sonnet-4@20250514"
+    model_sonnet_45: str = "claude-sonnet-4-5"
     project: str = "dat-itowe-dev"
     location: str = "europe-west1"
     model_config = {"protected_namespaces": ()}
