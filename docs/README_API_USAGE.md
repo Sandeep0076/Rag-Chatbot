@@ -481,7 +481,7 @@ Analyze an uploaded image file and get comprehensive analysis results.
 
 ### Generate Image
 
-Generate an image based on a text prompt using DALL-E 3 or Imagen models.
+Generate an image based on a text prompt using DALL-E 3 or Imagen models. Supports context-aware follow-up instructions using prompt array (similar to chat endpoint).
 
 - **Endpoint URL**: `/image/generate`
 - **HTTP Method**: POST
@@ -491,9 +491,20 @@ Generate an image based on a text prompt using DALL-E 3 or Imagen models.
 - **Request Body**:
   ```json
   {
-    "prompt": "A futuristic city with flying cars",
+    "prompt": ["A futuristic city with flying cars"],
     "size": "1024x1024",
     "n": 1,
+    "model_choice": "dall-e-3"
+  }
+  ```
+- **Context-Aware Follow-up Example**:
+  ```json
+  {
+    "prompt": [
+      "A futuristic city with flying cars",
+      "make the cars red"
+    ],
+    "size": "1024x1024",
     "model_choice": "dall-e-3"
   }
   ```
@@ -502,22 +513,38 @@ Generate an image based on a text prompt using DALL-E 3 or Imagen models.
   {
     "success": true,
     "image_urls": ["https://example.com/generated-image.png"],
-    "prompt": "A futuristic city with flying cars",
+    "prompt": "make the cars red",
+    "final_prompt": "A futuristic city with red flying cars",
+    "used_context": true,
+    "rewrite_method": "llm",
+    "context_type": "modification",
     "model": "dall-e-3",
     "size": "1024x1024"
   }
   ```
+- **Prompt Array Format**:
+  - **Single prompt**: `["your prompt here"]`
+  - **With history**: `["previous prompt", "current prompt"]`
+  - **Multiple history**: `["prompt1", "prompt2", "current prompt"]`
+  - **Last element**: Always the current prompt/instruction
+  - **Previous elements**: History for context-aware generation
+
+- **Context-Aware Features**:
+  - **Modification detection**: "make it blue", "add a tree" → preserves original style
+  - **New request detection**: "create a forest" → ignores previous context
+  - **Response fields**: `used_context`, `rewrite_method`, `context_type`, `final_prompt`
+
 - **Usage Example**:
   1. Create a new request in Postman
   2. Set the request method to POST
   3. Enter the URL: `http://your-api-domain/image/generate`
   4. Go to the "Body" tab and select "raw" and "JSON"
-  5. Enter the JSON request body with your prompt
+  5. Enter the JSON request body with your prompt array
   6. Click "Send" to generate an image
 
 ### Generate Combined Images
 
-Generate images using both DALL-E and Imagen models concurrently with the same prompt.
+Generate images using both DALL-E and Imagen models concurrently with the same prompt. Supports context-aware follow-up instructions using prompt array (similar to chat endpoint).
 
 - **Endpoint URL**: `/image/generate-combined`
 - **HTTP Method**: POST
@@ -527,7 +554,18 @@ Generate images using both DALL-E and Imagen models concurrently with the same p
 - **Request Body**:
   ```json
   {
-    "prompt": "A beautiful sunset over mountains",
+    "prompt": ["A beautiful sunset over mountains"],
+    "size": "1024x1024",
+    "n": 1
+  }
+  ```
+- **Context-Aware Follow-up Example**:
+  ```json
+  {
+    "prompt": [
+      "A beautiful sunset over mountains",
+      "add birds flying in the sky"
+    ],
     "size": "1024x1024",
     "n": 1
   }
@@ -546,16 +584,32 @@ Generate images using both DALL-E and Imagen models concurrently with the same p
       "image_urls": ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."],
       "model": "imagen-3.0"
     },
-    "prompt": "A beautiful sunset over mountains",
+    "prompt": "add birds flying in the sky",
+    "final_prompt": "A beautiful sunset over mountains with birds flying in the sky",
+    "used_context": true,
+    "rewrite_method": "llm",
+    "context_type": "modification",
     "models": ["dall-e-3", "imagen-3.0"]
   }
   ```
+- **Prompt Array Format** (same as single image generation):
+  - **Single prompt**: `["your prompt here"]`
+  - **With history**: `["previous prompt", "current prompt"]`
+  - **Multiple history**: `["prompt1", "prompt2", "current prompt"]`
+  - **Last element**: Always the current prompt/instruction
+  - **Previous elements**: History for context-aware generation
+
+- **Context-Aware Features**:
+  - **Modification detection**: "make it blue", "add a tree" → preserves original style
+  - **New request detection**: "create a forest" → ignores previous context
+  - **Response fields**: `used_context`, `rewrite_method`, `context_type`, `final_prompt`
+
 - **Usage Example**:
   1. Create a new request in Postman
   2. Set the request method to POST
   3. Enter the URL: `http://your-api-domain/image/generate-combined`
   4. Go to the "Body" tab and select "raw" and "JSON"
-  5. Enter the JSON request body with your prompt
+  5. Enter the JSON request body with your prompt array
   6. Click "Send" to generate images with both models
 
 ### Delete Resources
@@ -827,6 +881,24 @@ The session ID follows a well-defined lifecycle from creation to cleanup:
 This session-based architecture ensures reliable, isolated, and trackable interactions between clients and the RAG PDF API, providing a robust foundation for both single-file and multi-file document processing workflows.
 
 ## Additional Information
+
+### API Consistency: Chat vs Image Generation
+
+The API maintains consistency between chat and image generation endpoints:
+
+| Feature | Chat Endpoint | Image Generation |
+|---------|---------------|------------------|
+| **Parameter** | `text: List[str]` | `prompt: List[str]` |
+| **Format** | `["msg1", "msg2", "current"]` | `["prompt1", "prompt2", "current"]` |
+| **Last Element** | Current question | Current prompt/instruction |
+| **Previous Elements** | Chat history | Prompt history |
+| **Context Processing** | RAG + LLM | LLM prompt rewriting |
+
+**Benefits of Consistent Design:**
+- **Familiar pattern**: Developers already know how chat works
+- **Simpler client code**: Same array handling for both endpoints
+- **Better maintainability**: Consistent patterns across codebase
+- **Easier testing**: Same request structure for both features
 
 ### Setting Up Environment Variables in Postman
 

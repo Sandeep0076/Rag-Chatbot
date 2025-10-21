@@ -385,7 +385,9 @@ def _parse_image_error_response(response):
         return response.text
 
 
-def generate_image(current_model, prompt, selected_size, num_images):
+def generate_image(
+    current_model, prompt, selected_size, num_images, prompt_history=None
+):
     """Call the appropriate API endpoint to generate an image."""
     API_URL = "http://localhost:8080"
 
@@ -393,6 +395,12 @@ def generate_image(current_model, prompt, selected_size, num_images):
         f"Generating your image with {current_model}...this may take a moment"
     ):
         try:
+            # Build prompt array: history + current prompt (similar to chat endpoint)
+            if prompt_history and len(prompt_history) > 0:
+                prompt_array = prompt_history + [prompt]
+            else:
+                prompt_array = [prompt]
+
             # DALL-E 3 can only generate 1 image per request
             # Note: n=1 enforcement for DALL-E is handled in the API call below
 
@@ -403,7 +411,7 @@ def generate_image(current_model, prompt, selected_size, num_images):
                 response = requests.post(
                     f"{API_URL}/image/generate-combined",
                     json={
-                        "prompt": prompt,
+                        "prompt": prompt_array,  # Send as array
                         "size": selected_size,
                         "n": num_images,  # Imagen will use this, backend will override DALL-E to 1
                         "model_choice": "",  # Not needed for combined endpoint
@@ -418,7 +426,7 @@ def generate_image(current_model, prompt, selected_size, num_images):
                 response = requests.post(
                     f"{API_URL}/image/generate",
                     json={
-                        "prompt": prompt,
+                        "prompt": prompt_array,  # Send as array
                         "size": selected_size,
                         "n": actual_n,
                         "model_choice": current_model,
@@ -455,19 +463,38 @@ def handle_image_generation():
         st.error("Username is required. Please enter a username in the sidebar.")
         return
 
+    # Initialize image prompt history in session state
+    if "image_prompt_history" not in st.session_state:
+        st.session_state.image_prompt_history = []
+
     # Get user inputs
     prompt, selected_size, num_images = get_image_generation_inputs()
 
     # Display model information
     display_model_information(current_model)
 
+    # Show prompt history if available
+    if st.session_state.image_prompt_history:
+        st.info(
+            f"**Previous prompts:** {len(st.session_state.image_prompt_history)} prompts in history"
+        )
+        with st.expander("View prompt history"):
+            for i, hist_prompt in enumerate(st.session_state.image_prompt_history):
+                st.text(f"{i + 1}. {hist_prompt}")
+
     # Add a generate button
     if st.button("Generate Image", type="primary"):
         if not prompt:
             st.error("Please enter a prompt to generate an image.")
         else:
-            # Generate the image
-            result = generate_image(current_model, prompt, selected_size, num_images)
+            # Generate the image with prompt history
+            result = generate_image(
+                current_model,
+                prompt,
+                selected_size,
+                num_images,
+                st.session_state.image_prompt_history,
+            )
 
             # Display results
             if result:
@@ -475,7 +502,33 @@ def handle_image_generation():
                     display_combined_model_results(result, prompt)
                 elif result.get("success"):
                     display_single_model_results(result, current_model)
+
+                    # Add successful prompt to history
+                    final_prompt = result.get("final_prompt", prompt)
+                    st.session_state.image_prompt_history.append(final_prompt)
+
+                    # Show context information if used
+                    if result.get("used_context"):
+                        context_type = result.get("context_type", "unknown")
+                        if context_type == "modification":
+                            st.success(
+                                "✅ Modified previous image (preserved original style)"
+                            )
+                        elif context_type == "new_request":
+                            st.success("✅ Created new image (ignored previous context)")
+                        else:
+                            st.success(
+                                f"✅ Used context from previous prompts "
+                                f"(method: {result.get('rewrite_method', 'unknown')})"
+                            )
+                        st.info(f"**Final prompt:** {final_prompt}")
                 else:
                     st.error(
                         f"Failed to generate image: {result.get('error', 'Unknown error')}"
                     )
+
+    # Add clear history button
+    if st.session_state.image_prompt_history and st.button("Clear Prompt History"):
+        st.session_state.image_prompt_history = []
+        st.success("Prompt history cleared!")
+        st.rerun()

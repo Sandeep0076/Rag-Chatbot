@@ -54,8 +54,6 @@ class DalleImageGenerator:
             Exception: If there's an error in generating the image
         """
         try:
-            logging.info(f"Generating image with prompt: {prompt}")
-
             result = self.client.images.generate(
                 model=self.configs.azure_dalle_3.model_name,
                 prompt=prompt,

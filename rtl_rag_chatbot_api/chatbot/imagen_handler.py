@@ -356,8 +356,6 @@ class ImagenGenerator:
             Dict[str, Any]: Response containing the generated image URL and other metadata
         """
         try:
-            logging.info(f"Generating image with prompt: {prompt}")
-
             # Determine which Imagen model to use
             used_model_name = model_name or self.configs.vertexai_imagen.model_name
             client_to_use = (

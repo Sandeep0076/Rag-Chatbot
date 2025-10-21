@@ -87,7 +87,13 @@ class ChatRequest(BaseModel):
 
 
 class ImageGenerationRequest(BaseModel):
-    prompt: str = Field(..., description="Text prompt for image generation")
+    prompt: List[str] = Field(
+        ...,
+        description="Array of prompts for context-aware generation. "
+        "Format: ['prompt1', 'prompt2', 'current_prompt']. "
+        "Last element is the current prompt, previous elements are history. "
+        "Similar to chat text array.",
+    )
     size: str = Field(
         default="1024x1024", description="Size of the generated image (e.g., 1024x1024)"
     )
