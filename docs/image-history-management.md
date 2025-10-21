@@ -6,13 +6,16 @@ Context-aware image generation feature that enables follow-up modifications to p
 
 ## ✅ **Key Features**
 
-- **Smart Context Detection**: LLM intelligently determines modification vs new request
-- **LLM-Based Rewriting**: Uses Azure OpenAI GPT-4o-mini for intelligent prompt merging
+- **Smart Context Detection**: LLM determines modification vs new request using JSON-based decision output
+- **Minimal Merging**: Uses Azure OpenAI gpt_5_mini for simple context merging (no prompt enhancement)
+- **Explicit Decision Making**: LLM returns structured JSON with decision type and final prompt
+- **No Enhancement**: System only merges context, never adds extra details or expands prompts
 - **Session-Based History**: In-memory prompt history per user session
 - **Memory Efficient**: Simple array storage in session state
 - **Backward Compatible**: `prompt_history` field is optional
 - **Model Agnostic**: Works with DALL-E 3 & Imagen
 - **Transparency**: Response includes `final_prompt`, `used_context`, `rewrite_method`, `context_type`
+- **No Heuristics**: Decision based entirely on LLM reasoning, not word overlap or keywords
 
 ## Architecture
 
@@ -27,10 +30,12 @@ Context-aware image generation feature that enables follow-up modifications to p
   - History persists only during active session (streamlit)
 
 #### 2. **ImagePromptRewriter** (`rtl_rag_chatbot_api/chatbot/utils/image_prompt_rewriter.py`)
-- **LLM-based rewriting only** with intelligent decision-making
-- Uses Azure OpenAI GPT-4o-mini for prompt merging
-- **Smart Detection**: Determines if request is modification or new request
-- **Content-Filter Safe**: Uses collaborative language to avoid Azure content policy violations
+- **Minimal prompt merger** with JSON output for explicit decision-making
+- Uses Azure OpenAI gpt_5_mini for simple context merging only
+- **Smart Detection**: LLM explicitly returns decision type in structured JSON format
+- **No Enhancement**: Does NOT add details, expand, or improve prompts
+- **Limited Scope**: Only merges modification requests with history; returns new requests as-is
+- **No Heuristics**: Decisions based purely on gpt_5_mini reasoning, not word overlap or pattern matching
 
 #### 3. **Enhanced Request Schema** (`rtl_rag_chatbot_api/common/models.py`)
 ```python
@@ -84,8 +89,9 @@ The LLM analyzes user requests and makes intelligent decisions:
 **API Processing:**
 - History: `["a red sports car in a futuristic city"]`
 - Current: `"make it blue"`
-- **LLM Analysis**: "make it blue" → MODIFICATION  
-- **Result**: "a blue sports car in a futuristic city"  
+- **LLM Analysis**: MODIFICATION → returns clause: `"with blue color"`
+- **Composition**: Final prompt = last history + ", " + clause →
+  `"a red sports car in a futuristic city, with blue color"`
 - **Response**: `"context_type": "modification"`
 
 ### Example 2: New Request
@@ -99,8 +105,8 @@ The LLM analyzes user requests and makes intelligent decisions:
 **API Processing:**
 - History: `["a red sports car in a futuristic city"]`
 - Current: `"create a peaceful forest scene with birds"`
-- **LLM Analysis**: "create a peaceful forest scene" → NEW REQUEST  
-- **Result**: "create a peaceful forest scene with birds"  
+- **LLM Analysis**: NEW REQUEST → returns exact user request
+- **Result**: `"create a peaceful forest scene with birds"`
 - **Response**: `"context_type": "new_request"`
 
 ## Workflow
@@ -165,43 +171,28 @@ POST /image/generate
 
 ## LLM Prompt Engineering
 
-### Current Implementation (Content-Filter Safe)
+### Current Implementation (Clause-Only, Deterministic Composition)
+
+The system uses **gpt_5_mini** to return a short modification clause when needed, and the API composes the final prompt:
+
 ```
-You are helping refine an image generation prompt.
+If decision = modification:
+  - LLM returns: { "decision": "modification", "clause": "with blue color" }
+  - API composes: final_prompt = last_history + ", " + clause
 
-CONTEXT - Previous image was generated with this prompt:
-"{base_prompt}"
-
-USER'S NEW REQUEST:
-"{instruction}"
-
-YOUR TASK:
-Step 1: Analyze the user's request and decide:
-  • Is this a MODIFICATION of the previous image?
-    (Examples: 'make it blue', 'add a tree', 'change background to sunset', 'remove the hat')
-  • OR is this a COMPLETELY NEW image request?
-    (Examples: 'create a forest scene', 'draw a robot', 'generate a logo', 'make a portrait')
-
-Step 2: Based on your decision:
-  • If MODIFICATION: Merge the previous prompt with the new request.
-    Preserve all original details (scene, objects, style, mood, lighting)
-    and apply only the specific change requested.
-  • If NEW REQUEST: Use the new request as-is.
-    The previous prompt is not relevant.
-
-IMPORTANT:
-  • For modifications, create a complete standalone prompt with all details explicitly stated
-  • For new requests, output the new request directly
-  • Keep prompts clear and detailed
-  • Output ONLY the final prompt text, no explanations
-
-FINAL PROMPT:
+If decision = new_request:
+  - LLM returns: { "decision": "new_request", "final_prompt": "<exact user text>" }
+  - API uses the exact user text as final_prompt
 ```
 
 ### Context Type Detection
-Simple heuristic to determine how LLM interpreted the request:
-- **Word overlap analysis**: If rewritten prompt is very similar to current prompt → likely new request
-- **Threshold**: >70% word overlap suggests new request, otherwise modification
+**JSON-based explicit decision** - Minimal merging, no enhancement:
+- LLM directly returns `"decision": "modification"` or `"decision": "new_request"`
+- The decision is based on gpt_5_mini analysis of request wording
+- System parses JSON response to extract both the decision and final prompt
+- **Critical**: LLM is explicitly instructed to NOT enhance or add details
+- **Scope**: Limited to simple merging; no prompt improvement or expansion
+- For new requests: returns user's exact words without modification
 
 ## Response Fields
 
@@ -313,11 +304,13 @@ curl -X POST http://localhost:8080/image/generate \
 
 ## Performance Considerations
 
-- **LLM Latency**: ~1-2 seconds per rewrite (GPT-4o-mini)
+- **LLM Latency**: ~1-2 seconds per merge (gpt_5_mini with JSON parsing)
+- **Model**: Uses gpt_5_mini for fast, minimal context merging
+- **No Enhancement**: Faster processing by skipping prompt expansion
 - **Storage**: In-memory only (session state), no disk I/O
 - **Memory**: Simple array storage, minimal overhead
 - **Concurrency**: Session-isolated, no cross-session interference
-- **Content Filter**: Simplified prompts reduce Azure policy violations
+- **JSON Parsing**: Robust handling of markdown-wrapped JSON responses
 
 ## Streamlit UI Enhancements
 

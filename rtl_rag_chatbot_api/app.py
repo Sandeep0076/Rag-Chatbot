@@ -4040,10 +4040,10 @@ async def generate_image(
 
         # Check if we should use historical context for prompt rewriting
         if prompt_history and len(prompt_history) > 0:
-            # Define LLM call for prompt rewriting
+            # Define LLM call for prompt rewriting using GPT-4o for better reasoning
             def llm_call(prompt: str) -> str:
                 return get_azure_non_rag_response(
-                    configs, prompt, model_choice="gpt_4o_mini", max_tokens=500
+                    configs, prompt, model_choice="gpt_5_mini", max_tokens=500
                 )
 
             # Rewrite the prompt using historical context with LLM
@@ -4164,10 +4164,10 @@ async def generate_combined_images(
 
         # Check if we should use historical context for prompt rewriting
         if prompt_history and len(prompt_history) > 0:
-            # Define LLM call for prompt rewriting
+            # Define LLM call for prompt rewriting using GPT-4o for better reasoning
             def llm_call(prompt: str) -> str:
                 return get_azure_non_rag_response(
-                    configs, prompt, model_choice="gpt_4o_mini", max_tokens=500
+                    configs, prompt, model_choice="gpt_5_mini", max_tokens=500
                 )
 
             # Rewrite the prompt using historical context with LLM

@@ -4,9 +4,9 @@ Uses LLM-based rewriting to intelligently merge previous image context with new 
 Works with prompt_history array similar to chat history.
 """
 
+import json
 import logging
-import re
-from typing import Callable, List
+from typing import Callable, List, Tuple
 
 
 class ImagePromptRewriter:
@@ -17,7 +17,7 @@ class ImagePromptRewriter:
         base_prompt: str,
         instruction: str,
         llm_call: Callable[[str], str],
-    ) -> str:
+    ) -> Tuple[str, str]:
         """
         LLM-based prompt rewriting that intelligently merges context with new instruction.
 
@@ -27,63 +27,74 @@ class ImagePromptRewriter:
             llm_call: Callable that takes combined prompt and returns LLM response
 
         Returns:
-            Rewritten prompt from LLM
+            Tuple of (rewritten_prompt, context_type) where context_type is "modification" or "new_request"
 
         Raises:
             Exception: If LLM call fails
         """
-        # Construct prompt with explicit decision-making while avoiding content filter triggers
+        # Construct a minimal-diff full-rewriter prompt (no enhancement)
         user_prompt = (
-            f"You are helping refine an image generation prompt.\n\n"
-            f"CONTEXT - Previous image was generated with this prompt:\n"
-            f'"{base_prompt}"\n\n'
-            f"USER'S NEW REQUEST:\n"
-            f'"{instruction}"\n\n'
+            f"You are a minimal-diff prompt rewriter. Decide if the new request modifies the previous "
+            f"image or is a new request.\n\n"
+            f'PREVIOUS IMAGE PROMPT:\n"{base_prompt}"\n\n'
+            f'USER\'S NEW REQUEST:\n"{instruction}"\n\n'
+            f"DECISION CRITERIA:\n"
+            f"A) MODIFICATION: Changes an attribute of the existing scene/subject (color, style, add/remove element).\n"
+            f"B) NEW REQUEST: Describes a different scene/subject.\n\n"
             f"YOUR TASK:\n"
-            f"Step 1: Analyze the user's request and decide:\n"
-            f"  • Is this a MODIFICATION of the previous image? "
-            f"(Examples: 'make it blue', 'add a tree', 'change background to sunset', 'remove the hat')\n"
-            f"  • OR is this a COMPLETELY NEW image request? "
-            f"(Examples: 'create a forest scene', 'draw a robot', 'generate a logo', 'make a portrait')\n\n"
-            f"Step 2: Based on your decision:\n"
-            f"  • If MODIFICATION: Merge the previous prompt with the new request. "
-            f"Preserve all original details (scene, objects, style, mood, lighting) "
-            f"and apply only the specific change requested.\n"
-            f"  • If NEW REQUEST: Use the new request as-is. "
-            f"The previous prompt is not relevant.\n\n"
+            f"1) If MODIFICATION: Output a FULL rewritten prompt. Apply ONLY the requested change.\n"
+            f"   - Preserve original wording/order as much as possible.\n"
+            f"   - No adjectives or new details unless explicitly requested.\n"
+            f"   - Prefer using only words from the base and the user's request plus minimal glue words.\n"
+            f"2) If NEW REQUEST: Output the user's request EXACTLY as given.\n\n"
             f"IMPORTANT:\n"
-            f"  • For modifications, create a complete standalone prompt with all details explicitly stated\n"
-            f"  • For new requests, output the new request directly\n"
-            f"  • Keep prompts clear and detailed\n"
-            f"  • Output ONLY the final prompt text, no explanations\n\n"
-            f"FINAL PROMPT:"
+            f"- No enhancement, no style elaboration, no extra descriptors.\n"
+            f"- Do NOT introduce new nouns or locations unless explicitly requested.\n"
+            f"- Output JSON only.\n\n"
+            f"OUTPUT FORMAT (JSON):\n"
+            f'{{\n  "decision": "modification" or "new_request",\n'
+            f'  "final_prompt": "the final prompt text"\n}}\n'
         )
 
         # Call LLM
-        rewritten = llm_call(user_prompt)
+        response = llm_call(user_prompt)
 
-        # Clean up response
-        rewritten = rewritten.strip()
+        # Parse JSON response
+        try:
+            # Clean up response - remove markdown code blocks if present
+            response = response.strip()
+            if response.startswith("```"):
+                # Remove markdown code blocks
+                lines = response.split("\n")
+                response = "\n".join(
+                    line for line in lines if not line.strip().startswith("```")
+                )
 
-        # Remove common prefixes if LLM added them
-        rewritten = re.sub(
-            r"^(final prompt:|prompt:|here's the prompt:|the final prompt is:)\s*",
-            "",
-            rewritten,
-            flags=re.IGNORECASE,
-        ).strip()
+            # Parse JSON
+            result = json.loads(response)
+            decision = result.get("decision", "new_request")
 
-        logging.info(
-            f"LLM rewrite completed: input={len(instruction)} chars, output={len(rewritten)} chars"
-        )
-        return rewritten
+            # Always parse final_prompt from the model
+            final_prompt = result.get("final_prompt", instruction)
+            final_prompt = final_prompt.strip('"').strip("'").strip()
+            logging.info(
+                f"LLM analysis: decision={decision}, output_len={len(final_prompt)}"
+            )
+            return final_prompt, decision
+
+        except json.JSONDecodeError as e:
+            logging.error(
+                f"Failed to parse LLM JSON response: {e}. Response: {response[:200]}"
+            )
+            # Fallback: treat as new request and use instruction as-is
+            return instruction, "new_request"
 
     def rewrite_prompt(
         self,
         prompt_history: List[str],
         current_prompt: str,
         llm_call: Callable[[str], str],
-    ) -> tuple[str, str, str]:
+    ) -> Tuple[str, str, str]:
         """
         Rewrite prompt by combining historical context with new instruction using LLM.
 
@@ -110,45 +121,11 @@ class ImagePromptRewriter:
             return current_prompt, "none", "none"
 
         try:
-            # Always use LLM for rewriting
-            rewritten = self._llm_rewrite(base_prompt, current_prompt, llm_call)
-
-            # Determine if this was treated as a modification or new request
-            # by checking if the rewritten prompt is significantly different from current_prompt
-            context_type = self._determine_context_type(
-                base_prompt, current_prompt, rewritten
+            # Use LLM for classification and get a minimal-diff full rewrite when modifying
+            rewritten, context_type = self._llm_rewrite(
+                base_prompt, current_prompt, llm_call
             )
-
             return rewritten, "llm", context_type
         except Exception as e:
             logging.error(f"LLM rewrite failed: {str(e)}, using current prompt as-is")
             return current_prompt, "error", "none"
-
-    def _determine_context_type(
-        self, base_prompt: str, current_prompt: str, rewritten_prompt: str
-    ) -> str:
-        """
-        Determine if the LLM treated this as a modification or new request.
-
-        Args:
-            base_prompt: Original prompt from history
-            current_prompt: User's current instruction
-            rewritten_prompt: LLM's output
-
-        Returns:
-            "modification" if treated as modification, "new_request" if treated as new
-        """
-        # Simple heuristic: if rewritten prompt is very similar to current_prompt,
-        # it was likely treated as a new request
-        current_words = set(current_prompt.lower().split())
-        rewritten_words = set(rewritten_prompt.lower().split())
-
-        # Calculate word overlap
-        overlap = len(current_words.intersection(rewritten_words))
-        total_current = len(current_words)
-
-        # If most words from current prompt are in rewritten prompt, likely new request
-        if total_current > 0 and overlap / total_current > 0.7:
-            return "new_request"
-        else:
-            return "modification"
