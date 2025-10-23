@@ -181,12 +181,13 @@ Expected response when ready:
 ## Advanced Usage
 
 ### Multi-turn Conversation
-For follow-up questions, include conversation history in the `text` array:
+For follow-up questions, include conversation history in the `text` array with alternating user messages and AI answers:
 
 ```json
 {
     "text": [
         "What are the main differences between AI, ML, and NLP?",
+        "AI is the broad field of creating intelligent machines, ML is a subset that learns from data, and NLP focuses on language understanding.",
         "Can you provide examples of real-world applications for each?"
     ],
     "file_ids": ["uuid1", "uuid2", "uuid3"],

@@ -290,7 +290,7 @@ Process chat queries against document content using specified language models.
   ```
 
 - **Request Parameters**:
-  - `text` (required): Array of strings containing the conversation history with the current question as the last element
+  - `text` (required): Array of strings containing alternating user messages and AI answers, with the current user question as the last element
   - `file_id` (optional): Single file ID for single-file chat
   - `file_ids` (optional): Array of file IDs for multi-file chat
   - `model_choice` (required): The language model to use (e.g., "gpt_4o_mini", "gemini-2.5-flash", "gemini-2.5-pro")
@@ -330,6 +330,34 @@ Process chat queries against document content using specified language models.
   4. Go to the "Body" tab and select "raw" and "JSON"
   5. Enter the JSON request body with your query
   6. Click "Send" to chat with the document
+
+  **Multi-turn Conversation Example**:
+
+  *First message:*
+  ```json
+  {
+    "text": ["What is machine learning?"],
+    "file_id": "uuid-string",
+    "model_choice": "gpt_4o_mini",
+    "user_id": "user123",
+    "session_id": "session-456"
+  }
+  ```
+
+  *Follow-up message (after receiving AI response):*
+  ```json
+  {
+    "text": [
+      "What is machine learning?",
+      "Machine learning is a subset of artificial intelligence that enables computers to learn and make decisions from data without being explicitly programmed.",
+      "How does it differ from deep learning?"
+    ],
+    "file_id": "uuid-string",
+    "model_choice": "gpt_4o_mini",
+    "user_id": "user123",
+    "session_id": "session-456"
+  }
+  ```
 
   **Temperature Usage Examples**:
 

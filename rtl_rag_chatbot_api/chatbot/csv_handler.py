@@ -1232,6 +1232,11 @@ class TabularDataHandler:
                 file_info = self.all_file_infos.get(self.file_id, {})
                 database_info = file_info.get("database_summary", {})
 
+            # TODO: In future we can insert an llm agent here to verify if it needs answer from database or
+            # using the last answer can further explain. example question : I want to know more specifically
+            # how to implement and connect this database to my application.
+            # User here Wants answer in detail based on History and non sql answer.
+
             # Use enhanced format_question with intelligent context analysis
             format_result = format_question(database_info, question, self.model_choice)
             formatted_question = format_result["formatted_question"]
