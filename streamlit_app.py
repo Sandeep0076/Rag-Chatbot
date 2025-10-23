@@ -1467,10 +1467,9 @@ def display_chat_interface():
             st.session_state.messages.append({"role": "user", "content": user_input})
 
             with st.spinner("Processing your request..."):
+                # Send full chat history so backend can resolve context properly
                 previous_messages = [
-                    msg["content"]
-                    for msg in st.session_state.messages[-5:]
-                    if msg["role"] == "user"
+                    msg["content"] for msg in st.session_state.messages
                 ]
 
                 if not st.session_state.current_session_id:

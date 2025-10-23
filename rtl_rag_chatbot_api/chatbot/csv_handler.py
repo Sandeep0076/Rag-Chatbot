@@ -20,7 +20,10 @@ from rtl_rag_chatbot_api.chatbot.gemini_handler import (
     GeminiSafetyFilterError,
     get_gemini_non_rag_response,
 )
-from rtl_rag_chatbot_api.chatbot.prompt_handler import format_question
+from rtl_rag_chatbot_api.chatbot.prompt_handler import (
+    format_question,
+    resolve_question_with_history,
+)
 from rtl_rag_chatbot_api.chatbot.utils.prompt_builder import PromptBuilder
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
@@ -898,29 +901,39 @@ class TabularDataHandler:
         # Traditional single-file mode
         return self._get_table_info_for_file(self.file_id)
 
-    def get_answer(self, question: str) -> str:
+    def get_answer(self, question: Union[str, List[str]]) -> str:
         """
         Processes a user's question and returns an answer based on the database content.
         For multi-file mode, it attempts to determine which database to query or uses a combined approach.
+        Now supports conversation history for contextual understanding.
 
         Args:
-            question (str): The user's input question.
+            question: Either a single question string or a list of conversation messages.
+                     If a list is provided, the last item is the current question and
+                     previous items are conversation history.
 
         Returns:
             str: The answer to the user's question or an error message if processing fails.
         """
         try:
+            # Extract the actual question text for multi-file routing and forced answers
+            if isinstance(question, list):
+                actual_question_text = question[-1]
+            else:
+                actual_question_text = question
+
             if self.is_multi_file and len(self.file_ids) > 1:
-                return self._get_multi_file_answer(question)
+                return self._get_multi_file_answer(actual_question_text)
             else:
                 # Standard single-file approach (also works when only one file in multi-file mode)
+                # Pass the full question (which could be a list with history) to ask_question
                 answer = self.ask_question(question)
                 if answer:
                     logging.info("Direct answer")
                     return answer
                 else:
                     logging.info("Forced answer")
-                    return self.get_forced_answer(question, answer)
+                    return self.get_forced_answer(actual_question_text, answer)
         except Exception as e:
             logging.error(f"Error in TabularDataHandler get_answer: {str(e)}")
             return f"An error occurred while processing your question: {str(e)}"
@@ -1208,12 +1221,15 @@ class TabularDataHandler:
         context_str = "\n\n".join(context_parts) + "\n\n"
         return context_str
 
-    def ask_question(self, question: str) -> Optional[str]:
+    def ask_question(self, question: Union[str, List[str]]) -> Optional[str]:
         """
         Enhanced question processing with intelligent optimization and SQL filtering.
+        Now supports conversation history for contextual question resolution.
 
         Args:
-            question (str): The user's input question.
+            question: Either a single question string or a list of conversation messages.
+                     If a list is provided, the last item is the current question and
+                     previous items are conversation history (alternating user/assistant).
 
         Returns:
             Optional[str]: The answer to the question, or None if processing fails.
@@ -1222,6 +1238,30 @@ class TabularDataHandler:
             self._initialize_agent()
 
         try:
+            # Step 1: Handle conversation history if provided
+            if isinstance(question, list) and len(question) > 1:
+                # Extract conversation history and current question
+                conversation_history = question[:-1]
+                current_question = question[-1]
+
+                logging.info(
+                    f"Processing question with {len(conversation_history)} history messages"
+                )
+
+                # Resolve contextual references in the current question
+                resolved_question = resolve_question_with_history(
+                    conversation_history, current_question
+                )
+
+                # Use the resolved question for further processing
+                question_to_process = resolved_question
+            elif isinstance(question, list) and len(question) == 1:
+                # Single item in list, extract it
+                question_to_process = question[0]
+            else:
+                # String question, use as-is (backward compatibility)
+                question_to_process = question
+
             # Get database_info from file_info for format_question
             database_info = {}
             if (
@@ -1232,13 +1272,15 @@ class TabularDataHandler:
                 file_info = self.all_file_infos.get(self.file_id, {})
                 database_info = file_info.get("database_summary", {})
 
-            # TODO: In future we can insert an llm agent here to verify if it needs answer from database or
-            # using the last answer can further explain. example question : I want to know more specifically
-            # how to implement and connect this database to my application.
-            # User here Wants answer in detail based on History and non sql answer.
+            # TODO: In future we can insert an llm agent here to verify if it needs answer from database or
+            # using the last answer can further explain. example question : I want to know more specifically
+            # how to implement and connect this database to my application.
+            # User here Wants answer in detail based on History and non sql answer.
 
-            # Use enhanced format_question with intelligent context analysis
-            format_result = format_question(database_info, question, self.model_choice)
+            # Step 2: Use enhanced format_question with intelligent context analysis
+            format_result = format_question(
+                database_info, question_to_process, self.model_choice
+            )
             formatted_question = format_result["formatted_question"]
             needs_sql = format_result["needs_sql"]
             classification = format_result.get("classification", {})
@@ -1280,12 +1322,16 @@ class TabularDataHandler:
                 #         )
 
                 return self._process_agent_response(
-                    response, question, query_type, language
+                    response, question_to_process, query_type, language
                 )
 
             except Exception as agent_error:
                 return self._handle_agent_error(
-                    agent_error, formatted_question, question, query_type, language
+                    agent_error,
+                    formatted_question,
+                    question_to_process,
+                    query_type,
+                    language,
                 )
 
         except Exception as e:

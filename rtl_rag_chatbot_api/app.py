@@ -3529,19 +3529,31 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             else:
                 question_to_model = current_actual_question
 
-            if len(query.text) > 1:
-                previous_messages = "\n".join(
-                    [f"Previous message: {msg}" for msg in query.text[:-1]]
-                )
-                chat_context = (
-                    f"{previous_messages}\nCurrent question: {question_to_model}"
-                )
+            # Different history handling for tabular vs non-tabular data
+            if is_tabular:
+                # For tabular data, pass the full conversation array
+                # The TabularDataHandler will resolve contextual references internally
+                if len(query.text) > 1:
+                    # Pass full array including history
+                    response = model.get_answer(query.text)
+                else:
+                    # Single question, pass as-is
+                    response = model.get_answer(question_to_model)
             else:
-                chat_context = question_to_model
+                # For PDF/document chat, use traditional string concatenation
+                if len(query.text) > 1:
+                    previous_messages = "\n".join(
+                        [f"Previous message: {msg}" for msg in query.text[:-1]]
+                    )
+                    chat_context = (
+                        f"{previous_messages}\nCurrent question: {question_to_model}"
+                    )
+                else:
+                    chat_context = question_to_model
 
-            # Todo: If multiple file and tablular collect all responses
-            # and give to non rag and return answer.
-            response = model.get_answer(chat_context)
+                # Todo: If multiple file and tabular collect all responses
+                # and give to non rag and return answer.
+                response = model.get_answer(chat_context)
 
             return await _format_chat_response(
                 response=response,

@@ -1,6 +1,7 @@
 # Fix line length violations and add missing blank lines
 import json
 import logging
+from typing import List
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
@@ -607,8 +608,155 @@ def enhance_query_with_context(
         return user_question  # Fallback to original question
 
 
+def resolve_question_with_history(
+    conversation_history: List[str], current_question: str
+) -> str:
+    """
+    Resolve contextual references in the current question by analyzing conversation history.
+    Transforms questions that reference previous context into standalone questions.
+
+    This function uses llm to intelligently determine if the current question
+    needs to be modified based on conversation history. If the question is contextual
+    (e.g., "Only for 2023", "What about profit?"), it merges the context to create
+    a clear standalone question. If the question is already standalone, it returns
+    it unchanged.
+
+    Args:
+        conversation_history: List of previous messages in the conversation.
+                            Expected format: [msg1, msg2, ..., previous_question, previous_answer]
+        current_question: The user's current/latest question that may contain contextual references
+
+    Returns:
+        str: A standalone question that includes necessary context from history,
+             or the original question if no modification is needed
+
+    Examples:
+        History: ["Show me sales by region.", "Here's the sales data...", "Only for 2023."]
+        Current: "Only for 2023."
+        Returns: "Show me sales by region for 2023."
+
+        History: ["List top 10 products by revenue.", "Here are the products...", "What about profit?"]
+        Current: "What about profit?"
+        Returns: "List top 10 products by profit instead of revenue."
+
+        History: ["Show me all employees."]
+        Current: "What is the average salary?"
+        Returns: "What is the average salary?" (no modification needed)
+    """
+    # If there's no history, return the question as-is
+    if not conversation_history or len(conversation_history) == 0:
+        logging.info("No conversation history, returning original question")
+        return current_question
+
+    # If history exists but current question seems standalone (has clear SQL-like intent),
+    # we still pass it to LLM for verification but with lower weight
+    try:
+        # Build conversation context for the LLM
+        # NOTE: The client sends only user messages (no assistant replies)
+        # Always anchor on the immediately previous user question;
+        # optionally include one earlier user question for nuance
+        messages = conversation_history
+
+        last_user_question = messages[-1] if len(messages) >= 1 else ""
+        prev_user_question = messages[-2] if len(messages) >= 2 else ""
+
+        history_parts = []
+        if prev_user_question:
+            history_parts.append(f"Earlier question: {prev_user_question}")
+        if last_user_question:
+            history_parts.append(f"Previous question: {last_user_question}")
+
+        history_context = "\n".join(history_parts)
+
+        resolution_prompt = f"""You are a question resolution assistant for a tabular data chat system.
+Your task is to determine if the current question EXPLICITLY references previous conversation context.
+
+**Conversation History:**
+{history_context}
+
+**Current Question:**
+{current_question}
+
+**CRITICAL RULES:**
+1. ONLY modify the question if it contains EXPLICIT contextual references like:
+   - Continuations: "Only for 2023", "Just Q1", "also", "too"
+   - Alternatives: "What about X?", "How about Y?", "instead"
+   - Pronouns: "those", "these", "that", "it", "them"
+   - Comparisons: "same for", "different from"
+   - Follow-ups: "more details", "tell me more", "specifically"
+
+2. If the question is COMPLETE and STANDALONE (has subject, verb, object), return it EXACTLY as is
+   - Example: "How many books are there in Fiction genre?" → Return unchanged
+   - Example: "Give me top 5 rows of the table" → Return unchanged
+   - Example: "What is the average price?" → Return unchanged
+
+3. ONLY add context when the question is INCOMPLETE without history
+   - Example: "What about Non Fiction?" → Needs previous context
+   - Example: "Only for 2023" → Needs previous context
+   - Example: "Those entries" → Needs previous context
+
+**Output Format:**
+Return ONLY the question (modified or unchanged). No explanations, no markdown, no prefixes.
+
+**Examples:**
+
+Example 1 - MODIFY (has contextual reference "Only"):
+History: Previous question: Show me sales by region.
+Current: Only for 2023.
+Output: Show me sales by region for 2023.
+
+Example 2 - MODIFY (has contextual reference "What about"):
+History: Previous question: How many books in Fiction genre?
+Current: What about Non Fiction?
+Output: How many books are there in Non Fiction genre?
+
+Example 3 - KEEP UNCHANGED (complete standalone question):
+History: Previous question: Show me sales by region.
+Current: How many books are there in Fiction genre?
+Output: How many books are there in Fiction genre?
+
+Example 4 - KEEP UNCHANGED (complete standalone question):
+History: Previous question: What's this file about?
+Current: Give me top 5 rows of the table.
+Output: Give me top 5 rows of the table.
+
+Example 5 - MODIFY (has pronoun "these entries"):
+History: Previous question: Search for "skills".
+Current: Now look at these entries in detail.
+Output: From the entries containing 'skills', show details about those that discuss Claude Skills.
+
+Now resolve the current question based on the conversation history provided above.
+"""
+
+        resolved_question = get_azure_non_rag_response(
+            configs, resolution_prompt, model_choice="gpt_5_mini"
+        )
+
+        # Clean up the response (remove any markdown, quotes, or extra whitespace)
+        resolved_question = resolved_question.strip()
+        if resolved_question.startswith('"') and resolved_question.endswith('"'):
+            resolved_question = resolved_question[1:-1]
+        if resolved_question.startswith("'") and resolved_question.endswith("'"):
+            resolved_question = resolved_question[1:-1]
+
+        # Log the last user question we anchored on
+        logging.info(f"full conversation history: {conversation_history}")
+        logging.info(
+            f"Previous question (anchored): {last_user_question if last_user_question else 'N/A'}"
+        )
+        logging.info(f"Original question: {current_question}")
+        logging.info(f"Resolved question: {resolved_question}")
+
+        return resolved_question
+
+    except Exception as e:
+        logging.error(f"Error resolving question with history: {str(e)}")
+        # Fallback to original question on error
+        return current_question
+
+
 def format_question(
-    database_info: dict, user_question: str, model_choice: str = "gpt_4o_mini"
+    database_info: dict, user_question: str, model_choice: str = "gpt_5_mini"
 ) -> dict:
     """
     Enhanced question formatting with intelligent context awareness and optimization.
@@ -616,7 +764,7 @@ def format_question(
     Args:
         database_info: Information about the database structure (full database_summary)
         user_question: The original user question
-        model_choice: The model choice to use for processing (default: "gpt_4o_mini")
+        model_choice: The model choice to use for processing (default: "gpt_5_mini")
 
     Returns:
         dict: Contains 'formatted_question' and 'needs_sql' flag
