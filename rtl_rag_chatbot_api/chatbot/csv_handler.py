@@ -96,6 +96,8 @@ class TabularDataHandler:
         self.sessions = {}
         self.dbs = {}
         self.agents = {}
+        # Cache previous formatted question per file for history-aware resolution
+        self.previous_formatted_by_file = {}
 
         # Set temperature -use provided value or model-specific default
         if temperature is not None:
@@ -1238,6 +1240,16 @@ class TabularDataHandler:
             self._initialize_agent()
 
         try:
+            # Prepare database_info for formatting and context usage
+            database_info = {}
+            if (
+                self.all_file_infos
+                and self.file_id
+                and self.file_id in self.all_file_infos
+            ):
+                file_info = self.all_file_infos.get(self.file_id, {})
+                database_info = file_info.get("database_summary", {})
+
             # Step 1: Handle conversation history if provided
             if isinstance(question, list) and len(question) > 1:
                 # Extract conversation history and current question
@@ -1248,9 +1260,18 @@ class TabularDataHandler:
                     f"Processing question with {len(conversation_history)} history messages"
                 )
 
-                # Resolve contextual references in the current question
+                # Retrieve cached previous formatted question for holistic context if available
+                previous_formatted_question = self.previous_formatted_by_file.get(
+                    self.file_id, ""
+                )
+                if previous_formatted_question:
+                    logging.info(
+                        f"Previous formatted question (cached): {previous_formatted_question}"
+                    )
+
+                # Resolve contextual references in the current question (with holistic context)
                 resolved_question = resolve_question_with_history(
-                    conversation_history, current_question
+                    conversation_history, current_question, previous_formatted_question
                 )
 
                 # Use the resolved question for further processing
@@ -1261,16 +1282,6 @@ class TabularDataHandler:
             else:
                 # String question, use as-is (backward compatibility)
                 question_to_process = question
-
-            # Get database_info from file_info for format_question
-            database_info = {}
-            if (
-                self.all_file_infos
-                and self.file_id
-                and self.file_id in self.all_file_infos
-            ):
-                file_info = self.all_file_infos.get(self.file_id, {})
-                database_info = file_info.get("database_summary", {})
 
             # TODO: In future we can insert an llm agent here to verify if it needs answer from database or
             # using the last answer can further explain. example question : I want to know more specifically
@@ -1286,8 +1297,12 @@ class TabularDataHandler:
             classification = format_result.get("classification", {})
             logging.info(f"Needs SQL: {needs_sql}")
             if not needs_sql:
-                # Direct answer from database summary - return as-is
+                # Cache formatted for next turn and return direct summary
                 logging.info("Direct answer provided from database summary")
+                try:
+                    self.previous_formatted_by_file[self.file_id] = formatted_question
+                except Exception:
+                    pass
                 return formatted_question
 
             # Get query classification for appropriate response formatting
@@ -1297,6 +1312,12 @@ class TabularDataHandler:
             logging.info(f"Formatted question: {formatted_question}")
             query_type = classification.get("category", "unknown")
             language = classification.get("language", "en")
+
+            # Cache formatted question for next turn
+            try:
+                self.previous_formatted_by_file[self.file_id] = formatted_question
+            except Exception:
+                pass
 
             # Execute SQL query through agent
             logging.info("Executing query through SQL agent")

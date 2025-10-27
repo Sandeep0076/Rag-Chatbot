@@ -1,6 +1,7 @@
 # Fix line length violations and add missing blank lines
 import json
 import logging
+import re
 from typing import List
 
 from configs.app_config import Config
@@ -609,7 +610,9 @@ def enhance_query_with_context(
 
 
 def resolve_question_with_history(
-    conversation_history: List[str], current_question: str
+    conversation_history: List[str],
+    current_question: str,
+    previous_formatted_question: str = "",
 ) -> str:
     """
     Resolve contextual references in the current question by analyzing conversation history.
@@ -625,6 +628,8 @@ def resolve_question_with_history(
         conversation_history: List of previous messages in the conversation.
                             Expected format: [msg1, msg2, ..., previous_question, previous_answer]
         current_question: The user's current/latest question that may contain contextual references
+        previous_formatted_question: Optional. The formatted SQL or summary of the previous question
+                                     (holistic view of constraints like filters/groupings)
 
     Returns:
         str: A standalone question that includes necessary context from history,
@@ -685,6 +690,31 @@ def resolve_question_with_history(
         if previous_assistant_answer:
             history_parts.append(f"Previous answer: {previous_assistant_answer}")
 
+        if previous_formatted_question:
+            # Strip generic hard-cap LIMIT 25 from context while preserving other LIMIT values
+            try:
+                cleaned_prev_formatted = str(previous_formatted_question)
+                # Remove patterns: "LIMIT 25", optional "OFFSET n", or "LIMIT n, 25"
+                cleaned_prev_formatted = re.sub(
+                    r"(?is)\s+LIMIT\s+25\b(?:\s+OFFSET\s+\d+)?",
+                    "",
+                    cleaned_prev_formatted,
+                )
+                cleaned_prev_formatted = re.sub(
+                    r"(?is)\s+LIMIT\s+\d+\s*,\s*25\b",
+                    "",
+                    cleaned_prev_formatted,
+                )
+                # Tidy excess whitespace and trailing semicolons/spaces
+                cleaned_prev_formatted = cleaned_prev_formatted.strip().rstrip(";")
+            except Exception:
+                cleaned_prev_formatted = str(previous_formatted_question)
+
+            history_parts.append(
+                "Previous formatted question (holistic context): "
+                + cleaned_prev_formatted
+            )
+
         history_context = "\n".join(history_parts)
 
         resolution_prompt = f"""You are a question resolution assistant for a tabular data chat system.
@@ -713,6 +743,13 @@ Your task is to determine if the current question EXPLICITLY references previous
    - Example: "What about Non Fiction?" → Needs previous context
    - Example: "Only for 2023" → Needs previous context
    - Example: "Those entries" → Needs previous context
+
+4. CONTEXT INHERITANCE (when modifying):
+   - When the current question uses references (e.g., "in this", "those", "that"), INHERIT the scope,
+     filters, and constraints from the Previous question/answer.
+   - Examples of constraints to inherit: population filters (e.g., Unemployed), time windows,
+     categories, groupings, joins, and previously established subsets.
+   - Do NOT broaden the scope. Preserve the exact subset unless the new question explicitly changes it.
 
 **Output Format:**
 Return ONLY the question (modified or unchanged). No explanations, no markdown, no prefixes.
@@ -743,6 +780,11 @@ Example 5 - MODIFY (has pronoun "these entries"):
 History: Previous question: Search for "skills".
 Current: Now look at these entries in detail.
 Output: From the entries containing 'skills', show details about those that discuss Claude Skills.
+
+Example 6 - MODIFY (inherit prior filter "Unemployed"):
+History: Previous question: Give me the count of different social media platform names among Unemployed users.
+Current: In this what is the average stress level for each platform
+Output: What is the average stress level for each social platform among Unemployed users?
 
 Now resolve the current question based on the conversation history provided above.
 """
