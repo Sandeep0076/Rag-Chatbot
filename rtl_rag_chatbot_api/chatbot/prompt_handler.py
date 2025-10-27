@@ -147,6 +147,11 @@ User Question: {user_question}
 - For DIRECT_SUMMARY: Provide answer directly from database_info
 - For SQL-requiring queries: Generate ONLY the SQL statement, no explanations
 - Always use case-insensitive comparisons for text searches
+- **CRITICAL NAME/TEXT MATCHING**: For name or text searches, ALWAYS use LIKE with wildcards:
+  - Example: For "Aaron" use `LOWER(customer_name) LIKE '%aaron%'` NOT `= 'aaron'`
+  - Example: For "Smith" use `LOWER(employee_name) LIKE '%smith%'` NOT `= 'smith'`
+  - This ensures partial matches work (e.g., "Aaron" matches "Aaron Riggs")
+  - Only use exact equality (=) for categorical fields like status codes, IDs, or exact enums
 - Include aggregation strategy in the query when needed
 - Never include disclaimers or technical explanations
 - **CRITICAL**: Use the actual table names from database_info - NEVER use "your_table_name" or similar placeholders
@@ -620,6 +625,9 @@ def enhance_query_with_context(
             + "- **CRITICAL**: Use ONLY column names from database_context that actually exist in the schema.\n"
             + "- Map user terms to actual column names (e.g., 'job' → 'job_type').\n"
             + "- NEVER invent or guess column names.\n"
+            + "- **CRITICAL NAME MATCHING**: For name/text searches, use LIKE with wildcards:\n"
+            + "  Example: LOWER(customer_name) LIKE '%aaron%' NOT = 'aaron'\n"
+            + "  This ensures partial matches (e.g., 'Aaron' matches 'Aaron Riggs').\n"
             + "- Return only raw SQL (no markdown or comments).\n"
             + "- Apply LIMIT intelligently: preserve specific row requests, add LIMIT 25 for general queries;\n"
             + "  when OFFSET is present, preserve it.\n"
