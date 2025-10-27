@@ -98,6 +98,8 @@ class TabularDataHandler:
         self.agents = {}
         # Cache previous formatted question per file for history-aware resolution
         self.previous_formatted_by_file = {}
+        # Cache previous resolved question per file for stronger anchoring
+        self.previous_resolved_by_file = {}
 
         # Set temperature -use provided value or model-specific default
         if temperature is not None:
@@ -1271,7 +1273,10 @@ class TabularDataHandler:
 
                 # Resolve contextual references in the current question (with holistic context)
                 resolved_question = resolve_question_with_history(
-                    conversation_history, current_question, previous_formatted_question
+                    conversation_history,
+                    current_question,
+                    previous_formatted_question,
+                    self.previous_resolved_by_file.get(self.file_id, ""),
                 )
 
                 # Use the resolved question for further processing
@@ -1306,9 +1311,6 @@ class TabularDataHandler:
                 return formatted_question
 
             # Get query classification for appropriate response formatting
-            logging.info(
-                "No direct answer provided from database summary. Using langchain agent.."
-            )
             logging.info(f"Formatted question: {formatted_question}")
             query_type = classification.get("category", "unknown")
             language = classification.get("language", "en")
@@ -1316,6 +1318,8 @@ class TabularDataHandler:
             # Cache formatted question for next turn
             try:
                 self.previous_formatted_by_file[self.file_id] = formatted_question
+                # Save resolved (what we actually used) for next turn anchoring
+                self.previous_resolved_by_file[self.file_id] = question_to_process
             except Exception:
                 pass
 

@@ -139,6 +139,8 @@ User Question: {user_question}
 - Extract actual category counts from database_info statistics
 - Extract table sizes and column information
 - **CRITICAL**: Identify the actual table names from database_info.tables or database_info.table_names
+- **CRITICAL**: Extract ALL column names from database_info.tables[].columns[] and verify they exist
+  before using them in SELECT, WHERE, GROUP BY, ORDER BY, or any SQL clause
 - Make decisions based on REAL data characteristics, not assumptions
 
 **RESPONSE RULES:**
@@ -148,6 +150,10 @@ User Question: {user_question}
 - Include aggregation strategy in the query when needed
 - Never include disclaimers or technical explanations
 - **CRITICAL**: Use the actual table names from database_info - NEVER use "your_table_name" or similar placeholders
+- **CRITICAL**: Use ONLY column names that exist in database_info.tables[].columns[].name
+  - If the user mentions "job", check if it's "job_type" or similar in the schema
+  - Map user terms to actual column names (e.g., "employee" → "employee_name", "job" → "job_type")
+  - NEVER invent or guess column names. Only use what exists in database_info
 - If multiple tables exist, choose the most appropriate one based on the question context
 - **HARD CAP RULE**: Apply LIMIT 25 intelligently based on query intent:
 - For specific row requests (e.g., "second row", "row 5", "first 3 rows"):
@@ -481,6 +487,7 @@ def enhance_query_with_context(
     classification: dict,
     database_context: dict,
     model_choice: str = "gpt_4o_mini",
+    database_info: dict = None,
 ) -> str:
     """
     Enhance query based on classification and actual data context.
@@ -490,6 +497,7 @@ def enhance_query_with_context(
         classification: Question classification result
         database_context: Database context analysis
         model_choice: The model choice to use for processing (default: "gpt_4o_mini")
+        database_info: Full database schema including column names
 
     Returns:
         str: Enhanced query with appropriate optimization
@@ -497,6 +505,22 @@ def enhance_query_with_context(
 
     category = classification.get("category", "SIMPLE_AGGREGATION")
     optimization = classification.get("optimization_strategy", "none")
+
+    # Extract table information and schema from database_info
+    schema_info = ""
+    if database_info and isinstance(database_info, dict):
+        tables = database_info.get("tables", [])
+        schema_parts = []
+        for table in tables:
+            table_name = table.get("name", "")
+            columns = table.get("columns", [])
+            if table_name and columns:
+                col_names = [col.get("name", "") for col in columns if col.get("name")]
+                schema_parts.append(
+                    f"Table '{table_name}' columns: {', '.join(col_names)}"
+                )
+        if schema_parts:
+            schema_info = "\n".join(schema_parts)
 
     # Extract table information from database context
     table_summaries = database_context.get("table_summaries", [])
@@ -508,6 +532,8 @@ def enhance_query_with_context(
         if table_names
         else "No table information available"
     )
+    if schema_info:
+        table_info_str = f"{table_info_str}\n\n{schema_info}"
 
     if category == "TIME_SERIES" and optimization == "temporal_aggregation":
         # Check actual temporal context
@@ -591,6 +617,9 @@ def enhance_query_with_context(
             enhancement_prompt
             + "\nSQL OUTPUT RULES:\n"
             + "- Use the accurate table name from context.\n"
+            + "- **CRITICAL**: Use ONLY column names from database_context that actually exist in the schema.\n"
+            + "- Map user terms to actual column names (e.g., 'job' → 'job_type').\n"
+            + "- NEVER invent or guess column names.\n"
             + "- Return only raw SQL (no markdown or comments).\n"
             + "- Apply LIMIT intelligently: preserve specific row requests, add LIMIT 25 for general queries;\n"
             + "  when OFFSET is present, preserve it.\n"
@@ -613,6 +642,7 @@ def resolve_question_with_history(
     conversation_history: List[str],
     current_question: str,
     previous_formatted_question: str = "",
+    previous_resolved_question: str = "",
 ) -> str:
     """
     Resolve contextual references in the current question by analyzing conversation history.
@@ -628,8 +658,10 @@ def resolve_question_with_history(
         conversation_history: List of previous messages in the conversation.
                             Expected format: [msg1, msg2, ..., previous_question, previous_answer]
         current_question: The user's current/latest question that may contain contextual references
-        previous_formatted_question: Optional. The formatted SQL or summary of the previous question
-                                     (holistic view of constraints like filters/groupings)
+        previous_formatted_question: Optional. The formatted SQL or summary of the previous
+                                     question (holistic view of constraints like filters/groupings)
+        previous_resolved_question: Optional. The previously resolved question (fully
+                                    contextualized) actually used for querying.
 
     Returns:
         str: A standalone question that includes necessary context from history,
@@ -684,9 +716,15 @@ def resolve_question_with_history(
             previous_user_question = messages[-2]
             previous_assistant_answer = messages[-1]
 
+        # Prefer the previously resolved question as the anchor if provided
+        if previous_resolved_question:
+            previous_user_question = previous_resolved_question
+
         history_parts = []
         if previous_user_question:
-            history_parts.append(f"Previous question: {previous_user_question}")
+            history_parts.append(
+                f"Previous question (resolved when available): {previous_user_question}"
+            )
         if previous_assistant_answer:
             history_parts.append(f"Previous answer: {previous_assistant_answer}")
 
@@ -750,6 +788,9 @@ Your task is to determine if the current question EXPLICITLY references previous
    - Examples of constraints to inherit: population filters (e.g., Unemployed), time windows,
      categories, groupings, joins, and previously established subsets.
    - Do NOT broaden the scope. Preserve the exact subset unless the new question explicitly changes it.
+   - **CRITICAL**: Merge filters DIRECTLY into the new question. Do NOT use vague references like
+     "out of these rows", "from the previous results", "those shown", etc.
+   - Instead, explicitly restate the filters: e.g., "for Work Hours Per Day > 6 AND stress_level > 6"
 
 **Output Format:**
 Return ONLY the question (modified or unchanged). No explanations, no markdown, no prefixes.
@@ -786,6 +827,11 @@ History: Previous question: Give me the count of different social media platform
 Current: In this what is the average stress level for each platform
 Output: What is the average stress level for each social platform among Unemployed users?
 
+Example 7 - MODIFY (inherit prior filter and merge with new condition):
+History: Previous question (resolved when available): Give data for Work Hours Per Day more than 6 hours
+Current: Out of these how many have stress level more than 6
+Output: Give data for Work Hours Per Day more than 6 hours who have stress_level greater than 6
+
 Now resolve the current question based on the conversation history provided above.
 """
 
@@ -805,10 +851,11 @@ Now resolve the current question based on the conversation history provided abov
         logging.info(
             f"Previous question (anchored): {previous_user_question if previous_user_question else 'N/A'}"
         )
-        if previous_assistant_answer:
-            logging.info(f"Previous answer (context): {previous_assistant_answer}")
+        logging.info(3 * "--------------------------------")
+        logging.info(f"Previous user question: {previous_user_question}")
         logging.info(f"Original question: {current_question}")
         logging.info(f"Resolved question: {resolved_question}")
+        logging.info(3 * "--------------------------------")
 
         return resolved_question
 
@@ -869,7 +916,11 @@ def format_question(
             if classification.get("optimization_strategy") != "none":
                 # Apply intelligent optimization
                 formatted_question = enhance_query_with_context(
-                    user_question, classification, database_context, model_choice
+                    user_question,
+                    classification,
+                    database_context,
+                    model_choice,
+                    database_info,
                 )
             else:
                 # Standard query formatting
