@@ -652,19 +652,38 @@ def resolve_question_with_history(
     # we still pass it to LLM for verification but with lower weight
     try:
         # Build conversation context for the LLM
-        # NOTE: The client sends only user messages (no assistant replies)
-        # Always anchor on the immediately previous user question;
-        # optionally include one earlier user question for nuance
+        # Frontend history format (includes current question at the end):
+        # - First turn: [Q1]
+        # - Second turn: [Q1, A1, Q2]
+        # - Third turn: [Q1, A1, Q2, A2, Q3]
+        # Backend passes conversation_history WITHOUT the current question, and current_question separately.
+        # Therefore to anchor to the previous user question (Qn), use:
+        # - if len(conversation_history) == 0: no previous question
+        # - if len(conversation_history) == 1: previous question = conversation_history[-1]
+        # - if len(conversation_history) >= 2:
+        #   previous question = conversation_history[-2],
+        #   previous answer = conversation_history[-1]
+
         messages = conversation_history
 
-        last_user_question = messages[-1] if len(messages) >= 1 else ""
-        prev_user_question = messages[-2] if len(messages) >= 2 else ""
+        previous_user_question = ""
+        previous_assistant_answer = ""
+
+        if len(messages) == 0:
+            previous_user_question = ""
+            previous_assistant_answer = ""
+        elif len(messages) == 1:
+            previous_user_question = messages[-1]
+            previous_assistant_answer = ""
+        else:
+            previous_user_question = messages[-2]
+            previous_assistant_answer = messages[-1]
 
         history_parts = []
-        if prev_user_question:
-            history_parts.append(f"Earlier question: {prev_user_question}")
-        if last_user_question:
-            history_parts.append(f"Previous question: {last_user_question}")
+        if previous_user_question:
+            history_parts.append(f"Previous question: {previous_user_question}")
+        if previous_assistant_answer:
+            history_parts.append(f"Previous answer: {previous_assistant_answer}")
 
         history_context = "\n".join(history_parts)
 
@@ -742,8 +761,10 @@ Now resolve the current question based on the conversation history provided abov
         # Log the last user question we anchored on
         logging.info(f"full conversation history: {conversation_history}")
         logging.info(
-            f"Previous question (anchored): {last_user_question if last_user_question else 'N/A'}"
+            f"Previous question (anchored): {previous_user_question if previous_user_question else 'N/A'}"
         )
+        if previous_assistant_answer:
+            logging.info(f"Previous answer (context): {previous_assistant_answer}")
         logging.info(f"Original question: {current_question}")
         logging.info(f"Resolved question: {resolved_question}")
 
