@@ -1504,6 +1504,17 @@ def _display_messages():
             except Exception as e:
                 st.error(f"Error rendering chart: {str(e)}")
                 st.write("Raw chart data:", message["chart"])
+
+            # Show intermediate steps for chart messages if available
+            if "intermediate_steps" in message:
+                if message["intermediate_steps"]:
+                    with st.expander("🔍 View Intermediate Steps", expanded=False):
+                        st.text(message["intermediate_steps"])
+                else:
+                    with st.expander("🔍 View Intermediate Steps", expanded=False):
+                        st.info(
+                            "No agent used. Direct answer provided from database summary."
+                        )
         else:
             with st.chat_message(message["role"]):
                 if (
@@ -1514,6 +1525,17 @@ def _display_messages():
                     st.markdown(message["content"])
                 else:
                     st.write(message["content"])
+
+                # Show intermediate steps for assistant messages if available
+                if message["role"] == "assistant" and "intermediate_steps" in message:
+                    if message["intermediate_steps"]:
+                        with st.expander("🔍 View Intermediate Steps", expanded=False):
+                            st.text(message["intermediate_steps"])
+                    else:
+                        with st.expander("🔍 View Intermediate Steps", expanded=False):
+                            st.info(
+                                "No agent used. Direct answer provided from database summary."
+                            )
 
 
 def _handle_chat_response(chat_response):
@@ -1531,6 +1553,9 @@ def _handle_chat_response(chat_response):
                     ),
                     "chart": chart_config,
                 }
+                # Include intermediate steps if available
+                if "intermediate_steps" in chat_result:
+                    ai_message["intermediate_steps"] = chat_result["intermediate_steps"]
                 st.session_state.messages.append(ai_message)
             except Exception as e:
                 st.error(f"Error creating chart: {str(e)}")
@@ -1540,6 +1565,9 @@ def _handle_chat_response(chat_response):
                 "role": "assistant",
                 "content": chat_result.get("response", str(chat_result)),
             }
+            # Include intermediate steps if available
+            if "intermediate_steps" in chat_result:
+                ai_message["intermediate_steps"] = chat_result["intermediate_steps"]
             st.session_state.messages.append(ai_message)
     else:
         # Parse structured error if available

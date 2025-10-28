@@ -905,7 +905,7 @@ class TabularDataHandler:
         # Traditional single-file mode
         return self._get_table_info_for_file(self.file_id)
 
-    def get_answer(self, question: Union[str, List[str]]) -> str:
+    def get_answer(self, question: Union[str, List[str]]) -> Union[str, dict]:
         """
         Processes a user's question and returns an answer based on the database content.
         For multi-file mode, it attempts to determine which database to query or uses a combined approach.
@@ -917,7 +917,9 @@ class TabularDataHandler:
                      previous items are conversation history.
 
         Returns:
-            str: The answer to the user's question or an error message if processing fails.
+            Union[str, dict]: For tabular data, returns dict with 'answer' and 'intermediate_steps'.
+                             For multi-file, returns string (to maintain compatibility).
+                             Returns error message string if processing fails.
         """
         try:
             # Extract the actual question text for multi-file routing and forced answers
@@ -931,13 +933,14 @@ class TabularDataHandler:
             else:
                 # Standard single-file approach (also works when only one file in multi-file mode)
                 # Pass the full question (which could be a list with history) to ask_question
-                answer = self.ask_question(question)
-                if answer:
+                result = self.ask_question(question)
+                if result:
                     logging.info("Direct answer")
-                    return answer
+                    return result  # Return the dict with answer and intermediate_steps
                 else:
                     logging.info("Forced answer")
-                    return self.get_forced_answer(actual_question_text, answer)
+                    forced_result = self.get_forced_answer(actual_question_text, "")
+                    return forced_result  # Return the dict from get_forced_answer
         except Exception as e:
             logging.error(f"Error in TabularDataHandler get_answer: {str(e)}")
             return f"An error occurred while processing your question: {str(e)}"
@@ -1225,7 +1228,7 @@ class TabularDataHandler:
         context_str = "\n\n".join(context_parts) + "\n\n"
         return context_str
 
-    def ask_question(self, question: Union[str, List[str]]) -> Optional[str]:
+    def ask_question(self, question: Union[str, List[str]]) -> Optional[dict]:
         """
         Enhanced question processing with intelligent optimization and SQL filtering.
         Now supports conversation history for contextual question resolution.
@@ -1236,7 +1239,7 @@ class TabularDataHandler:
                      previous items are conversation history (alternating user/assistant).
 
         Returns:
-            Optional[str]: The answer to the question, or None if processing fails.
+            Optional[dict]: Dictionary with 'answer' and 'intermediate_steps' keys, or None if processing fails.
         """
         if not self.agent:
             self._initialize_agent()
@@ -1308,7 +1311,7 @@ class TabularDataHandler:
                     self.previous_formatted_by_file[self.file_id] = formatted_question
                 except Exception:
                     pass
-                return formatted_question
+                return {"answer": formatted_question, "intermediate_steps": None}
 
             # Get query classification for appropriate response formatting
             logging.info(f"Formatted question: {formatted_question}")
@@ -1346,7 +1349,7 @@ class TabularDataHandler:
 
     def _process_agent_response(
         self, response: dict, question: str, query_type: str, language: str
-    ) -> str:
+    ) -> dict:
         """
         Process the agent response and format it appropriately.
 
@@ -1357,12 +1360,34 @@ class TabularDataHandler:
             language: Language for response
 
         Returns:
-            str: Formatted response
+            dict: Dictionary with 'answer' and 'intermediate_steps' keys
         """
         # Extract the final answer and intermediate steps
         final_answer = response.get("output", "No final answer found")
         logging.info(f"Final answer: {final_answer}")
         intermediate_steps = response.get("intermediate_steps", [])
+
+        # Debug: Log the structure of intermediate_steps for troubleshooting
+        logging.debug("Intermediate steps structure:")
+        for idx, step in enumerate(intermediate_steps):
+            logging.debug(f"  Step {idx}: {type(step)}")
+            if isinstance(step, tuple) and len(step) >= 2:
+                action, observation = step[0], step[1]
+                logging.debug(
+                    f"    Action type: {type(action)}, attributes: {dir(action)}"
+                )
+                if hasattr(action, "tool"):
+                    logging.debug(f"    Tool: {action.tool}")
+                if hasattr(action, "log"):
+                    logging.debug(f"    Has log: {bool(action.log)}")
+                if hasattr(action, "message"):
+                    logging.debug(f"    Has message: {bool(action.message)}")
+                    if hasattr(action.message, "content"):
+                        logging.debug(
+                            f"    Message content: {action.message.content[:100]}..."
+                        )
+                logging.debug(f"    Observation type: {type(observation)}")
+                logging.debug(f"    Observation preview: {str(observation)[:200]}...")
 
         logging.info("Formatting result from intermediate steps and final answer")
         truncated_context = self._truncate_intermediate_steps(
@@ -1396,16 +1421,25 @@ class TabularDataHandler:
         # Format the response using the appropriate model
         if self.model_choice.startswith("gemini"):
             try:
-                return get_gemini_non_rag_response(
+                formatted_answer = get_gemini_non_rag_response(
                     self.config, base_prompt, self.model_choice
                 )
             except GeminiSafetyFilterError as e:
                 logging.warning(
                     f"Safety filter blocked response in CSV handler: {str(e)}"
                 )
-                return f"I apologize, but I cannot provide a response to this question. {str(e)}"
+                formatted_answer = f"I apologize, but I cannot provide a response to this question. {str(e)}"
         else:
-            return get_azure_non_rag_response(self.config, base_prompt)
+            formatted_answer = get_azure_non_rag_response(self.config, base_prompt)
+
+        # Format intermediate steps for display
+        formatted_steps = (
+            self._format_intermediate_steps(intermediate_steps)
+            if intermediate_steps
+            else None
+        )
+
+        return {"answer": formatted_answer, "intermediate_steps": formatted_steps}
 
     def _handle_agent_error(
         self,
@@ -1414,7 +1448,7 @@ class TabularDataHandler:
         question: str,
         query_type: str,
         language: str,
-    ) -> str:
+    ) -> dict:
         """
         Handle agent execution errors with fallback strategies.
 
@@ -1426,7 +1460,7 @@ class TabularDataHandler:
             language: Language for response
 
         Returns:
-            str: Response from fallback strategy or raises the error
+            dict: Dictionary with 'answer' and 'intermediate_steps' keys
         """
         error_msg = str(agent_error)
         logging.warning(f"Agent execution error: {error_msg}")
@@ -1451,7 +1485,7 @@ class TabularDataHandler:
                         actual_response = actual_response[response_start:]
 
                 logging.info("Extracted response from parsing error")
-                return actual_response
+                return {"answer": actual_response, "intermediate_steps": None}
 
         # If we can't extract the response, try to get it from intermediate steps
         try:
@@ -1471,7 +1505,10 @@ class TabularDataHandler:
                                 result = connection.execute(text(cleaned_sql))
                                 headers = list(result.keys())
                                 rows = [list(row) for row in result.fetchall()]
-                                return [headers, *rows]
+                                return {
+                                    "answer": [headers, *rows],
+                                    "intermediate_steps": None,
+                                }
                         except Exception as engine_exec_error:
                             logging.warning(
                                 f"Engine execution failed in fallback, trying db.run: {str(engine_exec_error)}"
@@ -1502,16 +1539,23 @@ class TabularDataHandler:
 
                     if self.model_choice.startswith("gemini"):
                         try:
-                            return get_gemini_non_rag_response(
+                            formatted_answer = get_gemini_non_rag_response(
                                 self.config, base_prompt, self.model_choice
                             )
                         except GeminiSafetyFilterError as e:
                             logging.warning(
                                 f"Safety filter blocked fallback response: {str(e)}"
                             )
-                            return f"I apologize, but I cannot provide a response to this question. {str(e)}"
+                            formatted_answer = (
+                                f"I apologize, but I cannot provide a response to "
+                                f"this question. {str(e)}"
+                            )
                     else:
-                        return get_azure_non_rag_response(self.config, base_prompt)
+                        formatted_answer = get_azure_non_rag_response(
+                            self.config, base_prompt
+                        )
+
+                    return {"answer": formatted_answer, "intermediate_steps": None}
         except Exception as fallback_error:
             logging.error(f"Fallback execution also failed: {str(fallback_error)}")
 
@@ -1624,7 +1668,7 @@ class TabularDataHandler:
 
     def get_forced_answer(
         self, question: str, answer: str, language: str = "en"
-    ) -> str:
+    ) -> dict:
         """
         Attempts to extract an answer from a given text when a direct answer is not available.
 
@@ -1634,7 +1678,7 @@ class TabularDataHandler:
             language (str): The language of the user's question.
 
         Returns:
-            str: An extracted answer or "Cannot find answer" if no suitable answer is found.
+            dict: Dictionary with 'answer' and 'intermediate_steps' keys.
         """
         try:
             # Try to extract table name from the answer (which might contain SQL)
@@ -1655,19 +1699,24 @@ class TabularDataHandler:
             # Use the appropriate model based on model_choice
             if self.model_choice.startswith("gemini"):
                 try:
-                    return get_gemini_non_rag_response(
+                    formatted_answer = get_gemini_non_rag_response(
                         self.config, base_prompt, self.model_choice
                     )
                 except GeminiSafetyFilterError as e:
                     logging.warning(
                         f"Safety filter blocked response in get_forced_answer: {str(e)}"
                     )
-                    return f"I apologize, but I cannot provide a response to this question. {str(e)}"
+                    formatted_answer = f"I apologize, but I cannot provide a response to this question. {str(e)}"
             else:
-                return get_azure_non_rag_response(self.config, base_prompt)
+                formatted_answer = get_azure_non_rag_response(self.config, base_prompt)
+
+            return {"answer": formatted_answer, "intermediate_steps": None}
         except Exception as e:
             logging.error(f"Error in get_forced_answer: {str(e)}")
-            return f"An error occurred while processing your question: {str(e)}"
+            return {
+                "answer": f"An error occurred while processing your question: {str(e)}",
+                "intermediate_steps": None,
+            }
 
     def _truncate_intermediate_steps(
         self,
@@ -1827,6 +1876,139 @@ class TabularDataHandler:
                         break
 
         return essential_info
+
+    def _extract_thought_from_action(
+        self, action: Any, observation: Any
+    ) -> Optional[str]:
+        """Extract the agent's thought text from action/observation in a robust way."""
+        try:
+            if hasattr(action, "log") and action.log:
+                return action.log
+            if hasattr(action, "message"):
+                msg = getattr(action, "message")
+                if hasattr(msg, "content") and msg.content:
+                    return msg.content
+                if (
+                    hasattr(msg, "additional_kwargs")
+                    and isinstance(msg.additional_kwargs, dict)
+                    and "thought" in msg.additional_kwargs
+                ):
+                    return msg.additional_kwargs.get("thought")
+            if hasattr(action, "tool_input") and isinstance(action.tool_input, dict):
+                if "thought" in action.tool_input:
+                    return action.tool_input.get("thought")
+            obs_str = str(observation)
+            if "Thought:" in obs_str or "in_tableThought:" in obs_str:
+                for line in obs_str.split("\n"):
+                    if "Thought:" in line or "in_tableThought:" in line:
+                        return (
+                            line.replace("Thought:", "")
+                            .replace("in_tableThought:", "")
+                            .strip()
+                        )
+            act_str = str(action)
+            if "Thought" in act_str or "thinking" in act_str.lower():
+                return act_str
+        except Exception:
+            return None
+        return None
+
+    def _format_tool_input_block(self, tool_name: str, tool_input: Any) -> List[str]:
+        """Format tool input with SQL-aware pretty printing."""
+        lines: List[str] = []
+        if tool_name in {"sql_db_query", "query_sql_db"} and isinstance(
+            tool_input, str
+        ):
+            lines.append("\nSQL Query:")
+            sql_clean = self._clean_sql_query(tool_input)
+            for sql_line in sql_clean.split("\n"):
+                lines.append(f"  {sql_line}")
+        else:
+            lines.append(f"Input: {str(tool_input)[:500]}")
+        return lines
+
+    def _format_observation_block(self, observation: Any) -> List[str]:
+        """Format observation text with truncation and line splitting."""
+        out: List[str] = ["\nObservation:"]
+        obs_str = str(observation)
+        if len(obs_str) > 2000:
+            out.append(f"  {obs_str[:2000]}...")
+            out.append(f"  [Truncated - {len(obs_str)} total characters]")
+            return out
+        obs_lines = obs_str.split("\n")
+        for obs_line in obs_lines[:50]:
+            out.append(f"  {obs_line}")
+        if len(obs_lines) > 50:
+            out.append(f"  ... [{len(obs_lines) - 50} more lines]")
+        return out
+
+    def _format_step_block(self, idx: int, step: Any) -> List[str]:
+        """Format one intermediate step into a list of lines."""
+        lines: List[str] = [f"Step {idx}:", "-" * 80]
+        if not (isinstance(step, tuple) and len(step) >= 2):
+            lines.append(f"  {str(step)[:500]}")
+            lines.append("")
+            return lines
+
+        action, observation = step[0], step[1]
+        logging.debug(f"Action type: {type(action)}, attributes: {dir(action)}")
+
+        thought = self._extract_thought_from_action(action, observation)
+        if thought:
+            lines.append("Thought:")
+            thought_lines = str(thought).split("\n")
+            for tl in thought_lines[:10]:
+                lines.append(f"  {tl}")
+            if len(thought_lines) > 10:
+                lines.append(f"  ... [{len(thought_lines) - 10} more lines]")
+            lines.append("")
+
+        if hasattr(action, "tool"):
+            tool_name = action.tool
+            lines.append(f"Tool: {tool_name}")
+            if hasattr(action, "tool_input"):
+                lines.extend(
+                    self._format_tool_input_block(tool_name, action.tool_input)
+                )
+        else:
+            lines.append(f"Action: {str(action)[:500]}")
+
+        lines.extend(self._format_observation_block(observation))
+        lines.append("")
+        return lines
+
+    def _format_intermediate_steps(self, intermediate_steps: list) -> str:
+        """
+        Format intermediate steps into human-readable text.
+
+        Args:
+            intermediate_steps: List of tuples (action, observation) from agent execution
+
+        Returns:
+            str: Formatted text showing agent actions, observations, and reasoning
+        """
+        if not intermediate_steps:
+            return ""
+
+        formatted_lines: List[str] = []
+        formatted_lines.append("=" * 80)
+        formatted_lines.append("AGENT EXECUTION TRACE")
+        formatted_lines.append("=" * 80)
+        formatted_lines.append("")
+
+        for idx, step in enumerate(intermediate_steps, 1):
+            try:
+                formatted_lines.extend(self._format_step_block(idx, step))
+            except Exception as e:
+                logging.warning(f"Error formatting step {idx}: {str(e)}")
+                formatted_lines.append(f"Step {idx}: [Error formatting step]")
+                formatted_lines.append("")
+
+        formatted_lines.append("=" * 80)
+        formatted_lines.append(f"Total Steps: {len(intermediate_steps)}")
+        formatted_lines.append("=" * 80)
+
+        return "\n".join(formatted_lines)
 
     def _extract_sql_from_formatted_question(
         self, formatted_question: str
