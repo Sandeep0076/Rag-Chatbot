@@ -853,12 +853,6 @@ Now resolve the current question based on the conversation history provided abov
             resolved_question = resolved_question[1:-1]
         if resolved_question.startswith("'") and resolved_question.endswith("'"):
             resolved_question = resolved_question[1:-1]
-
-        # Log the last user question we anchored on
-        logging.info(f"full conversation history: {conversation_history}")
-        logging.info(
-            f"Previous question (anchored): {previous_user_question if previous_user_question else 'N/A'}"
-        )
         logging.info(3 * "--------------------------------")
         logging.info(f"Previous user question: {previous_user_question}")
         logging.info(f"Original question: {current_question}")

@@ -1327,25 +1327,6 @@ class TabularDataHandler:
             logging.info("Executing query through SQL agent")
             try:
                 response = self.agent.invoke({"input": formatted_question})
-
-                # Try to extract and execute SQL directly to return structured table data
-                # sql_query = self._extract_sql_from_formatted_question(
-                #     formatted_question
-                # )
-                # if sql_query and hasattr(self, "engine") and self.engine:
-                #     try:
-                #         with self.engine.connect() as connection:
-                #             cleaned_sql = self._clean_sql_query(sql_query)
-                #             result = connection.execute(text(cleaned_sql))
-                #             headers = list(result.keys())
-                #             rows = [list(row) for row in result.fetchall()]
-                #             # Return in [headers, *rows] format so the API formats a table with correct headers
-                #             return [headers, *rows]
-                #     except Exception as direct_sql_error:
-                #         logging.warning(
-                #             f"Direct SQL execution failed, falling back to LLM formatting: {str(direct_sql_error)}"
-                #         )
-
                 return self._process_agent_response(
                     response, question_to_process, query_type, language
                 )
@@ -1388,8 +1369,19 @@ class TabularDataHandler:
             intermediate_steps, final_answer, 50000, query_type
         )
 
+        # Extract table name from SQL query in intermediate steps
+        table_name = None
+        for step in intermediate_steps:
+            if isinstance(step, tuple) and len(step) >= 2:
+                action = step[0]
+                if hasattr(action, "tool") and action.tool == "sql_db_query":
+                    sql_query = action.tool_input
+                    table_name = self._extract_table_name_from_sql(sql_query)
+                    if table_name:
+                        break
+
         # Get column headers from database info for better formatting
-        column_headers = self._get_column_headers_for_prompt()
+        column_headers = self._get_column_headers_for_prompt(table_name)
 
         # Add column headers on the next line after truncated context
         if column_headers:
@@ -1488,8 +1480,11 @@ class TabularDataHandler:
                     raw_result = self.db.run(sql_query)
                     logging.info(f"Direct SQL result: {str(raw_result)[:500]}...")
 
+                    # Extract table name from SQL query
+                    table_name = self._extract_table_name_from_sql(sql_query)
+
                     # Format the raw result with column headers if available
-                    column_headers = self._get_column_headers_for_prompt()
+                    column_headers = self._get_column_headers_for_prompt(table_name)
 
                     # Add column headers on the next line if available
                     context_with_headers = (
@@ -1523,9 +1518,65 @@ class TabularDataHandler:
         # If all else fails, raise the original error
         raise agent_error
 
-    def _get_column_headers_for_prompt(self) -> Optional[str]:
+    def _extract_table_name_from_sql(self, sql_query: str) -> Optional[str]:
+        """
+        Extract the table name from a SQL query.
+
+        Args:
+            sql_query: The SQL query string
+
+        Returns:
+            Optional[str]: The extracted table name or None if not found
+        """
+        if not sql_query:
+            return None
+
+        try:
+            import re
+
+            # Remove comments and normalize whitespace
+            sql_query = re.sub(r"--.*$", "", sql_query, flags=re.MULTILINE)
+            sql_query = re.sub(r"/\*.*?\*/", "", sql_query, flags=re.DOTALL)
+            sql_query = " ".join(sql_query.split())
+
+            # Pattern to match table name after FROM clause
+            # Matches: FROM table_name, FROM `table_name`, FROM "table_name", etc.
+            pattern = r"\bFROM\s+([`\"]?)(\w+)\1"
+            match = re.search(pattern, sql_query, re.IGNORECASE)
+
+            if match:
+                table_name = match.group(2)
+                logging.info(f"Extracted table name from SQL: {table_name}")
+                return table_name
+
+            # If no match, try to find any table name in the query
+            # by checking against known table names
+            if self.file_id and self.file_id in self.database_summaries:
+                db_summary = self.database_summaries[self.file_id]
+                table_names = db_summary.get("table_names", [])
+                sql_upper = sql_query.upper()
+                for table_name in table_names:
+                    if table_name.upper() in sql_upper:
+                        logging.info(
+                            f"Found table name by matching known tables: {table_name}"
+                        )
+                        return table_name
+
+            return None
+
+        except Exception as e:
+            logging.warning(f"Error extracting table name from SQL: {str(e)}")
+            return None
+
+    def _get_column_headers_for_prompt(
+        self, table_name: Optional[str] = None
+    ) -> Optional[str]:
         """
         Extract column headers from the database information for inclusion in prompts.
+
+        Args:
+            table_name: Optional. The specific table name to get headers from.
+                       If None, defaults to the first table.
 
         Returns:
             Optional[str]: Comma-separated column headers or None if not available
@@ -1538,8 +1589,23 @@ class TabularDataHandler:
             if not db_summary or "tables" not in db_summary:
                 return None
 
-            # Get the first table (assuming single table for now)
-            table = db_summary["tables"][0] if db_summary["tables"] else None
+            # Find the specific table or use the first one
+            table = None
+            if table_name:
+                # Search for the table by name
+                for tbl in db_summary["tables"]:
+                    if tbl.get("name") == table_name:
+                        table = tbl
+                        break
+                if not table:
+                    logging.warning(
+                        f"Table '{table_name}' not found, using first table"
+                    )
+                    table = db_summary["tables"][0] if db_summary["tables"] else None
+            else:
+                # Default to first table
+                table = db_summary["tables"][0] if db_summary["tables"] else None
+
             if not table or "columns" not in table:
                 return None
 
@@ -1571,8 +1637,11 @@ class TabularDataHandler:
             str: An extracted answer or "Cannot find answer" if no suitable answer is found.
         """
         try:
+            # Try to extract table name from the answer (which might contain SQL)
+            table_name = self._extract_table_name_from_sql(answer)
+
             # Get column headers if available for better formatting
-            column_headers = self._get_column_headers_for_prompt()
+            column_headers = self._get_column_headers_for_prompt(table_name)
 
             # Add column headers on the next line if available
             answer_with_headers = answer
