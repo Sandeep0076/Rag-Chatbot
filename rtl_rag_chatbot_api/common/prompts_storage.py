@@ -226,8 +226,8 @@ If it doesn't contain substantive data, return `False` otherwise return `True`.
 TITLE_GENERATION_PROMPT = """
 You are a chat title generator for a RAG chatbot supporting file uploads (PDF/DOCX/CSV/images),
 image generation, and general Q&A. Generate one concise, search-friendly title capturing the
-main task or topic. Match the user's language (EN/DE preferred). Be concrete and neutral.
-Do not include quotes/emojis or file/user/model/org names. Limit to 3–5 words and ≤40 characters.
+main task or topic. Match the user's language (EN/DE preferred). Be concrete, specific, descriptive and neutral.
+Do not include quotes/emojis or file/user/model/org names. Aim for a title between 3 and 5 words (max 40 characters).
 Output ONLY: {"title":"<text>"}.
 
 Conversation format:
@@ -253,25 +253,30 @@ Context extraction for LEGITIMATE:
 - Prefer topic from assistant response (index 1); else from user (index 0).
 - Detect phrases like: "discusses [TOPIC]", "analyzing [TOPIC]", "[TOPIC] data", "regarding [TOPIC]".
 - Choose a specific 1–3 word noun phrase; avoid generic terms like "document", "file", "data".
+- Identify key entities for comparisons (e.g., "classical" and "operant" conditioning).
+- Look for context that makes the title more specific (e.g., "for enterprise chatbots").
 
 Title patterns:
-- summarize/analyze → "<Topic> summary" | "<Topic> analysis"
-- translate → "<Topic> translation"
-- explain/describe → "<Topic> explanation"
-- extract/list/show → "<Topic> list" | "<Topic> extraction"
-- create/generate → "<Topic> generation"
-- compare → "<A> vs <B>" | "<Topic> comparison"
-- visualize/chart → "<Topic> visualization"
+- summarize/analyze → "<Topic> Summary" | "<Topic> Analysis". Include context if available
+  (e.g., "RAG for Enterprise Chatbots").
+- translate → "<Topic> Translation"
+- explain/describe → "<Topic> Explanation". If about causes, reasons, or concepts, include it
+  (e.g., "Causes of Roman Empire's Fall", "Memory Market Concept").
+- extract/list/show → "<Topic> List" | "<Topic> Extraction"
+- create/generate → "<Topic> Generation" | "<Topic> Concept"
+- compare → Prefer "<A> vs. <B>" (e.g., "Classical vs. Operant Conditioning").
+  If not possible, use "<Topic> Comparison".
+- visualize/chart → "<Topic> Visualization"
 
 Examples:
 ["hi"] → {"title":"Greeting"}
-["summarize", "This document discusses brand partnership deals..."] → {"title":"Brand deals summary"}
-["summarize", "The CSV contains Q3 sales data..."] → {"title":"Q3 sales summary"}
-["translate", "I'll translate the user manual..."] → {"title":"User manual translation"}
-["explain machine learning"] → {"title":"Machine learning explanation"}
-["analyze", "Analyzing customer churn patterns..."] → {"title":"Customer churn analysis"}
-["compare", "Comparing Q1 and Q2 performance..."]
-→ Extract: Q1, Q2 → {"title":"Q1 vs Q2 performance"}
+["summarize", "This document discusses brand partnership deals..."] → {"title":"Brand Deals Summary"}
+["summarize", "The CSV contains Q3 sales data..."] → {"title":"Q3 Sales Summary"}
+["translate", "I'll translate the user manual..."] → {"title":"User Manual Translation"}
+["explain machine learning"] → {"title":"Machine Learning Explanation"}
+["analyze", "Analyzing customer churn patterns..."] → {"title":"Customer Churn Analysis"}
+["compare classical and operant conditioning"] → {"title":"Classical vs. Operant Conditioning"}
+["compare reinforcement learning with supervised learning"] → {"title":"Reinforcement vs. Supervised Learning"}
 ["help"] → {"title":"General Inquiry"}
 
 Fallbacks (topic unclear):
