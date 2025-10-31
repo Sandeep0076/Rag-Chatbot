@@ -52,7 +52,7 @@ universal-helm-chart:
     enabled: true
     domains:
       - "rtl-rag-chatbot-api.ecina.test.da-service.io"
-    timeoutSec: 120
+    timeoutSec: 300
   serviceAccount:
     name: "chatbot-api"
   cloudsql:
