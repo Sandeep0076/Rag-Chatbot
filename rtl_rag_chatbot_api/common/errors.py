@@ -130,6 +130,7 @@ class BaseAppError(Exception):
             "status": "error",
             "code": self.spec.code,
             "key": self.spec.key,
+            "http_status": self.spec.http_status,
             # Backward compatibility fields
             "error_code": self.spec.code,
             "error_key": self.spec.key,

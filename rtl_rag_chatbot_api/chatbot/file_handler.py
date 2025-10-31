@@ -17,9 +17,13 @@ from rtl_rag_chatbot_api.chatbot.utils.file_encryption_manager import (
 )
 from rtl_rag_chatbot_api.common.base_handler import BaseRAGHandler
 from rtl_rag_chatbot_api.common.errors import (
+    BaseAppError,
     CsvAllTablesEmptyError,
     CsvNoTablesError,
+    DocTextTooShortError,
+    DocTextValidationError,
     TabularInvalidDataError,
+    build_error_result,
 )
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
@@ -994,14 +998,9 @@ class FileHandler:
                 logging.error(
                     f"Text extraction failed for {original_filename}: {error_msg}"
                 )
-                return {
-                    "status": "error",
-                    "message": error_msg,
-                    "file_id": file_id,
-                    "is_image": is_image,
-                    "embeddings_exist": False,
-                    "temp_file_path": None,
-                }
+                # Create a structured error and build a result from it
+                error = DocTextValidationError(error_msg)
+                return build_error_result(error, file_id=file_id, is_image=is_image)
 
             # Log extraction stats
             word_count = len(extracted_text.split())
@@ -1029,36 +1028,37 @@ class FileHandler:
                 logging.error(
                     f"Text validation failed for {original_filename}: {error_msg}"
                 )
-                return {
-                    "status": "error",
-                    "message": error_msg,
-                    "file_id": file_id,
-                    "is_image": is_image,
-                    "embeddings_exist": False,
-                    "temp_file_path": None,
-                }
+                # Create a structured error and build a result from it
+                error = DocTextTooShortError(error_msg)
+                return build_error_result(error, file_id=file_id, is_image=is_image)
 
             logging.info(
                 f"Text validation passed for {original_filename} ({len(extracted_text)} characters)"
             )
             return None
+        except BaseAppError as e:
+            # Handle known application errors
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            await self._cleanup_empty_directory(file_id)
+
+            logging.error(
+                f"Text validation failed for {original_filename} with a known error: {e.message}"
+            )
+            return build_error_result(e, file_id=file_id, is_image=is_image)
         except Exception as e:
+            # Handle unexpected errors
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
             await self._cleanup_empty_directory(file_id)
 
             error_msg = f"Failed to validate text content: {str(e)}"
             logging.error(
-                f"Text validation failed for {original_filename}: {error_msg}"
+                f"Text validation failed for {original_filename} with an unexpected error: {error_msg}"
             )
-            return {
-                "status": "error",
-                "message": error_msg,
-                "file_id": file_id,
-                "is_image": is_image,
-                "embeddings_exist": False,
-                "temp_file_path": None,
-            }
+            # Create a generic structured error and build a result from it
+            error = DocTextValidationError(error_msg)
+            return build_error_result(error, file_id=file_id, is_image=is_image)
 
     async def process_file(
         self, file: UploadFile, file_id: str, is_image: bool, username: str
@@ -1213,16 +1213,15 @@ class FileHandler:
                 metadata,
             )
 
-        except Exception as e:
-            logging.error(f"Exception in process_file: {str(e)}")
+        except BaseAppError as e:
+            logging.error(f"Known exception in process_file: {e.message}")
             await self._cleanup_on_error(locals())
-            return {
-                "status": "error",
-                "message": str(e),
-                "file_id": file_id,
-                "is_image": is_image,
-                "temp_file_path": None,
-            }
+            return build_error_result(e, file_id=file_id, is_image=is_image)
+        except Exception as e:
+            logging.error(f"Unexpected exception in process_file: {str(e)}")
+            await self._cleanup_on_error(locals())
+            error = DocTextValidationError(f"An unexpected error occurred: {str(e)}")
+            return build_error_result(error, file_id=file_id, is_image=is_image)
 
     def _sanitize_filename(self, filename: str) -> str:
         """Sanitize filename to prevent security issues."""
@@ -1542,15 +1541,16 @@ class FileHandler:
             ) = website_handler.extract_content_from_single_url(url)
             if not is_successful or not content:
                 logging.warning(f"Failed to extract content from URL: {url}")
-                return {
-                    "file_id": None,
-                    "status": "error",
-                    "message": f"Could not extract content from URL: {url}",
-                    "is_image": False,
-                    "is_tabular": False,
-                    "url": url,
-                    "temp_file_path": None,
-                }
+                from rtl_rag_chatbot_api.common.errors import (
+                    UrlExtractionError,
+                    build_error_result,
+                )
+
+                error = UrlExtractionError(
+                    f"Could not extract content from URL: {url}",
+                    details={"url": url},
+                )
+                return build_error_result(error, file_id=None, is_image=False)
 
             # Check content quality
             is_substantive, word_count = website_handler.check_content_quality(content)
@@ -1559,18 +1559,19 @@ class FileHandler:
             )
 
             if not is_substantive:
-                return {
-                    "file_id": None,
-                    "status": "error",
-                    "message": (
+                from rtl_rag_chatbot_api.common.errors import (
+                    UrlContentTooShortError,
+                    build_error_result,
+                )
+
+                error = UrlContentTooShortError(
+                    (
                         f"Die Verarbeitung von {url} ist fehlgeschlagen. "
                         "Bitte versuchen Sie es erneut mit einer anderen Domain/einer anderen URL."
                     ),
-                    "is_image": False,
-                    "is_tabular": False,
-                    "url": url,
-                    "temp_file_path": None,
-                }
+                    details={"url": url, "word_count": word_count},
+                )
+                return build_error_result(error, file_id=None, is_image=False)
 
             try:
                 # Write content to file
@@ -1701,15 +1702,14 @@ class FileHandler:
                     os.remove(temp_file_path)
                 except Exception:
                     pass  # Already logging the main error, don't obscure it
-            return {
-                "file_id": None,
-                "status": "error",
-                "message": f"Error processing URL {url}: {str(e)}",
-                "is_image": False,
-                "is_tabular": False,
-                "url": url,
-                "temp_file_path": None,
-            }
+
+            from rtl_rag_chatbot_api.common.errors import (
+                build_error_result,
+                map_exception_to_app_error,
+            )
+
+            app_error = map_exception_to_app_error(e)
+            return build_error_result(app_error, file_id=None, is_image=False)
 
     # Helper methods for process_urls
     def _parse_url_list(self, urls_text: str) -> list[str]:
@@ -1850,7 +1850,17 @@ class FileHandler:
 
         if not url_list:
             logging.warning("No valid URLs were provided in the input")
-            return {"status": "error", "message": "No valid URLs provided"}
+            from rtl_rag_chatbot_api.common.errors import (
+                BaseAppError,
+                ErrorRegistry,
+                build_error_result,
+            )
+
+            app_error = BaseAppError(
+                ErrorRegistry.ERROR_BAD_REQUEST,
+                "No valid URLs provided",
+            )
+            return build_error_result(app_error)
 
         logging.info(
             f"Processing {len(url_list)} URLs in parallel with IDs: {temp_file_id}_*"
@@ -1887,15 +1897,15 @@ class FileHandler:
                 # Check if this result is an exception
                 if isinstance(result, Exception):
                     logging.error(f"Error processing URL {url}: {str(result)}")
-                    error_result = {
-                        "file_id": None,
-                        "status": "error",
-                        "message": f"Error processing URL: {str(result)}",
-                        "url": url,
-                        "is_image": False,
-                        "is_tabular": False,
-                        "temp_file_path": None,
-                    }
+                    from rtl_rag_chatbot_api.common.errors import (
+                        build_error_result,
+                        map_exception_to_app_error,
+                    )
+
+                    app_error = map_exception_to_app_error(result)
+                    error_result = build_error_result(
+                        app_error, file_id=None, is_image=False
+                    )
                     processed_results.append(error_result)
                     error_found = True
                     continue
@@ -1936,12 +1946,13 @@ class FileHandler:
             # Attempt cleanup if results list exists
             if "results" in locals():
                 self._cleanup_temp_files_from_results(results)
-            return {
-                "status": "error",
-                "message": f"An unexpected error occurred during batch URL processing: {str(e)}",
-                "is_image": False,
-                "is_tabular": False,
-            }
+            from rtl_rag_chatbot_api.common.errors import (
+                build_error_result,
+                map_exception_to_app_error,
+            )
+
+            app_error = map_exception_to_app_error(e)
+            return build_error_result(app_error, file_id=None, is_image=False)
 
     async def cleanup_temp_files(self, temp_file_paths):
         """Clean up temporary files after processing.

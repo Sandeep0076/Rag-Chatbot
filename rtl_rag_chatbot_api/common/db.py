@@ -200,11 +200,18 @@ def insert_file_info_record(
     except Exception as e:
         logging.error(f"Error inserting FileInfo record: {e}")
         session.rollback()
-        return {
-            "status": "error",
-            "message": str(e),
-            "details": "Database operation failed",
-        }
+        from rtl_rag_chatbot_api.common.errors import (
+            BaseAppError,
+            ErrorRegistry,
+            build_error_result,
+        )
+
+        error = BaseAppError(
+            ErrorRegistry.ERROR_DATABASE_QUERY_FAILED,
+            f"Failed to insert FileInfo record: {str(e)}",
+            details={"operation": "insert_file_info"},
+        )
+        return build_error_result(error)
 
 
 def check_file_hash_exists(session: Session, file_hash: str) -> Dict[str, Any]:
@@ -261,12 +268,20 @@ def check_file_hash_exists(session: Session, file_hash: str) -> Dict[str, Any]:
             }
     except Exception as e:
         logging.error(f"Error checking file hash existence: {e}")
-        return {
-            "status": "error",
-            "exists": False,
-            "message": str(e),
-            "details": "Database operation failed",
-        }
+        from rtl_rag_chatbot_api.common.errors import (
+            BaseAppError,
+            ErrorRegistry,
+            build_error_result,
+        )
+
+        error = BaseAppError(
+            ErrorRegistry.ERROR_DATABASE_QUERY_FAILED,
+            f"Failed to check file hash: {str(e)}",
+            details={"operation": "check_file_hash"},
+        )
+        result = build_error_result(error)
+        result["exists"] = False
+        return result
 
 
 def delete_file_info_by_file_id(session: Session, file_id: str) -> Dict[str, Any]:
@@ -313,12 +328,20 @@ def delete_file_info_by_file_id(session: Session, file_id: str) -> Dict[str, Any
     except Exception as e:
         logging.error(f"Error deleting FileInfo records for file_id {file_id}: {e}")
         session.rollback()
-        return {
-            "status": "error",
-            "deleted": False,
-            "message": str(e),
-            "details": "Database operation failed",
-        }
+        from rtl_rag_chatbot_api.common.errors import (
+            BaseAppError,
+            ErrorRegistry,
+            build_error_result,
+        )
+
+        error = BaseAppError(
+            ErrorRegistry.ERROR_DATABASE_QUERY_FAILED,
+            f"Failed to delete FileInfo records: {str(e)}",
+            details={"operation": "delete_file_info", "file_id": file_id},
+        )
+        result = build_error_result(error)
+        result["deleted"] = False
+        return result
 
 
 def update_file_info_embedding_type(
@@ -369,12 +392,20 @@ def update_file_info_embedding_type(
     except Exception as e:
         logging.error(f"Error updating embedding_type for file_id {file_id}: {e}")
         session.rollback()
-        return {
-            "status": "error",
-            "updated": False,
-            "message": str(e),
-            "details": "Database operation failed",
-        }
+        from rtl_rag_chatbot_api.common.errors import (
+            BaseAppError,
+            ErrorRegistry,
+            build_error_result,
+        )
+
+        error = BaseAppError(
+            ErrorRegistry.ERROR_DATABASE_QUERY_FAILED,
+            f"Failed to update embedding_type: {str(e)}",
+            details={"operation": "update_embedding_type", "file_id": file_id},
+        )
+        result = build_error_result(error)
+        result["updated"] = False
+        return result
 
 
 def delete_all_file_info_records(session: Session) -> Dict[str, Any]:
@@ -416,12 +447,20 @@ def delete_all_file_info_records(session: Session) -> Dict[str, Any]:
     except Exception as e:
         logging.error(f"Error deleting all FileInfo records: {e}")
         session.rollback()
-        return {
-            "status": "error",
-            "deleted": False,
-            "message": str(e),
-            "details": "Database operation failed",
-        }
+        from rtl_rag_chatbot_api.common.errors import (
+            BaseAppError,
+            ErrorRegistry,
+            build_error_result,
+        )
+
+        error = BaseAppError(
+            ErrorRegistry.ERROR_DATABASE_QUERY_FAILED,
+            f"Failed to delete all FileInfo records: {str(e)}",
+            details={"operation": "delete_all_file_info"},
+        )
+        result = build_error_result(error)
+        result["deleted"] = False
+        return result
 
 
 def export_gcs_file_info_to_sql_text(

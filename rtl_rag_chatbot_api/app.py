@@ -1295,19 +1295,15 @@ async def _process_normal_upload_flow(
         # Check for errors in file processing
         error_results = [r for r in results if r.get("status") == "error"]
         if error_results:
-            # If there are any errors, return the first error message
+            # If there are any errors, raise structured HTTP error with code/key
+            from fastapi import HTTPException as _HTTPException
+
             error_result = error_results[0]
             logging.error(f"File processing failed: {error_result.get('message')}")
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "message": (
-                        f"File processing failed: {error_result.get('message')}"
-                    ),
-                    "file_id": error_result.get("file_id"),
-                    "status": "error",
-                },
-            )
+
+            status_code = error_result.get("http_status", 400)
+            # Pass-through structured payload so the global handler returns it as-is
+            raise _HTTPException(status_code=status_code, detail=error_result)
 
         # Process each file based on its type
         await process_files_by_type(
@@ -2637,12 +2633,12 @@ def check_db_existence(
             initialized_models[model_key] = {"model": model, "is_tabular": is_tabular}
         except ValueError as ve:
             logging.error(f"Error initializing TabularDataHandler: {str(ve)}")
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "The CSV file appears to be corrupted or contains no valid data. "
-                    "Please try uploading a different file."
-                ),
+            from rtl_rag_chatbot_api.common.errors import TabularInvalidDataError
+
+            raise TabularInvalidDataError(
+                "The CSV file appears to be corrupted or contains no valid data. "
+                "Please try uploading a different file.",
+                details={"error": str(ve)},
             )
 
     return db_path, is_tabular, model
@@ -2677,9 +2673,11 @@ def initialize_rag_model(
     if not os.path.exists(model_path):
         # Accept both "ready_for_chat" and "completed" as valid states
         if file_info.get("embeddings_status") not in ["ready_for_chat", "completed"]:
-            raise HTTPException(
-                status_code=400,
-                detail="Embeddings are not ready yet. Please wait a moment.",
+            from rtl_rag_chatbot_api.common.errors import EmbeddingsNotFoundError
+
+            raise EmbeddingsNotFoundError(
+                "Embeddings are not ready yet. Please wait a moment.",
+                details={"file_id": query.file_id},
             )
         print("No local embeddings found, downloading from GCS")
         gcs_handler.download_files_from_folder_by_id(query.file_id)
@@ -2803,8 +2801,11 @@ def handle_visualization(
                 logging.warning(
                     f"Visualization generation blocked by safety filter: {str(e)}"
                 )
-                raise HTTPException(
-                    status_code=422, detail=f"Cannot generate visualization: {str(e)}"
+                from rtl_rag_chatbot_api.common.errors import ChartGenerationError
+
+                raise ChartGenerationError(
+                    f"Cannot generate visualization: {str(e)}",
+                    details={"file_id": query.file_id},
                 )
 
         # Parse response into JSON
@@ -2827,16 +2828,23 @@ def handle_visualization(
             f"Invalid chart configuration JSON at position {je.pos}: {je.msg}"
         )
         logging.error(f"JSON string: {response}")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid chart configuration format: {str(je)}",
+        from rtl_rag_chatbot_api.common.errors import ChartGenerationError
+
+        raise ChartGenerationError(
+            f"Invalid chart configuration format: {str(je)}",
+            details={"file_id": query.file_id},
         )
     except HTTPException:
         # Re-raise HTTPExceptions (including our safety filter ones)
         raise
     except Exception as e:
         logging.error(f"Error generating chart: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to generate chart")
+        from rtl_rag_chatbot_api.common.errors import ChartGenerationError
+
+        raise ChartGenerationError(
+            f"Failed to generate chart: {str(e)}",
+            details={"file_id": query.file_id},
+        )
 
 
 async def _initialize_chat_model(
@@ -2874,12 +2882,11 @@ async def _initialize_chat_model(
 
     else:
         # Guard clause for invalid state
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Internal server error: Model initialization path unclear "
-                "(neither multi-file nor single file_id provided)."
-            ),
+        from rtl_rag_chatbot_api.common.errors import ModelInitializationError
+
+        raise ModelInitializationError(
+            "Internal server error: Model initialization path unclear "
+            "(neither multi-file nor single file_id provided)."
         )
 
     # Cache the newly initialized model
@@ -2942,14 +2949,18 @@ async def _process_single_file(query: Query, gcs_handler: GCSHandler) -> Dict[st
         else:
             embeddings_status = gcs_handler.check_embeddings_status(query.file_id)
             if embeddings_status == "in_progress":
-                raise HTTPException(
-                    status_code=400,
-                    detail="URL content is still being processed. Please wait a moment and try again.",
+                from rtl_rag_chatbot_api.common.errors import EmbeddingsNotFoundError
+
+                raise EmbeddingsNotFoundError(
+                    "URL content is still being processed. Please wait a moment and try again.",
+                    details={"file_id": query.file_id},
                 )
-            raise HTTPException(
-                status_code=404,
-                detail="File appears to be corrupted, empty, or not found."
-                " Please try uploading/selecting a different file.",
+            from rtl_rag_chatbot_api.common.errors import FileUploadError
+
+            raise FileUploadError(
+                "File appears to be corrupted, empty, or not found. "
+                "Please try uploading/selecting a different file.",
+                details={"file_id": query.file_id},
             )
 
     # No DB enrichment here; keep chat hot path lean. Upload/check handle it.
@@ -2978,9 +2989,11 @@ async def _check_file_embeddings(
         List of dictionaries containing embeddings check results
     """
     if not file_ids:
-        raise HTTPException(
-            status_code=400,
-            detail="No file IDs provided for embedding check.",
+        from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
+
+        raise BaseAppError(
+            ErrorRegistry.ERROR_BAD_REQUEST,
+            "No file IDs provided for embedding check.",
         )
 
     # Check embeddings for all files in parallel
@@ -3123,13 +3136,17 @@ async def _get_file_info_multi(
         if not f_info:
             embeddings_status = gcs_handler.check_embeddings_status(f_id)
             if embeddings_status == "in_progress":
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"URL content for file {f_id} is still being processed. Please wait and try again.",
+                from rtl_rag_chatbot_api.common.errors import EmbeddingsNotFoundError
+
+                raise EmbeddingsNotFoundError(
+                    f"URL content for file {f_id} is still being processed. Please wait and try again.",
+                    details={"file_id": f_id},
                 )
-            raise HTTPException(
-                status_code=404,
-                detail=f"File info not found for file_id: {f_id}. It may be corrupted or not yet processed.",
+            from rtl_rag_chatbot_api.common.errors import FileUploadError
+
+            raise FileUploadError(
+                f"File info not found for file_id: {f_id}. It may be corrupted or not yet processed.",
+                details={"file_id": f_id},
             )
         all_file_infos[f_id] = f_info
 
@@ -3176,9 +3193,11 @@ async def _process_multi_files(query: Query, gcs_handler: GCSHandler) -> Dict[st
         Dictionary containing processed multi-file information
     """
     if not query.file_ids:
-        raise HTTPException(
-            status_code=400,
-            detail="file_ids must be provided for multi-file chat.",
+        from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
+
+        raise BaseAppError(
+            ErrorRegistry.ERROR_NO_SOURCE_SELECTED,
+            "file_ids must be provided for multi-file chat.",
         )
 
     file_id_logging = f"file_ids: {query.file_ids}"
@@ -4617,7 +4636,17 @@ async def test_db_connection():
             return {"status": "success", "result": int(value)}
     except Exception as e:
         logging.error(f"Database connection test failed: {e}")
-        return {"status": "error", "message": str(e)}
+        from rtl_rag_chatbot_api.common.errors import (
+            BaseAppError,
+            ErrorRegistry,
+            build_error_result,
+        )
+
+        error = BaseAppError(
+            ErrorRegistry.ERROR_DATABASE_CONNECTION_FAILED,
+            f"Database connection test failed: {str(e)}",
+        )
+        return build_error_result(error)
 
 
 @app.post("/insert-file-info")
