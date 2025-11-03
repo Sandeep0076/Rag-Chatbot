@@ -10,6 +10,15 @@ from typing import List
 
 import aiofiles
 
+from rtl_rag_chatbot_api.common.errors import (
+    BaseAppError,
+    ErrorRegistry,
+    UrlContentTooShortError,
+    UrlExtractionError,
+    build_error_result,
+    map_exception_to_app_error,
+)
+
 # chat with URL is deprecated, but keeping it for backward compatibility
 
 
@@ -47,10 +56,6 @@ async def process_single_url(
         )
         if not is_successful or not content:
             website_handler.cleanup()
-            from rtl_rag_chatbot_api.common.errors import (
-                UrlExtractionError,
-                build_error_result,
-            )
 
             error = UrlExtractionError(
                 f"Could not extract content from URL: {url}",
@@ -70,10 +75,6 @@ async def process_single_url(
         is_substantive, word_count = website_handler.check_content_quality(content)
         if not is_substantive:
             website_handler.cleanup()
-            from rtl_rag_chatbot_api.common.errors import (
-                UrlContentTooShortError,
-                build_error_result,
-            )
 
             error = UrlContentTooShortError(
                 (
@@ -180,11 +181,6 @@ async def process_single_url(
 
     except Exception as e:
         logging.error(f"Error processing URL {url}: {str(e)}")
-        from rtl_rag_chatbot_api.common.errors import (
-            UrlExtractionError,
-            build_error_result,
-            map_exception_to_app_error,
-        )
 
         app_error = map_exception_to_app_error(e)
         result = build_error_result(app_error, file_id=None, is_image=False)
@@ -227,12 +223,6 @@ async def process_urls_individually(
             url_list = [url.strip() for url in urls_text.split(",") if url.strip()]
 
         if not url_list:
-            from rtl_rag_chatbot_api.common.errors import (
-                BaseAppError,
-                ErrorRegistry,
-                build_error_result,
-            )
-
             error = BaseAppError(
                 ErrorRegistry.ERROR_BAD_REQUEST,
                 "No valid URLs provided",
@@ -272,10 +262,6 @@ async def process_urls_individually(
 
     except Exception as e:
         logging.error(f"Error in process_urls_individually: {str(e)}")
-        from rtl_rag_chatbot_api.common.errors import (
-            build_error_result,
-            map_exception_to_app_error,
-        )
 
         app_error = map_exception_to_app_error(e)
         return build_error_result(app_error)
