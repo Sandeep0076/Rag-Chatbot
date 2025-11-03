@@ -653,18 +653,34 @@ class EmbeddingHandler:
             error_message: The error message to include
 
         Returns:
-            Dictionary with error information
+            Dictionary with error information including code/key
         """
-        # Use the actual error message instead of a generic one
-        # This ensures specific error messages (like text extraction failures) are shown to users
-        return {
-            "file_id": file_id,
-            "status": "error",
-            "message": error_message,
-            "can_chat": False,
-            "azure_embeddings_exist": False,
-            "gemini_embeddings_exist": False,
-        }
+        from rtl_rag_chatbot_api.common.errors import (
+            EmbeddingCreationError,
+            build_error_result,
+            map_exception_to_app_error,
+        )
+
+        # Try to map the error message to a specific error type
+        # Create a temporary exception to use with map_exception_to_app_error
+        temp_exc = Exception(error_message)
+        app_error = map_exception_to_app_error(temp_exc)
+
+        # If it's still a generic error, use EmbeddingCreationError
+        if isinstance(app_error, Exception) and not hasattr(app_error, "spec"):
+            app_error = EmbeddingCreationError(
+                error_message, details={"file_id": file_id}
+            )
+
+        result = build_error_result(app_error, file_id=file_id)
+        result.update(
+            {
+                "can_chat": False,
+                "azure_embeddings_exist": False,
+                "gemini_embeddings_exist": False,
+            }
+        )
+        return result
 
     async def check_embeddings_exist(
         self, file_id: str, model_choice: str, embedding_type: Optional[str] = None
@@ -1261,10 +1277,21 @@ class EmbeddingHandler:
 
         except Exception as e:
             logging.error(f"Error processing image file {file_id}: {str(e)}")
-            return {"status": "failed", "error": str(e)}, {
+            from rtl_rag_chatbot_api.common.errors import (
+                EmbeddingCreationError,
+                map_exception_to_app_error,
+            )
+
+            app_error = map_exception_to_app_error(e)
+            if not hasattr(app_error, "spec"):
+                app_error = EmbeddingCreationError(str(e), details={"file_id": file_id})
+            error_result = {
                 "status": "failed",
                 "error": str(e),
+                "code": app_error.spec.code,
+                "key": app_error.spec.key,
             }
+            return error_result, error_result
 
     async def _process_regular_file(
         self,
@@ -1321,8 +1348,22 @@ class EmbeddingHandler:
             gemini_result = {"success": True, "status": "completed"}
 
         except Exception as e:
+            from rtl_rag_chatbot_api.common.errors import (
+                EmbeddingCreationError,
+                map_exception_to_app_error,
+            )
+
+            app_error = map_exception_to_app_error(e)
+            if not hasattr(app_error, "spec"):
+                app_error = EmbeddingCreationError(str(e), details={"file_id": file_id})
+
             azure_result = e
-            gemini_result = {"status": "failed", "error": str(e)}
+            gemini_result = {
+                "status": "failed",
+                "error": str(e),
+                "code": app_error.spec.code,
+                "key": app_error.spec.key,
+            }
             logging.error(f"Azure embedding generation failed for {file_id}: {str(e)}")
 
         # Handle any exceptions that occurred during processing
@@ -1330,8 +1371,29 @@ class EmbeddingHandler:
             logging.error(
                 f"Azure embedding generation failed for {file_id}: {str(azure_result)}"
             )
-            azure_result = {"status": "failed", "error": str(azure_result)}
-            gemini_result = {"status": "failed", "error": str(azure_result)}
+            from rtl_rag_chatbot_api.common.errors import (
+                EmbeddingCreationError,
+                map_exception_to_app_error,
+            )
+
+            app_error = map_exception_to_app_error(azure_result)
+            if not hasattr(app_error, "spec"):
+                app_error = EmbeddingCreationError(
+                    str(azure_result), details={"file_id": file_id}
+                )
+
+            azure_result = {
+                "status": "failed",
+                "error": str(azure_result),
+                "code": app_error.spec.code,
+                "key": app_error.spec.key,
+            }
+            gemini_result = {
+                "status": "failed",
+                "error": str(azure_result),
+                "code": app_error.spec.code,
+                "key": app_error.spec.key,
+            }
 
         logging.info(
             f"Completed Azure-only embedding generation for file_id: {file_id}"

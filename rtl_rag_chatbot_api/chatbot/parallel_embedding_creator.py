@@ -78,12 +78,42 @@ async def create_embeddings_parallel(
                     logging.error(
                         f"Embedding creation failed for file {file_id}: {error_msg}"
                     )
-                    return {"file_id": file_id, "status": "error", "error": error_msg}
+                    # If result already has structured error fields, pass them through
+                    if "code" in result and "key" in result:
+                        return {
+                            "file_id": file_id,
+                            **result,
+                        }
+                    # Otherwise, create structured error
+                    from rtl_rag_chatbot_api.common.errors import (
+                        EmbeddingCreationError,
+                        build_error_result,
+                        map_exception_to_app_error,
+                    )
+
+                    temp_exc = Exception(error_msg)
+                    app_error = map_exception_to_app_error(temp_exc)
+                    if not hasattr(app_error, "spec"):
+                        app_error = EmbeddingCreationError(
+                            error_msg, details={"file_id": file_id}
+                        )
+                    return build_error_result(app_error, file_id=file_id)
 
                 return {"file_id": file_id, "status": "success", "result": result}
             except Exception as e:
                 logging.error(f"Error creating embeddings for file {file_id}: {str(e)}")
-                return {"file_id": file_id, "status": "error", "error": str(e)}
+                from rtl_rag_chatbot_api.common.errors import (
+                    EmbeddingCreationError,
+                    build_error_result,
+                    map_exception_to_app_error,
+                )
+
+                app_error = map_exception_to_app_error(e)
+                if not hasattr(app_error, "spec"):
+                    app_error = EmbeddingCreationError(
+                        str(e), details={"file_id": file_id}
+                    )
+                return build_error_result(app_error, file_id=file_id)
 
     # Create tasks for all files
     for i, file_id in enumerate(file_ids):

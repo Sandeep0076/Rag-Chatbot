@@ -16,6 +16,7 @@ from pdfminer.high_level import extract_text
 
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.errors import (
+    BaseAppError,
     DocTextTooShortError,
     DocTextValidationError,
     PdfTextExtractionError,
@@ -343,6 +344,9 @@ class BaseRAGHandler:
 
             return text
 
+        except BaseAppError:
+            # Preserve specific app error codes (e.g., 2010 for short text)
+            raise
         except Exception as e:
             error_msg = f"Error extracting text from {file_path}: {str(e)}"
             logging.error(error_msg)

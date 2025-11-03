@@ -10,6 +10,15 @@ from typing import List
 
 import aiofiles
 
+from rtl_rag_chatbot_api.common.errors import (
+    BaseAppError,
+    ErrorRegistry,
+    UrlContentTooShortError,
+    UrlExtractionError,
+    build_error_result,
+    map_exception_to_app_error,
+)
+
 # chat with URL is deprecated, but keeping it for backward compatibility
 
 
@@ -47,34 +56,42 @@ async def process_single_url(
         )
         if not is_successful or not content:
             website_handler.cleanup()
-            return {
-                "file_id": url_file_id,
-                "status": "error",
-                "message": f"Could not extract content from URL: {url}",
-                "is_image": False,
-                "is_tabular": False,
-                "original_filename": title or "url_content.txt",
-                "url": url,
-                "temp_file_path": None,
-            }
+
+            error = UrlExtractionError(
+                f"Could not extract content from URL: {url}",
+                details={"url": url},
+            )
+            result = build_error_result(error, file_id=url_file_id, is_image=False)
+            result.update(
+                {
+                    "original_filename": title or "url_content.txt",
+                    "url": url,
+                    "temp_file_path": None,
+                }
+            )
+            return result
 
         # Check content quality
         is_substantive, word_count = website_handler.check_content_quality(content)
         if not is_substantive:
             website_handler.cleanup()
-            return {
-                "file_id": url_file_id,
-                "status": "error",
-                "message": (
+
+            error = UrlContentTooShortError(
+                (
                     f"Die Verarbeitung von {url} ist fehlgeschlagen. "
                     "Bitte versuchen Sie es erneut mit einer anderen Domain/einer anderen URL."
                 ),
-                "is_image": False,
-                "is_tabular": False,
-                "original_filename": title or "url_content.txt",
-                "url": url,
-                "temp_file_path": None,
-            }
+                details={"url": url, "word_count": word_count},
+            )
+            result = build_error_result(error, file_id=url_file_id, is_image=False)
+            result.update(
+                {
+                    "original_filename": title or "url_content.txt",
+                    "url": url,
+                    "temp_file_path": None,
+                }
+            )
+            return result
 
         # Write content to file
         async with aiofiles.open(temp_file_path, "w", encoding="utf-8") as f:
@@ -164,15 +181,16 @@ async def process_single_url(
 
     except Exception as e:
         logging.error(f"Error processing URL {url}: {str(e)}")
-        return {
-            "file_id": None,
-            "status": "error",
-            "message": f"Error processing URL {url}: {str(e)}",
-            "is_image": False,
-            "is_tabular": False,
-            "url": url,
-            "temp_file_path": None,
-        }
+
+        app_error = map_exception_to_app_error(e)
+        result = build_error_result(app_error, file_id=None, is_image=False)
+        result.update(
+            {
+                "url": url,
+                "temp_file_path": None,
+            }
+        )
+        return result
 
 
 async def process_urls_individually(
@@ -205,7 +223,11 @@ async def process_urls_individually(
             url_list = [url.strip() for url in urls_text.split(",") if url.strip()]
 
         if not url_list:
-            return {"status": "error", "message": "No valid URLs provided"}
+            error = BaseAppError(
+                ErrorRegistry.ERROR_BAD_REQUEST,
+                "No valid URLs provided",
+            )
+            return build_error_result(error)
 
         logging.info(f"Processing {len(url_list)} URLs individually: {url_list}")
 
@@ -240,7 +262,9 @@ async def process_urls_individually(
 
     except Exception as e:
         logging.error(f"Error in process_urls_individually: {str(e)}")
-        return {"status": "error", "message": f"Error processing URLs: {str(e)}"}
+
+        app_error = map_exception_to_app_error(e)
+        return build_error_result(app_error)
 
 
 def parse_url_list(urls_text: str) -> List[str]:
