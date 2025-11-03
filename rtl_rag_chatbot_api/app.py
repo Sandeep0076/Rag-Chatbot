@@ -46,6 +46,7 @@ from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.imagen_handler import ImagenGenerator
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
+from rtl_rag_chatbot_api.chatbot.utils.image_prompt_rewriter import ImagePromptRewriter
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
 from rtl_rag_chatbot_api.common.errors import (
@@ -107,6 +108,8 @@ dalle_handler = DalleImageGenerator(configs)
 imagen_handler = ImagenGenerator(configs)
 # Pass existing handlers to avoid duplicate initialization
 combined_image_handler = CombinedImageGenerator(configs, dalle_handler, imagen_handler)
+# Initialize image prompt rewriter for context-aware image generation
+image_prompt_rewriter = ImagePromptRewriter()
 
 # database connection - only initialize if USE_FILE_HASH_DB is enabled
 if configs.use_file_hash_db:
@@ -4011,30 +4014,85 @@ async def generate_image(
 ):
     """
     Generate an image based on the provided text prompt using selected model (DALL-E 3 or Imagen).
+    Supports context-aware follow-up instructions using prompt array (similar to chat).
 
     Args:
         request (ImageGenerationRequest): Request body containing:
-            - prompt (str): Text prompt for image generation
+            - prompt (List[str]): Array of prompts. Last element is current prompt,
+              previous elements are history. Format: ['prompt1', 'prompt2', 'current_prompt']
             - size (str, optional): Size of the generated image (default: "1024x1024")
             - n (int, optional): Number of images to generate (default: 1)
-            - model_choice (str, optional): Model to use ("dall-e-3" or Imagen variant
-              such as "imagen-3.0-generate-002"). Default: "dall-e-3".
+            - model_choice (str, optional): Model to use ("dall-e-3" or Imagen variant). Default: "dall-e-3"
         current_user: Authenticated user information
 
     Returns:
         dict: Dictionary containing:
             - success (bool): Whether the image generation was successful
-            - image_url (str): URL of the generated image (if successful)
-            - error (str): Error message (if unsuccessful)
-            - prompt (str): The original prompt
+            - image_urls (list): URLs of generated images
+            - prompt (str): The original current prompt
+            - final_prompt (str): The final prompt used (after context rewriting)
+            - used_context (bool): Whether historical context was used
+            - rewrite_method (str): Rewriting method used ("llm", "none", or "error")
+            - context_type (str): How context was used ("modification", "new_request", or "none")
             - model (str): The model used for generation
+
+    Example:
+        First request:
+        {"prompt": ["a red car"], "size": "1024x1024"}
+
+        Follow-up request:
+        {"prompt": ["a red car", "make it blue"], "size": "1024x1024"}
     """
     try:
+        # Validate prompt array is not empty
+        if not request.prompt or len(request.prompt) == 0:
+            raise HTTPException(status_code=400, detail="Prompt array cannot be empty")
+
+        # Extract current prompt and history (similar to chat endpoint)
+        current_prompt = request.prompt[-1]
+        prompt_history = request.prompt[:-1] if len(request.prompt) > 1 else []
+
+        final_prompt = current_prompt
+        used_context = False
+        rewrite_method = "none"
+        context_type = "none"
+
+        # Check if we should use historical context for prompt rewriting
+        if prompt_history and len(prompt_history) > 0:
+            # Define LLM call for prompt rewriting using GPT-4o for better reasoning
+            def llm_call(prompt: str) -> str:
+                return get_azure_non_rag_response(
+                    configs, prompt, model_choice="gpt_5_mini", max_tokens=500
+                )
+
+            # Rewrite the prompt using historical context with LLM
+            (
+                final_prompt,
+                rewrite_method,
+                context_type,
+            ) = image_prompt_rewriter.rewrite_prompt(
+                prompt_history, current_prompt, llm_call
+            )
+            used_context = True
+            logging.info(
+                f"Context-aware rewrite: method={rewrite_method}, type={context_type}, "
+                f"history_len={len(prompt_history)}, "
+                f"orig_len={len(current_prompt)}, final_len={len(final_prompt)}"
+            )
+
+        # Enforce n=1 for DALL-E 3 (as per model constraints)
+        n_images = (
+            1
+            if not request.model_choice or "dall-e" in request.model_choice.lower()
+            else request.n
+        )
+
         # Select the appropriate image generator based on model_choice
         if request.model_choice and "imagen" in request.model_choice.lower():
             # Generate image using the imagen_handler
             logging.info(
-                f"Using Vertex AI Imagen model for image generation with prompt: {request.prompt}"
+                f"Using Vertex AI Imagen model for image generation - "
+                f"Original prompt: '{current_prompt}' -> Final prompt: '{final_prompt}'"
             )
             # Only pass an override when a specific Imagen variant is requested (imagen-...)
             imagen_override = (
@@ -4043,19 +4101,26 @@ async def generate_image(
                 else None
             )
             result = imagen_handler.generate_image(
-                prompt=request.prompt,
+                prompt=final_prompt,
                 size=request.size,
-                n=request.n,
+                n=n_images,
                 model_name=imagen_override,
             )
         else:
             # Default to DALL-E 3
             logging.info(
-                f"Using DALL-E 3 model for image generation with prompt: {request.prompt}"
+                f"Using DALL-E 3 model for image generation - "
+                f"Original prompt: '{current_prompt}' -> Final prompt: '{final_prompt}'"
             )
             result = dalle_handler.generate_image(
-                prompt=request.prompt, size=request.size, n=request.n
+                prompt=final_prompt, size=request.size, n=n_images
             )
+
+        # Add context information to response
+        result["final_prompt"] = final_prompt
+        result["used_context"] = used_context
+        result["rewrite_method"] = rewrite_method
+        result["context_type"] = context_type if "context_type" in locals() else "none"
 
         return result
     except Exception as e:
@@ -4064,6 +4129,14 @@ async def generate_image(
             "success": False,
             "error": str(e),
             "prompt": request.prompt,
+            "final_prompt": final_prompt
+            if "final_prompt" in locals()
+            else request.prompt,
+            "used_context": used_context if "used_context" in locals() else False,
+            "rewrite_method": rewrite_method
+            if "rewrite_method" in locals()
+            else "none",
+            "context_type": context_type if "context_type" in locals() else "none",
             "model": request.model_choice or "dall-e-3",
         }
 
@@ -4074,10 +4147,12 @@ async def generate_combined_images(
 ):
     """
     Generate images using both DALL-E and Imagen models concurrently with the same prompt.
+    Supports context-aware follow-up instructions using prompt array (similar to chat).
 
     Args:
         request (ImageGenerationRequest): Request body containing:
-            - prompt (str): Text prompt for image generation
+            - prompt (List[str]): Array of prompts. Last element is current prompt,
+              previous elements are history
             - size (str, optional): Size of the generated image (default: "1024x1024")
             - n (int, optional): Number of images to generate per model (default: 1)
         current_user: Authenticated user information
@@ -4087,16 +4162,63 @@ async def generate_combined_images(
             - success (bool): Whether either image generation was successful
             - dalle_result (dict): Result from DALL-E model
             - imagen_result (dict): Result from Imagen model
-            - prompt (str): The original prompt
+            - prompt (str): The original current prompt
+            - final_prompt (str): The final prompt used (after context rewriting)
+            - used_context (bool): Whether historical context was used
             - models (list): List of models used for generation
     """
     try:
-        logging.info(f"Generating images with both models for prompt: {request.prompt}")
+        # Validate prompt array is not empty
+        if not request.prompt or len(request.prompt) == 0:
+            raise HTTPException(status_code=400, detail="Prompt array cannot be empty")
+
+        # Extract current prompt and history (similar to chat endpoint)
+        current_prompt = request.prompt[-1]
+        prompt_history = request.prompt[:-1] if len(request.prompt) > 1 else []
+
+        final_prompt = current_prompt
+        used_context = False
+        rewrite_method = "none"
+        context_type = "none"
+
+        # Check if we should use historical context for prompt rewriting
+        if prompt_history and len(prompt_history) > 0:
+            # Define LLM call for prompt rewriting using GPT-4o for better reasoning
+            def llm_call(prompt: str) -> str:
+                return get_azure_non_rag_response(
+                    configs, prompt, model_choice="gpt_5_mini", max_tokens=500
+                )
+
+            # Rewrite the prompt using historical context with LLM
+            (
+                final_prompt,
+                rewrite_method,
+                context_type,
+            ) = image_prompt_rewriter.rewrite_prompt(
+                prompt_history, current_prompt, llm_call
+            )
+            used_context = True
+            logging.info(
+                f"Combined: Context-aware rewrite: method={rewrite_method}, type={context_type}, "
+                f"history_len={len(prompt_history)}, orig_len={len(current_prompt)}, "
+                f"final_len={len(final_prompt)}"
+            )
+
+        logging.info(
+            f"Generating images with both models - "
+            f"Original prompt: '{current_prompt}' -> Final prompt: '{final_prompt}'"
+        )
 
         # Use the combined image handler to generate images from both models
         result = await combined_image_handler.generate_images(
-            prompt=request.prompt, size=request.size, n=request.n
+            prompt=final_prompt, size=request.size, n=request.n
         )
+
+        # Add context information to response
+        result["final_prompt"] = final_prompt
+        result["used_context"] = used_context
+        result["rewrite_method"] = rewrite_method
+        result["context_type"] = context_type
 
         return result
     except Exception as e:
@@ -4104,7 +4226,7 @@ async def generate_combined_images(
         return {
             "success": False,
             "error": str(e),
-            "prompt": request.prompt,
+            "prompt": request.prompt[-1] if request.prompt else "",
             "models": ["dall-e-3", configs.vertexai_imagen.model_name],
         }
 

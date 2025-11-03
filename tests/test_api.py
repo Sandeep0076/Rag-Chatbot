@@ -699,9 +699,9 @@ def test_generate_dalle3_images(client):
     # Define the test prompt (content policy safe)
     test_prompt = "A peaceful mountain landscape with a serene lake reflecting the sky, digital art style"
 
-    # Prepare request data for DALL-E 3
+    # Prepare request data for DALL-E 3 (prompt is now an array)
     request_data = {
-        "prompt": test_prompt,
+        "prompt": [test_prompt],  # Changed to array format
         "size": "1024x1024",
         "n": 1,  # DALL-E 3 only supports 1 image
         "model_choice": "dall-e-3",
@@ -736,9 +736,9 @@ def test_generate_imagen3_images(client):
         "A beautiful garden with colorful flowers and butterflies, watercolor style"
     )
 
-    # Prepare request data for Imagen 3
+    # Prepare request data for Imagen 3 (prompt is now an array)
     request_data = {
-        "prompt": test_prompt,
+        "prompt": [test_prompt],  # Changed to array format
         "size": "1024x1024",
         "n": 2,  # Imagen supports multiple images
         "model_choice": "imagen-3.0-generate-002",
