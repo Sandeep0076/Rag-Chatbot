@@ -451,6 +451,11 @@ class EmbeddingHandler:
             )
 
             return azure_result, gemini_result
+        except Exception as e:
+            # Re-raise exceptions to be handled by create_embeddings
+            # This allows proper error handling and cleanup
+            logging.error(f"Exception in _process_embeddings_with_timeout: {str(e)}")
+            raise
 
     def _extract_embedding_exists_status(self, result) -> bool:
         """
@@ -1347,58 +1352,29 @@ class EmbeddingHandler:
             # This maintains API compatibility with existing code expecting both results
             gemini_result = {"success": True, "status": "completed"}
 
+            logging.info(
+                f"Completed Azure-only embedding generation for file_id: {file_id}"
+            )
+            return azure_result, gemini_result
+
         except Exception as e:
             from rtl_rag_chatbot_api.common.errors import (
                 EmbeddingCreationError,
                 map_exception_to_app_error,
             )
 
+            logging.error(
+                f"Azure embedding generation failed for {file_id}: {str(e)}",
+                exc_info=True,
+            )
+
+            # Map the exception to a proper error type
             app_error = map_exception_to_app_error(e)
             if not hasattr(app_error, "spec"):
                 app_error = EmbeddingCreationError(str(e), details={"file_id": file_id})
 
-            azure_result = e
-            gemini_result = {
-                "status": "failed",
-                "error": str(e),
-                "code": app_error.spec.code,
-                "key": app_error.spec.key,
-            }
-            logging.error(f"Azure embedding generation failed for {file_id}: {str(e)}")
-
-        # Handle any exceptions that occurred during processing
-        if isinstance(azure_result, Exception):
-            logging.error(
-                f"Azure embedding generation failed for {file_id}: {str(azure_result)}"
-            )
-            from rtl_rag_chatbot_api.common.errors import (
-                EmbeddingCreationError,
-                map_exception_to_app_error,
-            )
-
-            app_error = map_exception_to_app_error(azure_result)
-            if not hasattr(app_error, "spec"):
-                app_error = EmbeddingCreationError(
-                    str(azure_result), details={"file_id": file_id}
-                )
-
-            azure_result = {
-                "status": "failed",
-                "error": str(azure_result),
-                "code": app_error.spec.code,
-                "key": app_error.spec.key,
-            }
-            gemini_result = {
-                "status": "failed",
-                "error": str(azure_result),
-                "code": app_error.spec.code,
-                "key": app_error.spec.key,
-            }
-
-        logging.info(
-            f"Completed Azure-only embedding generation for file_id: {file_id}"
-        )
-        return azure_result, gemini_result
+            # Don't save failed embeddings - re-raise the error to prevent further processing
+            raise app_error
 
     async def _create_file_info(
         self,

@@ -11,6 +11,7 @@ from threading import Lock, Semaphore
 from typing import List
 
 import pytesseract
+import tiktoken
 from pdf2image import convert_from_path
 from pdfminer.high_level import extract_text
 
@@ -88,6 +89,17 @@ class BaseRAGHandler:
         self.embedding_model = None
         # Use the provided chroma_manager or create a new one
         self.chroma_manager = chroma_manager or ChromaDBManager()
+
+        # Initialize tiktoken encoder for accurate token counting
+        try:
+            self.tokenizer = tiktoken.get_encoding(
+                "cl100k_base"
+            )  # Used by text-embedding-3-large
+        except Exception as e:
+            logging.warning(
+                f"Failed to initialize tiktoken encoder: {e}, falling back to simple tokenization"
+            )
+            self.tokenizer = None
 
         # Model-specific token limits for response generation (not chunking)
         self.model_token_limits = {
@@ -220,7 +232,11 @@ class BaseRAGHandler:
 
             # Initialize resources and constants
             rate_limiter = RateLimiter(10)  # 10 requests per second
-            AZURE_EMBEDDING_LIMIT = 8000  # Azure's token limit per request
+            # Azure text-embedding-3-large has 8192 token limit
+            # Use 8000 as safe limit with 192 token buffer for safety
+            AZURE_EMBEDDING_LIMIT = (
+                8000  # Azure's token limit per request with safety margin
+            )
             MAX_WORKERS = 3  # Number of parallel threads
             processed_count = 0
             embedding_id = str(uuid.uuid4())
@@ -229,17 +245,43 @@ class BaseRAGHandler:
             prepared_chunks = []
             chunk_ids = []
 
-            # Pre-process chunks to handle token limits
+            # Pre-process chunks to handle token limits using accurate token counting
             for i, chunk in enumerate(chunks):
-                chunk_tokens = len(self.simple_tokenize(chunk))
+                chunk_tokens = self.count_tokens(chunk)
                 if chunk_tokens > AZURE_EMBEDDING_LIMIT:
-                    # Split large chunks into smaller ones
+                    # Split large chunks into smaller ones with additional safety margin
+                    logging.warning(
+                        f"Chunk {i} has {chunk_tokens} tokens, exceeding limit of {AZURE_EMBEDDING_LIMIT}. Splitting..."
+                    )
                     smaller_chunks = self.split_large_chunk(
-                        chunk, AZURE_EMBEDDING_LIMIT - 100
+                        chunk, AZURE_EMBEDDING_LIMIT - 200  # Extra safety margin
                     )
                     for j, small_chunk in enumerate(smaller_chunks):
+                        # Verify split chunk size
+                        split_chunk_tokens = self.count_tokens(small_chunk)
+                        if split_chunk_tokens > AZURE_EMBEDDING_LIMIT:
+                            logging.error(
+                                f"Split chunk {i}_{j} still has {split_chunk_tokens} tokens, exceeding limit!"
+                            )
+                            from rtl_rag_chatbot_api.common.errors import (
+                                EmbeddingCreationError,
+                            )
+
+                            raise EmbeddingCreationError(
+                                f"Unable to split chunk below token limit. "
+                                f"Chunk has {split_chunk_tokens} tokens. "
+                                f"Embedding creation failed due to token overflow.",
+                                details={
+                                    "file_id": file_id,
+                                    "chunk_tokens": split_chunk_tokens,
+                                    "limit": AZURE_EMBEDDING_LIMIT,
+                                },
+                            )
                         prepared_chunks.append(small_chunk)
                         chunk_ids.append(f"{embedding_id}_{i}_split_{j}")
+                        logging.info(
+                            f"Split chunk {i}_{j}: {split_chunk_tokens} tokens"
+                        )
                 else:
                     prepared_chunks.append(chunk)
                     chunk_ids.append(f"{embedding_id}_{i}")
@@ -485,7 +527,7 @@ class BaseRAGHandler:
             )
 
     def split_text(self, text: str) -> List[str]:
-        """Split text into chunks based on token limits."""
+        """Split text into chunks based on token limits using accurate token counting."""
         chunks = []
         paragraphs = text.split("\n\n")
         current_chunk = []
@@ -499,13 +541,13 @@ class BaseRAGHandler:
         logging.info(f"Splitting text with max_tokens limit: {max_tokens}")
 
         for paragraph in paragraphs:
-            paragraph_tokens = len(self.simple_tokenize(paragraph))
+            paragraph_tokens = self.count_tokens(paragraph)
 
             if paragraph_tokens > max_tokens:
                 # Split large paragraphs into smaller chunks
                 sentences = re.split(r"(?<=[.!?])\s+", paragraph)
                 for sentence in sentences:
-                    sentence_tokens = len(self.simple_tokenize(sentence))
+                    sentence_tokens = self.count_tokens(sentence)
                     if current_chunk_tokens + sentence_tokens > max_tokens:
                         if current_chunk:
                             chunks.append(" ".join(current_chunk))
@@ -534,18 +576,48 @@ class BaseRAGHandler:
         if current_chunk:
             chunks.append(" ".join(current_chunk))
 
-        # Log the chunking results for debugging
-        chunk_sizes = [len(self.simple_tokenize(chunk)) for chunk in chunks]
+        # Log the chunking results for debugging with accurate token counts
+        chunk_sizes = [self.count_tokens(chunk) for chunk in chunks]
         logging.info(f"Text split into {len(chunks)} chunks with sizes: {chunk_sizes}")
 
         return chunks
 
     def simple_tokenize(self, text: str) -> List[str]:
-        """Simple word tokenization."""
+        """
+        Tokenize text using tiktoken for accurate token counting.
+        Falls back to simple word tokenization if tiktoken is not available.
+
+        Returns:
+            List of tokens (or words if using fallback)
+        """
+        if self.tokenizer:
+            try:
+                return self.tokenizer.encode(text)
+            except Exception as e:
+                logging.warning(f"tiktoken encoding failed: {e}, using fallback")
+        # Fallback to simple word tokenization
         return re.findall(r"\b\w+\b", text.lower())
 
+    def count_tokens(self, text: str) -> int:
+        """
+        Count the number of tokens in text using tiktoken.
+        This is the accurate method for Azure OpenAI token counting.
+
+        Returns:
+            Number of tokens
+        """
+        if self.tokenizer:
+            try:
+                return len(self.tokenizer.encode(text))
+            except Exception as e:
+                logging.warning(
+                    f"tiktoken encoding failed: {e}, using fallback word count"
+                )
+        # Fallback to simple word count (less accurate but safe)
+        return len(re.findall(r"\b\w+\b", text.lower()))
+
     def split_large_chunk(self, chunk: str, max_tokens: int) -> List[str]:
-        """Split a large chunk into smaller pieces based on token limit."""
+        """Split a large chunk into smaller pieces based on token limit using accurate token counting."""
         words = chunk.split()
         current_chunk = []
         chunks = []
@@ -553,16 +625,19 @@ class BaseRAGHandler:
         overlap_tokens = int(max_tokens * self.chunk_overlap)  # Use configured overlap
 
         for word in words:
-            word_length = len(self.simple_tokenize(word))
+            word_length = self.count_tokens(word)
             if current_length + word_length > max_tokens:
                 if current_chunk:  # Only add if we have something
-                    chunks.append(" ".join(current_chunk))
+                    chunk_text = " ".join(current_chunk)
+                    chunks.append(chunk_text)
                     # Keep overlap_tokens worth of words for context
                     current_chunk = (
                         current_chunk[-overlap_tokens:] if overlap_tokens > 0 else []
                     )
-                    current_length = sum(
-                        len(self.simple_tokenize(w)) for w in current_chunk
+                    current_length = (
+                        self.count_tokens(" ".join(current_chunk))
+                        if current_chunk
+                        else 0
                     )
             current_chunk.append(word)
             current_length += word_length
