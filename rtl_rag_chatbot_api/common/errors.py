@@ -373,6 +373,10 @@ def map_exception_to_app_error(exc: Exception) -> BaseAppError:
         return DocTextTooShortError(msg)
     if "embedding" in low and "fail" in low:
         return EmbeddingCreationError(msg)
+    if "maximum context length" in low or (
+        "token" in low and ("limit" in low or "overflow" in low or "exceed" in low)
+    ):
+        return EmbeddingCreationError(msg)
     if "safety" in low and "block" in low:
         return SafetyFilterError(msg)
     if "chart" in low and ("json" in low or "parse" in low or "invalid" in low):
