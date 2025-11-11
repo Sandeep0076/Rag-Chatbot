@@ -653,10 +653,16 @@ def apply_custom_css():
     )
 
 
-def reset_session():
+def reset_session(preserve_username: bool = True):
+    """Reset session while optionally preserving username."""
+    preserved_username = st.session_state.get("username") if preserve_username else ""
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     initialize_session_state()
+    if preserve_username and preserved_username:
+        st.session_state.username = preserved_username
+        # Re-sync query params after reset
+        st.query_params["username"] = preserved_username
 
 
 def cleanup_files():
@@ -723,8 +729,8 @@ def handle_url_processing(url_input):
             logging.info(f"Received upload_result: {upload_result}")
             if "multi_file_mode" in upload_result:
                 logging.info(
-                    f"upload_result['multi_file_mode'] value: {upload_result['multi_file_mode']},"
-                    f" type: {type(upload_result['multi_file_mode'])}"
+                    f"upload_result['multi_file_mode'] value: {upload_result['multi_file_mode']},\n"
+                    f"type: {type(upload_result['multi_file_mode'])}"
                 )
             else:
                 logging.info("upload_result does not contain 'multi_file_mode'")
@@ -788,6 +794,20 @@ def handle_url_processing(url_input):
                     "Error processing URLs: Response format incorrect or no file IDs found."
                 )
                 return
+
+            # CRITICAL FIX: Extract and set session_id for URL uploads
+            session_id = upload_result.get("session_id")
+            logging.info(f"Extracted session_id from URL upload result: {session_id}")
+            if session_id:
+                st.session_state.current_session_id = session_id
+                logging.info(
+                    f"Successfully set session_id in session state: {session_id}"
+                )
+            else:
+                logging.error("No session_id found in URL upload response!")
+                st.error(
+                    "URL processing succeeded but no session ID was returned. Please try again."
+                )
 
             st.session_state.file_uploaded = True
             st.session_state.messages = []  # Reset chat history
@@ -1688,15 +1708,16 @@ def initialize_ui_state():
         st.session_state.uploaded_image = None
     if "nav_option" not in st.session_state:
         st.session_state.nav_option = "Chat"
-    # Visualization is now automatically detected by the backend
-    # The generate_visualization flag is still kept in session state for API compatibility
     if "generate_visualization" not in st.session_state:
         st.session_state.generate_visualization = False
+    # Load username from query params if not already set
+    if "username" not in st.session_state or not st.session_state.username:
+        if "username" in st.query_params and st.query_params["username"]:
+            st.session_state.username = st.query_params["username"]
     if "username" not in st.session_state:
         st.session_state.username = ""
-    # Initialize temperature parameter
     if "temperature" not in st.session_state:
-        st.session_state.temperature = None  # None means use model defaults
+        st.session_state.temperature = None
 
 
 def initialize_session_state():
@@ -1945,7 +1966,25 @@ def render_navigation():
             use_container_width=True,
         ):
             st.session_state.nav_option = "Image generation"
+            # Auto-select default image model when switching to Image generation
+            image_models = st.session_state.model_types.get("image", [])
+            if image_models:
+                # Try to find imagen-4 first, otherwise use the first image model
+                default_image_model = None
+                for model in image_models:
+                    if "imagen-4" in model.lower():
+                        default_image_model = model
+                        break
+                if not default_image_model:
+                    default_image_model = image_models[0]
 
+                # Only change if current model is not already an image model
+                if st.session_state.model_choice not in image_models:
+                    st.session_state.model_choice = default_image_model
+                    st.session_state.temp_model_choice = default_image_model
+                    st.session_state.current_model_type = "image"
+
+    # Properly close container div
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -2586,16 +2625,27 @@ def _render_chat_file_interface():
 
 
 def _render_user_information():
-    """Render user information section with modern styling."""
+    """Render user information section with modern styling (persistent username)."""
     st.markdown(
         '<div class="sidebar-header">User Information</div>', unsafe_allow_html=True
     )
-    username = st.text_input(
+    current_val = st.session_state.get("username", "")
+    username_input = st.text_input(
         "Enter your username:",
         label_visibility="collapsed",
         placeholder="Enter your username",
+        value=current_val,
+        key="username_input",
     )
-    st.session_state.username = username
+    # Only update if user provided a non-empty value (prevents blank overwrite on rerun)
+    if username_input:
+        if username_input != current_val:
+            st.session_state.username = username_input
+            # Persist in URL query params
+            st.query_params["username"] = username_input
+    # Ensure session_state.username remains accessible even if input cleared
+    elif not st.session_state.get("username"):
+        st.session_state.username = ""
 
 
 def _render_model_selection():

@@ -293,3 +293,179 @@ Return ONLY this JSON object:
 Self-check (do not print):
 - Correct category? Topic specific? Pattern used? 3–5 words? ≤40 chars? Language matches? JSON valid?
 """
+
+Image_prompt_rewriter_prompt = """You are an expert at understanding user intent for image generation.
+Each API call requires a complete, standalone prompt. Determine if the user's request modifies the current image
+ or requests something new.
+
+IMPORTANT CONTEXT:
+- Current prompt may contain multiple previous modifications
+- Each API call needs a COMPLETE prompt (no memory)
+- Decide: Modifying existing image or starting fresh?
+
+CURRENT IMAGE PROMPT: "{base_prompt}"
+USER'S NEW REQUEST: "{instruction}"
+
+═══════════════════════════════════════════════════════════════
+CORE PRINCIPLE - Understand Intent, Not Keywords:
+═══════════════════════════════════════════════════════════════
+
+Ask yourself:
+
+1. CONTINUITY: Does the request reference or build upon the current image?
+   - References something there? (the car, it, this, that object)
+   - Builds on existing scene? (changing, adding, removing elements)
+
+2. INDEPENDENCE: Could this stand alone as a new image?
+   - Completely different scene/subject?
+   - No semantic connection to current description?
+
+3. LINGUISTIC CLUES:
+   - Pronouns referring to existing elements → modification
+   - New complete scene description → new request
+   - Instructions to change/alter → modification
+   - Different subject with no reference → new request
+
+═══════════════════════════════════════════════════════════════
+LEARN FROM EXAMPLES - Understand the Pattern:
+═══════════════════════════════════════════════════════════════
+
+MULTI-STEP CHAINS:
+
+CHAIN 1 - Building a scene:
+Step 1: Previous: [empty] | New: "a woman standing in a garden"
+→ Decision: new_request | Final: "a woman standing in a garden"
+
+Step 2: Previous: "a woman standing in a garden" | New: "give her a blue dress"
+→ Decision: modification ("her" = the woman) | Final: "a woman wearing a blue dress standing in a garden"
+
+Step 3: Previous: "a woman wearing a blue dress standing in a garden" | New: "add roses around her"
+→ Decision: modification (adding to scene) | Final: "a woman wearing a blue dress standing
+in a garden with roses around her"
+
+Step 4: Previous: "a woman wearing a blue dress standing in a garden with roses around her" | New: "oil painting style"
+→ Decision: modification (style change) | Final: "a woman wearing a blue dress standing in
+a garden with roses around her, oil painting style"
+
+CHAIN 2 - Context switch:
+Step 1: Previous: "ein Roboter in einer Fabrik" | New: "make it futuristic"
+→ Decision: modification ("it" = robot) | Final: "ein futuristischer Roboter in einer Fabrik"
+
+Step 2: Previous: "ein futuristischer Roboter in einer Fabrik" | New: "a tropical beach"
+→ Decision: new_request (different scene, no connection) | Final: "a tropical beach"
+
+UNDERSTANDING "NEXT TO":
+
+Example A (MODIFICATION): Previous: "a red car parked on a street" | New: "put a tree next to it"
+→ "it" refers to car | Final: "a red car parked on a street with a tree next to it"
+
+Example B (NEW REQUEST): Previous: "a cat on a sofa" | New: "create a man standing and next to him a bicycle"
+→ New scene, no reference to cat | Final: "create a man standing and next to him a bicycle"
+
+PRONOUNS:
+
+Example C (MODIFICATION): Previous: "a dog in a park" | New: "make it brown"
+→ "it" = the dog | Final: "a brown dog in a park"
+
+Example D (NEW): Previous: "a cat sleeping" | New: "the Eiffel Tower at sunset"
+→ Proper noun, not referencing cat | Final: "the Eiffel Tower at sunset"
+
+COMMANDS vs DESCRIPTIONS:
+
+Example E (MODIFICATION): Previous: "a mountain landscape" | New: "add snow on the peaks"
+→ Command to modify | Final: "a mountain landscape with snow on the peaks"
+
+Example F (NEW): Previous: "a mountain landscape" | New: "show me a tropical beach"
+→ Different scene | Final: "show me a tropical beach"
+
+Example G (MODIFICATION): Previous: "a blue car on a road" | New: "change it to red"
+→ Changing attribute | Final: "a red car on a road"
+
+STYLE/ATMOSPHERE:
+
+Example H (MODIFICATION): Previous: "a castle on a hill" | New: "photorealistic"
+→ Style overlay | Final: "a castle on a hill, photorealistic"
+
+Example I (MODIFICATION): Previous: "a city street with people" | New: "make the scene night time"
+→ Lighting change | Final: "a city street with people at night"
+
+Example J (NEW): Previous: "a city street with people" | New: "a watercolor painting of mountains"
+→ Different subject despite style mention | Final: "a watercolor painting of mountains"
+
+EDGE CASES:
+
+Example K (MODIFICATION): Previous: "a sunset over water" | New: "add more colors"
+→ "more" implies enhancing existing | Final: "a sunset over water with vibrant colors"
+
+Example L (NEW): Previous: "a cat on a couch indoors" | New: "a cat climbing a tree outside"
+→ Different cat, location, action | Final: "a cat climbing a tree outside"
+
+Example M (INVALID): Previous: [empty] | New: "make it red"
+→ Modification without subject | Final: null
+
+═══════════════════════════════════════════════════════════════
+YOUR TASK:
+═══════════════════════════════════════════════════════════════
+
+1. Read CURRENT prompt (all accumulated changes)
+2. Read NEW request
+3. Ask: "Modifying what's there, or starting fresh?"
+4. Look for semantic connections and intent
+
+If MODIFICATION:
+✓ Take entire current prompt
+✓ Apply ONLY the requested change
+✓ Keep everything else unchanged
+✓ Replace old values when changing attributes
+✓ Integrate additions naturally
+✓ Maintain language mixing if present
+
+If NEW REQUEST:
+✓ Output exactly what user requested
+✓ Fresh image generation
+✓ Previous context discarded
+
+═══════════════════════════════════════════════════════════════
+CRITICAL RULES:
+═══════════════════════════════════════════════════════════════
+
+❌ Do NOT add unrequested details
+❌ Do NOT elaborate unnecessarily
+❌ Do NOT change unmentioned elements
+❌ Do NOT rely on keyword matching
+✓ DO preserve all previous modifications
+✓ DO apply only specific change requested
+✓ DO understand user intent
+✓ DO consider full context
+
+═══════════════════════════════════════════════════════════════
+OUTPUT FORMAT - MUST BE VALID JSON:
+═══════════════════════════════════════════════════════════════
+
+CRITICAL: Your response MUST be a valid JSON object. Always start with opening brace and end with closing brace.
+Do NOT include markdown code blocks, explanatory text, or any content outside the JSON object.
+
+Return EXACTLY this structure:
+
+{{
+  "decision": "modification",
+  "reasoning": "Brief explanation",
+  "final_prompt": "Complete prompt with change applied"
+}}
+
+OR
+
+{{
+  "decision": "new_request",
+  "reasoning": "Brief explanation",
+  "final_prompt": "The new request"
+}}
+
+REQUIRED JSON STRUCTURE:
+- Start with opening brace
+- Include all three fields: "decision", "reasoning", "final_prompt"
+- End with closing brace
+- Use double quotes for all strings
+- Escape special characters in strings (\", \\, \n, etc.)
+
+Now analyze and respond with your decision as valid JSON."""
