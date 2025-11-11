@@ -50,6 +50,7 @@ from rtl_rag_chatbot_api.chatbot.utils.image_prompt_rewriter import ImagePromptR
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
 from rtl_rag_chatbot_api.common.errors import (
+    BaseAppError,
     EmbeddingCreationError,
     FileUploadError,
     SafetyFilterError,
@@ -4062,7 +4063,7 @@ async def generate_image(
             # Define LLM call for prompt rewriting using GPT-4o for better reasoning
             def llm_call(prompt: str) -> str:
                 return get_azure_non_rag_response(
-                    configs, prompt, model_choice="gpt_5_mini", max_tokens=500
+                    configs, prompt, model_choice="gpt_5_mini", max_tokens=1000
                 )
 
             # Rewrite the prompt using historical context with LLM
@@ -4074,11 +4075,6 @@ async def generate_image(
                 prompt_history, current_prompt, llm_call
             )
             used_context = True
-            logging.info(
-                f"Context-aware rewrite: method={rewrite_method}, type={context_type}, "
-                f"history_len={len(prompt_history)}, "
-                f"orig_len={len(current_prompt)}, final_len={len(final_prompt)}"
-            )
 
         # Enforce n=1 for DALL-E 3 (as per model constraints)
         n_images = (
@@ -4116,29 +4112,43 @@ async def generate_image(
                 prompt=final_prompt, size=request.size, n=n_images
             )
 
-        # Add context information to response
+        # Check if generation failed - the handler already returns structured error format
+        if not result.get("success", False):
+            # The result already contains structured error format (code, key, message, details)
+            # Just add context information and return it directly
+            result["final_prompt"] = final_prompt
+            result["used_context"] = used_context
+            result["rewrite_method"] = rewrite_method
+            result["context_type"] = (
+                context_type if "context_type" in locals() else "none"
+            )
+
+            # Return the error response with proper HTTP status
+            http_status = result.get("http_status", 500)
+            return JSONResponse(status_code=http_status, content=result)
+
+        # Add context information to successful response
         result["final_prompt"] = final_prompt
         result["used_context"] = used_context
         result["rewrite_method"] = rewrite_method
         result["context_type"] = context_type if "context_type" in locals() else "none"
 
         return result
+
+    except BaseAppError:
+        # Re-raise structured errors from our error system
+        raise
     except Exception as e:
-        logging.error(f"Error generating image: {str(e)}")
-        return {
-            "success": False,
-            "error": str(e),
-            "prompt": request.prompt,
-            "final_prompt": final_prompt
-            if "final_prompt" in locals()
-            else request.prompt,
-            "used_context": used_context if "used_context" in locals() else False,
-            "rewrite_method": rewrite_method
-            if "rewrite_method" in locals()
-            else "none",
-            "context_type": context_type if "context_type" in locals() else "none",
-            "model": request.model_choice or "dall-e-3",
-        }
+        logging.error(f"Error generating image: {str(e)}", exc_info=True)
+        from rtl_rag_chatbot_api.common.errors import ImageCreationError
+
+        raise ImageCreationError(
+            f"Unexpected error during image generation: {str(e)}",
+            details={
+                "prompt": request.prompt[-1] if request.prompt else "",
+                "model": request.model_choice or "dall-e-3",
+            },
+        )
 
 
 @app.post("/image/generate-combined")
@@ -4186,10 +4196,10 @@ async def generate_combined_images(
             # Define LLM call for prompt rewriting using GPT-4o for better reasoning
             def llm_call(prompt: str) -> str:
                 return get_azure_non_rag_response(
-                    configs, prompt, model_choice="gpt_5_mini", max_tokens=500
+                    configs, prompt, model_choice="gpt_5_mini", max_tokens=1000
                 )
 
-            # Rewrite the prompt using historical context with LLM
+            # Rewrite prompt using historical context with LLM
             (
                 final_prompt,
                 rewrite_method,

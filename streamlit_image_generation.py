@@ -208,11 +208,20 @@ def display_dalle_image(dalle_result, col):
             error_msg = dalle_result.get("message") or dalle_result.get(
                 "error", "Unknown error"
             )
+            error_details = dalle_result.get("details") or dalle_result.get(
+                "error_details"
+            )
 
             if error_code and error_key:
                 st.error(f"DALL-E Error {error_code}: {error_key} - {error_msg}")
             else:
                 st.error(f"Failed to generate DALL-E image: {error_msg}")
+
+            # Display detailed error information if available
+            if error_details:
+                with st.expander("🔍 Error Details"):
+                    for key, value in error_details.items():
+                        st.text(f"{key}: {value}")
 
 
 def display_imagen_image(imagen_result, prompt, col):
@@ -269,11 +278,20 @@ def display_imagen_image(imagen_result, prompt, col):
             error_msg = imagen_result.get("message") or imagen_result.get(
                 "error", "Unknown error"
             )
+            error_details = imagen_result.get("details") or imagen_result.get(
+                "error_details"
+            )
 
             if error_code and error_key:
                 st.error(f"Imagen Error {error_code}: {error_key} - {error_msg}")
             else:
                 st.error(f"Failed to generate Imagen image: {error_msg}")
+
+            # Display detailed error information if available
+            if error_details:
+                with st.expander("🔍 Error Details"):
+                    for key, value in error_details.items():
+                        st.text(f"{key}: {value}")
 
 
 def display_combined_model_results(result, prompt):
@@ -523,9 +541,24 @@ def handle_image_generation():
                             )
                         st.info(f"**Final prompt:** {final_prompt}")
                 else:
-                    st.error(
-                        f"Failed to generate image: {result.get('error', 'Unknown error')}"
+                    # Extract structured error information
+                    error_code = result.get("code") or result.get("error_code")
+                    error_key = result.get("key") or result.get("error_key")
+                    error_msg = result.get("message") or result.get(
+                        "error", "Unknown error"
                     )
+                    error_details = result.get("details") or result.get("error_details")
+
+                    if error_code and error_key:
+                        st.error(f"Error {error_code}: {error_key} - {error_msg}")
+                    else:
+                        st.error(f"Failed to generate image: {error_msg}")
+
+                    # Display detailed error information if available
+                    if error_details:
+                        with st.expander("🔍 Error Details"):
+                            for key, value in error_details.items():
+                                st.text(f"{key}: {value}")
 
     # Add clear history button
     if st.session_state.image_prompt_history and st.button("Clear Prompt History"):

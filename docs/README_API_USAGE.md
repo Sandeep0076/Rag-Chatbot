@@ -513,6 +513,7 @@ Generate an image based on a text prompt using DALL-E 3 or Imagen models. Suppor
   {
     "success": true,
     "image_urls": ["https://example.com/generated-image.png"],
+    "is_base64": false,
     "prompt": "make the cars red",
     "final_prompt": "A futuristic city with red flying cars",
     "used_context": true,
@@ -522,6 +523,18 @@ Generate an image based on a text prompt using DALL-E 3 or Imagen models. Suppor
     "size": "1024x1024"
   }
   ```
+
+  **Response Fields**:
+  - `success` (bool): Whether image generation was successful
+  - `image_urls` (array): Array of image URLs (HTTP URLs for DALL-E, base64 data URLs for Imagen)
+  - `is_base64` (bool): Whether images are base64 encoded (false for DALL-E, true for Imagen)
+  - `prompt` (str): The original current prompt from the request
+  - `final_prompt` (str): The final prompt used after context rewriting (if applicable)
+  - `used_context` (bool): Whether historical context was used for prompt rewriting
+  - `rewrite_method` (str): Method used for rewriting ("llm", "none", or "error")
+  - `context_type` (str): Type of context usage ("modification", "new_request", or "none")
+  - `model` (str): The model used for generation
+  - `size` (str): The image size
 - **Prompt Array Format**:
   - **Single prompt**: `["your prompt here"]`
   - **With history**: `["previous prompt", "current prompt"]`
@@ -577,21 +590,48 @@ Generate images using both DALL-E and Imagen models concurrently with the same p
     "dalle_result": {
       "success": true,
       "image_urls": ["https://example.com/dalle-image.png"],
-      "model": "dall-e-3"
+      "is_base64": false,
+      "model": "dall-e-3",
+      "size": "1024x1024"
     },
     "imagen_result": {
       "success": true,
       "image_urls": ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."],
-      "model": "imagen-3.0"
+      "is_base64": true,
+      "model": "imagen-3.0",
+      "size": "1024x1024"
     },
     "prompt": "add birds flying in the sky",
     "final_prompt": "A beautiful sunset over mountains with birds flying in the sky",
     "used_context": true,
     "rewrite_method": "llm",
     "context_type": "modification",
-    "models": ["dall-e-3", "imagen-3.0"]
+    "models": ["dall-e-3", "imagen-3.0"],
+    "size": "1024x1024"
   }
   ```
+
+  **Response Fields**:
+  - `success` (bool): Whether either model succeeded
+  - `dalle_result` (object): Result from DALL-E model
+    - `success` (bool): Whether DALL-E generation succeeded
+    - `image_urls` (array): Array with single DALL-E image URL (HTTP URL)
+    - `is_base64` (bool): Always false for DALL-E (returns HTTP URLs)
+    - `model` (str): DALL-E model name
+    - `size` (str): Image size
+  - `imagen_result` (object): Result from Imagen model
+    - `success` (bool): Whether Imagen generation succeeded
+    - `image_urls` (array): Array of Imagen image URLs (base64 data URLs)
+    - `is_base64` (bool): Always true for Imagen (returns base64 data)
+    - `model` (str): Imagen model name
+    - `size` (str): Image size
+  - `prompt` (str): The original current prompt from the request
+  - `final_prompt` (str): The final prompt used after context rewriting
+  - `used_context` (bool): Whether historical context was used
+  - `rewrite_method` (str): Method used for rewriting ("llm", "none", or "error")
+  - `context_type` (str): Type of context usage ("modification", "new_request", or "none")
+  - `models` (array): List of models used
+  - `size` (str): The requested image size
 - **Prompt Array Format** (same as single image generation):
   - **Single prompt**: `["your prompt here"]`
   - **With history**: `["previous prompt", "current prompt"]`

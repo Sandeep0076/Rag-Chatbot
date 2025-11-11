@@ -8,9 +8,172 @@ import json
 import logging
 from typing import Callable, List, Tuple
 
+from rtl_rag_chatbot_api.common.prompts_storage import Image_prompt_rewriter_prompt
+
 
 class ImagePromptRewriter:
     """Rewrites image prompts by combining historical context with new instructions using LLM."""
+
+    @staticmethod
+    def _clean_response(response: str) -> str:
+        """Remove markdown code blocks and normalize JSON from response."""
+        response = response.strip()
+
+        # Remove markdown code blocks
+        if response.startswith("```"):
+            lines = response.split("\n")
+            response = "\n".join(
+                line for line in lines if not line.strip().startswith("```")
+            )
+            response = response.strip()
+
+        # Remove 'json' language identifier if present after backticks
+        if response.startswith("json"):
+            response = response[4:].strip()
+
+        # If response starts with a field name but no opening brace, add it
+        if not response.startswith("{") and (
+            '"decision"' in response or '"final_prompt"' in response
+        ):
+            response = "{" + response
+
+        # If response doesn't end with closing brace but has JSON fields, add it
+        if not response.endswith("}") and (
+            '"decision"' in response or '"final_prompt"' in response
+        ):
+            response = response + "}"
+
+        return response.strip()
+
+    @staticmethod
+    def _generate_json_candidates(response: str) -> List[str]:
+        """Generate multiple JSON parsing candidates from LLM response."""
+        import re
+
+        json_candidates = []
+
+        # Strategy 1: Direct JSON if starts with {
+        if response.startswith("{"):
+            json_candidates.append(response)
+
+        # Strategy 2: Extract from first { to last }
+        start_idx = response.find("{")
+        end_idx = response.rfind("}")
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            candidate = response[start_idx : end_idx + 1]
+            if candidate not in json_candidates:
+                json_candidates.append(candidate)
+
+        # Strategy 3: Reconstruct if missing opening brace but has fields
+        if '"decision"' in response and '"final_prompt"' in response:
+            if not response.strip().startswith("{"):
+                reconstructed = "{" + response.strip().lstrip("{").strip()
+                if not reconstructed.endswith("}"):
+                    reconstructed += "}"
+                json_candidates.append(reconstructed)
+
+                # Also try extracting fields via regex
+                decision_match = re.search(
+                    r'"decision"\s*:\s*"([^"]+)"', response, re.DOTALL
+                )
+                final_prompt_match = re.search(
+                    r'"final_prompt"\s*:\s*"((?:[^"\\]|\\.)*)"', response, re.DOTALL
+                )
+                reasoning_match = re.search(
+                    r'"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)"', response, re.DOTALL
+                )
+
+                if decision_match and final_prompt_match:
+                    reconstructed_obj = {
+                        "decision": decision_match.group(1),
+                        "final_prompt": final_prompt_match.group(1),
+                    }
+                    if reasoning_match:
+                        reconstructed_obj["reasoning"] = reasoning_match.group(1)
+                    json_candidates.append(json.dumps(reconstructed_obj))
+
+        # Strategy 4: Regex to find complete JSON object
+        pattern = re.search(
+            r'\{[^{}]*"decision"[^{}]*"final_prompt"[^{}]*\}', response, re.DOTALL
+        )
+        if pattern:
+            cand = pattern.group()
+            if cand not in json_candidates:
+                json_candidates.append(cand)
+
+        # Strategy 5: Clean up formatting issues
+        if response.count("{") >= 1 and response.count("}") >= 1:
+            cleaned = re.sub(r"\n\s*", " ", response)
+            cleaned = re.sub(r",\s*}", "}", cleaned)
+            cleaned = re.sub(r",\s*]", "]", cleaned)
+            if cleaned not in json_candidates:
+                json_candidates.append(cleaned)
+
+        return json_candidates
+
+    @staticmethod
+    def _try_parse_json(candidates: List[str], original_response: str) -> dict:
+        """Try to parse JSON from candidates, raise error if all fail."""
+        parse_errors = []
+        for i, candidate in enumerate(candidates):
+            try:
+                result = json.loads(candidate)
+                logging.info(
+                    f"Successfully parsed JSON candidate #{i + 1}/{len(candidates)}"
+                )
+                return result
+            except json.JSONDecodeError as je:
+                parse_errors.append(f"Candidate {i + 1}: {str(je)[:100]}")
+
+        # All parsing attempts failed
+        error_summary = "; ".join(parse_errors[:3])
+        logging.error(
+            f"All {len(candidates)} JSON parsing attempts failed. Errors: {error_summary}"
+        )
+        logging.error(
+            f"Original response (first 500 chars): '{original_response[:500]}'"
+        )
+        raise json.JSONDecodeError("No valid JSON in candidates", original_response, 0)
+
+    @staticmethod
+    def _fallback_parse(response: str, instruction: str) -> Tuple[str, str]:
+        """Fallback regex-based parsing when JSON parsing fails."""
+        import re
+
+        lower_resp = response.lower()
+        has_modification = (
+            "modification" in lower_resp and "new_request" not in lower_resp
+        )
+        has_new_request = "new_request" in lower_resp
+        decision = (
+            "modification"
+            if has_modification
+            else ("new_request" if has_new_request else "new_request")
+        )
+
+        # Try to extract final_prompt
+        fp_match = re.search(r'"final_prompt"\s*:\s*"(.*?)"', response, re.DOTALL)
+        if fp_match:
+            final_prompt = fp_match.group(1).strip()
+        else:
+            # Attempt to capture after final_prompt key without braces
+            fp_line = None
+            for line in response.splitlines():
+                if "final_prompt" in line:
+                    fp_line = line
+                    break
+            if fp_line and '"' in fp_line:
+                after_colon = fp_line.split(":", 1)[-1]
+                qparts = after_colon.split('"')
+                final_prompt = qparts[1].strip() if len(qparts) > 2 else instruction
+            else:
+                final_prompt = instruction
+
+        final_prompt = final_prompt.strip().strip('"').strip("'") or instruction
+        logging.info(
+            f"Fallback parsing succeeded: decision={decision}, final_prompt='{final_prompt[:120]}'"
+        )
+        return final_prompt, decision
 
     def _llm_rewrite(
         self,
@@ -32,62 +195,38 @@ class ImagePromptRewriter:
         Raises:
             Exception: If LLM call fails
         """
-        # Construct a minimal-diff full-rewriter prompt (no enhancement)
-        user_prompt = (
-            f"You are a minimal-diff prompt rewriter. Decide if the new request modifies the previous "
-            f"image or is a new request.\n\n"
-            f'PREVIOUS IMAGE PROMPT:\n"{base_prompt}"\n\n'
-            f'USER\'S NEW REQUEST:\n"{instruction}"\n\n'
-            f"DECISION CRITERIA:\n"
-            f"A) MODIFICATION: Changes an attribute of the existing scene/subject (color, style, add/remove element).\n"
-            f"B) NEW REQUEST: Describes a different scene/subject.\n\n"
-            f"YOUR TASK:\n"
-            f"1) If MODIFICATION: Output a FULL rewritten prompt. Apply ONLY the requested change.\n"
-            f"   - Preserve original wording/order as much as possible.\n"
-            f"   - No adjectives or new details unless explicitly requested.\n"
-            f"   - Prefer using only words from the base and the user's request plus minimal glue words.\n"
-            f"2) If NEW REQUEST: Output the user's request EXACTLY as given.\n\n"
-            f"IMPORTANT:\n"
-            f"- No enhancement, no style elaboration, no extra descriptors.\n"
-            f"- Do NOT introduce new nouns or locations unless explicitly requested.\n"
-            f"- Output JSON only.\n\n"
-            f"OUTPUT FORMAT (JSON):\n"
-            f'{{\n  "decision": "modification" or "new_request",\n'
-            f'  "final_prompt": "the final prompt text"\n}}\n'
+        # Call LLM
+        user_prompt = Image_prompt_rewriter_prompt.format(
+            base_prompt=base_prompt, instruction=instruction
         )
 
-        # Call LLM
         response = llm_call(user_prompt)
+        original_response = response
+        response = self._clean_response(response)
 
-        # Parse JSON response
+        # Try primary JSON parsing
         try:
-            # Clean up response - remove markdown code blocks if present
-            response = response.strip()
-            if response.startswith("```"):
-                # Remove markdown code blocks
-                lines = response.split("\n")
-                response = "\n".join(
-                    line for line in lines if not line.strip().startswith("```")
-                )
+            json_candidates = self._generate_json_candidates(response)
+            result = self._try_parse_json(json_candidates, original_response)
 
-            # Parse JSON
-            result = json.loads(response)
             decision = result.get("decision", "new_request")
-
-            # Always parse final_prompt from the model
-            final_prompt = result.get("final_prompt", instruction)
-            final_prompt = final_prompt.strip('"').strip("'").strip()
-            logging.info(
-                f"LLM analysis: decision={decision}, output_len={len(final_prompt)}"
-            )
+            final_prompt = result.get("final_prompt", instruction) or instruction
+            final_prompt = final_prompt.strip().strip('"').strip("'")
             return final_prompt, decision
 
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            logging.error(f"Primary JSON parsing failed: {str(e)[:200]}")
             logging.error(
-                f"Failed to parse LLM JSON response: {e}. Response: {response[:200]}"
+                f"Raw response (first 500 chars): '{original_response[:500]}'"
             )
-            # Fallback: treat as new request and use instruction as-is
-            return instruction, "new_request"
+            # Try fallback regex extraction
+            try:
+                return self._fallback_parse(response, instruction)
+            except Exception as fb_err:
+                logging.error(
+                    f"Fallback parsing failed: {fb_err}. Using instruction as new request."
+                )
+                return instruction.strip(), "new_request"
 
     def rewrite_prompt(
         self,
@@ -120,12 +259,8 @@ class ImagePromptRewriter:
             logging.error("No LLM call provided, cannot rewrite prompt")
             return current_prompt, "none", "none"
 
-        try:
-            # Use LLM for classification and get a minimal-diff full rewrite when modifying
-            rewritten, context_type = self._llm_rewrite(
-                base_prompt, current_prompt, llm_call
-            )
-            return rewritten, "llm", context_type
-        except Exception as e:
-            logging.error(f"LLM rewrite failed: {str(e)}, using current prompt as-is")
-            return current_prompt, "error", "none"
+        # Use LLM for classification and get a minimal-diff full rewrite when modifying
+        rewritten, context_type = self._llm_rewrite(
+            base_prompt, current_prompt, llm_call
+        )
+        return rewritten, "llm", context_type

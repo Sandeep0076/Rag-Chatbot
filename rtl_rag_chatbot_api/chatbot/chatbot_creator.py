@@ -402,9 +402,6 @@ class AzureChatbot(BaseRAGHandler):
             }
 
             if use_max_completion:
-                logging.info(
-                    f"Using max_completion_tokens for model: {self.model_config.deployment}"
-                )
                 completion_params["max_completion_tokens"] = max_response_tokens
                 completion_params[
                     "presence_penalty"
@@ -529,10 +526,6 @@ def get_azure_non_rag_response(
         }
 
         if use_max_completion:
-            logging.info(
-                f"Using max_completion_tokens for non-RAG response with model: "
-                f"{configs.azure_llm.models[model_choice].deployment}"
-            )
             completion_params["max_completion_tokens"] = effective_max_tokens
             completion_params[
                 "presence_penalty"
