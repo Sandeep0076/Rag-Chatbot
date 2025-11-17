@@ -20,7 +20,10 @@ from rtl_rag_chatbot_api.chatbot.gemini_handler import (
     GeminiSafetyFilterError,
     get_gemini_non_rag_response,
 )
-from rtl_rag_chatbot_api.chatbot.prompt_handler import format_question
+from rtl_rag_chatbot_api.chatbot.prompt_handler import (
+    format_question,
+    resolve_question_with_history,
+)
 from rtl_rag_chatbot_api.chatbot.utils.prompt_builder import PromptBuilder
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
@@ -93,6 +96,10 @@ class TabularDataHandler:
         self.sessions = {}
         self.dbs = {}
         self.agents = {}
+        # Cache previous formatted question per file for history-aware resolution
+        self.previous_formatted_by_file = {}
+        # Cache previous resolved question per file for stronger anchoring
+        self.previous_resolved_by_file = {}
 
         # Set temperature -use provided value or model-specific default
         if temperature is not None:
@@ -898,29 +905,42 @@ class TabularDataHandler:
         # Traditional single-file mode
         return self._get_table_info_for_file(self.file_id)
 
-    def get_answer(self, question: str) -> str:
+    def get_answer(self, question: Union[str, List[str]]) -> Union[str, dict]:
         """
         Processes a user's question and returns an answer based on the database content.
         For multi-file mode, it attempts to determine which database to query or uses a combined approach.
+        Now supports conversation history for contextual understanding.
 
         Args:
-            question (str): The user's input question.
+            question: Either a single question string or a list of conversation messages.
+                     If a list is provided, the last item is the current question and
+                     previous items are conversation history.
 
         Returns:
-            str: The answer to the user's question or an error message if processing fails.
+            Union[str, dict]: For tabular data, returns dict with 'answer' and 'intermediate_steps'.
+                             For multi-file, returns string (to maintain compatibility).
+                             Returns error message string if processing fails.
         """
         try:
+            # Extract the actual question text for multi-file routing and forced answers
+            if isinstance(question, list):
+                actual_question_text = question[-1]
+            else:
+                actual_question_text = question
+
             if self.is_multi_file and len(self.file_ids) > 1:
-                return self._get_multi_file_answer(question)
+                return self._get_multi_file_answer(actual_question_text)
             else:
                 # Standard single-file approach (also works when only one file in multi-file mode)
-                answer = self.ask_question(question)
-                if answer:
+                # Pass the full question (which could be a list with history) to ask_question
+                result = self.ask_question(question)
+                if result:
                     logging.info("Direct answer")
-                    return answer
+                    return result  # Return the dict with answer and intermediate_steps
                 else:
                     logging.info("Forced answer")
-                    return self.get_forced_answer(question, answer)
+                    forced_result = self.get_forced_answer(actual_question_text, "")
+                    return forced_result  # Return the dict from get_forced_answer
         except Exception as e:
             logging.error(f"Error in TabularDataHandler get_answer: {str(e)}")
             return f"An error occurred while processing your question: {str(e)}"
@@ -1208,21 +1228,24 @@ class TabularDataHandler:
         context_str = "\n\n".join(context_parts) + "\n\n"
         return context_str
 
-    def ask_question(self, question: str) -> Optional[str]:
+    def ask_question(self, question: Union[str, List[str]]) -> Optional[dict]:
         """
         Enhanced question processing with intelligent optimization and SQL filtering.
+        Now supports conversation history for contextual question resolution.
 
         Args:
-            question (str): The user's input question.
+            question: Either a single question string or a list of conversation messages.
+                     If a list is provided, the last item is the current question and
+                     previous items are conversation history (alternating user/assistant).
 
         Returns:
-            Optional[str]: The answer to the question, or None if processing fails.
+            Optional[dict]: Dictionary with 'answer' and 'intermediate_steps' keys, or None if processing fails.
         """
         if not self.agent:
             self._initialize_agent()
 
         try:
-            # Get database_info from file_info for format_question
+            # Prepare database_info for formatting and context usage
             database_info = {}
             if (
                 self.all_file_infos
@@ -1232,55 +1255,92 @@ class TabularDataHandler:
                 file_info = self.all_file_infos.get(self.file_id, {})
                 database_info = file_info.get("database_summary", {})
 
-            # Use enhanced format_question with intelligent context analysis
-            format_result = format_question(database_info, question, self.model_choice)
+            # Step 1: Handle conversation history if provided
+            if isinstance(question, list) and len(question) > 1:
+                # Extract conversation history and current question
+                conversation_history = question[:-1]
+                current_question = question[-1]
+
+                logging.info(
+                    f"Processing question with {len(conversation_history)} history messages"
+                )
+
+                # Retrieve cached previous formatted question for holistic context if available
+                previous_formatted_question = self.previous_formatted_by_file.get(
+                    self.file_id, ""
+                )
+                if previous_formatted_question:
+                    logging.info(
+                        f"Previous formatted question (cached): {previous_formatted_question}"
+                    )
+
+                # Resolve contextual references in the current question (with holistic context)
+                resolved_question = resolve_question_with_history(
+                    conversation_history,
+                    current_question,
+                    previous_formatted_question,
+                    self.previous_resolved_by_file.get(self.file_id, ""),
+                )
+
+                # Use the resolved question for further processing
+                question_to_process = resolved_question
+            elif isinstance(question, list) and len(question) == 1:
+                # Single item in list, extract it
+                question_to_process = question[0]
+            else:
+                # String question, use as-is (backward compatibility)
+                question_to_process = question
+
+            # TODO: In future we can insert an llm agent here to verify if it needs answer from database or
+            # using the last answer can further explain. example question : I want to know more specifically
+            # how to implement and connect this database to my application.
+            # User here Wants answer in detail based on History and non sql answer.
+
+            # Step 2: Use enhanced format_question with intelligent context analysis
+            format_result = format_question(
+                database_info, question_to_process, self.model_choice
+            )
             formatted_question = format_result["formatted_question"]
             needs_sql = format_result["needs_sql"]
             classification = format_result.get("classification", {})
             logging.info(f"Needs SQL: {needs_sql}")
             if not needs_sql:
-                # Direct answer from database summary - return as-is
+                # Cache formatted for next turn and return direct summary
                 logging.info("Direct answer provided from database summary")
-                return formatted_question
+                try:
+                    self.previous_formatted_by_file[self.file_id] = formatted_question
+                except Exception:
+                    pass
+                return {"answer": formatted_question, "intermediate_steps": None}
 
             # Get query classification for appropriate response formatting
-            logging.info(
-                "No direct answer provided from database summary. Using langchain agent.."
-            )
             logging.info(f"Formatted question: {formatted_question}")
             query_type = classification.get("category", "unknown")
             language = classification.get("language", "en")
+
+            # Cache formatted question for next turn
+            try:
+                self.previous_formatted_by_file[self.file_id] = formatted_question
+                # Save resolved (what we actually used) for next turn anchoring
+                self.previous_resolved_by_file[self.file_id] = question_to_process
+            except Exception:
+                pass
 
             # Execute SQL query through agent
             logging.info("Executing query through SQL agent")
             try:
                 response = self.agent.invoke({"input": formatted_question})
-
-                # Try to extract and execute SQL directly to return structured table data
-                # sql_query = self._extract_sql_from_formatted_question(
-                #     formatted_question
-                # )
-                # if sql_query and hasattr(self, "engine") and self.engine:
-                #     try:
-                #         with self.engine.connect() as connection:
-                #             cleaned_sql = self._clean_sql_query(sql_query)
-                #             result = connection.execute(text(cleaned_sql))
-                #             headers = list(result.keys())
-                #             rows = [list(row) for row in result.fetchall()]
-                #             # Return in [headers, *rows] format so the API formats a table with correct headers
-                #             return [headers, *rows]
-                #     except Exception as direct_sql_error:
-                #         logging.warning(
-                #             f"Direct SQL execution failed, falling back to LLM formatting: {str(direct_sql_error)}"
-                #         )
-
                 return self._process_agent_response(
-                    response, question, query_type, language
+                    response, question_to_process, query_type, language
                 )
 
             except Exception as agent_error:
                 return self._handle_agent_error(
-                    agent_error, formatted_question, question, query_type, language
+                    agent_error,
+                    formatted_question,
+                    question_to_process,
+                    query_type,
+                    language,
                 )
 
         except Exception as e:
@@ -1289,7 +1349,7 @@ class TabularDataHandler:
 
     def _process_agent_response(
         self, response: dict, question: str, query_type: str, language: str
-    ) -> str:
+    ) -> dict:
         """
         Process the agent response and format it appropriately.
 
@@ -1300,20 +1360,53 @@ class TabularDataHandler:
             language: Language for response
 
         Returns:
-            str: Formatted response
+            dict: Dictionary with 'answer' and 'intermediate_steps' keys
         """
         # Extract the final answer and intermediate steps
         final_answer = response.get("output", "No final answer found")
         logging.info(f"Final answer: {final_answer}")
         intermediate_steps = response.get("intermediate_steps", [])
 
+        # Debug: Log the structure of intermediate_steps for troubleshooting
+        logging.debug("Intermediate steps structure:")
+        for idx, step in enumerate(intermediate_steps):
+            logging.debug(f"  Step {idx}: {type(step)}")
+            if isinstance(step, tuple) and len(step) >= 2:
+                action, observation = step[0], step[1]
+                logging.debug(
+                    f"    Action type: {type(action)}, attributes: {dir(action)}"
+                )
+                if hasattr(action, "tool"):
+                    logging.debug(f"    Tool: {action.tool}")
+                if hasattr(action, "log"):
+                    logging.debug(f"    Has log: {bool(action.log)}")
+                if hasattr(action, "message"):
+                    logging.debug(f"    Has message: {bool(action.message)}")
+                    if hasattr(action.message, "content"):
+                        logging.debug(
+                            f"    Message content: {action.message.content[:100]}..."
+                        )
+                logging.debug(f"    Observation type: {type(observation)}")
+                logging.debug(f"    Observation preview: {str(observation)[:200]}...")
+
         logging.info("Formatting result from intermediate steps and final answer")
         truncated_context = self._truncate_intermediate_steps(
             intermediate_steps, final_answer, 50000, query_type
         )
 
+        # Extract table name from SQL query in intermediate steps
+        table_name = None
+        for step in intermediate_steps:
+            if isinstance(step, tuple) and len(step) >= 2:
+                action = step[0]
+                if hasattr(action, "tool") and action.tool == "sql_db_query":
+                    sql_query = action.tool_input
+                    table_name = self._extract_table_name_from_sql(sql_query)
+                    if table_name:
+                        break
+
         # Get column headers from database info for better formatting
-        column_headers = self._get_column_headers_for_prompt()
+        column_headers = self._get_column_headers_for_prompt(table_name)
 
         # Add column headers on the next line after truncated context
         if column_headers:
@@ -1328,16 +1421,25 @@ class TabularDataHandler:
         # Format the response using the appropriate model
         if self.model_choice.startswith("gemini"):
             try:
-                return get_gemini_non_rag_response(
+                formatted_answer = get_gemini_non_rag_response(
                     self.config, base_prompt, self.model_choice
                 )
             except GeminiSafetyFilterError as e:
                 logging.warning(
                     f"Safety filter blocked response in CSV handler: {str(e)}"
                 )
-                return f"I apologize, but I cannot provide a response to this question. {str(e)}"
+                formatted_answer = f"I apologize, but I cannot provide a response to this question. {str(e)}"
         else:
-            return get_azure_non_rag_response(self.config, base_prompt)
+            formatted_answer = get_azure_non_rag_response(self.config, base_prompt)
+
+        # Format intermediate steps for display
+        formatted_steps = (
+            self._format_intermediate_steps(intermediate_steps)
+            if intermediate_steps
+            else None
+        )
+
+        return {"answer": formatted_answer, "intermediate_steps": formatted_steps}
 
     def _handle_agent_error(
         self,
@@ -1346,7 +1448,7 @@ class TabularDataHandler:
         question: str,
         query_type: str,
         language: str,
-    ) -> str:
+    ) -> dict:
         """
         Handle agent execution errors with fallback strategies.
 
@@ -1358,7 +1460,7 @@ class TabularDataHandler:
             language: Language for response
 
         Returns:
-            str: Response from fallback strategy or raises the error
+            dict: Dictionary with 'answer' and 'intermediate_steps' keys
         """
         error_msg = str(agent_error)
         logging.warning(f"Agent execution error: {error_msg}")
@@ -1383,7 +1485,7 @@ class TabularDataHandler:
                         actual_response = actual_response[response_start:]
 
                 logging.info("Extracted response from parsing error")
-                return actual_response
+                return {"answer": actual_response, "intermediate_steps": None}
 
         # If we can't extract the response, try to get it from intermediate steps
         try:
@@ -1403,7 +1505,10 @@ class TabularDataHandler:
                                 result = connection.execute(text(cleaned_sql))
                                 headers = list(result.keys())
                                 rows = [list(row) for row in result.fetchall()]
-                                return [headers, *rows]
+                                return {
+                                    "answer": [headers, *rows],
+                                    "intermediate_steps": None,
+                                }
                         except Exception as engine_exec_error:
                             logging.warning(
                                 f"Engine execution failed in fallback, trying db.run: {str(engine_exec_error)}"
@@ -1412,8 +1517,11 @@ class TabularDataHandler:
                     raw_result = self.db.run(sql_query)
                     logging.info(f"Direct SQL result: {str(raw_result)[:500]}...")
 
+                    # Extract table name from SQL query
+                    table_name = self._extract_table_name_from_sql(sql_query)
+
                     # Format the raw result with column headers if available
-                    column_headers = self._get_column_headers_for_prompt()
+                    column_headers = self._get_column_headers_for_prompt(table_name)
 
                     # Add column headers on the next line if available
                     context_with_headers = (
@@ -1431,25 +1539,88 @@ class TabularDataHandler:
 
                     if self.model_choice.startswith("gemini"):
                         try:
-                            return get_gemini_non_rag_response(
+                            formatted_answer = get_gemini_non_rag_response(
                                 self.config, base_prompt, self.model_choice
                             )
                         except GeminiSafetyFilterError as e:
                             logging.warning(
                                 f"Safety filter blocked fallback response: {str(e)}"
                             )
-                            return f"I apologize, but I cannot provide a response to this question. {str(e)}"
+                            formatted_answer = (
+                                f"I apologize, but I cannot provide a response to "
+                                f"this question. {str(e)}"
+                            )
                     else:
-                        return get_azure_non_rag_response(self.config, base_prompt)
+                        formatted_answer = get_azure_non_rag_response(
+                            self.config, base_prompt
+                        )
+
+                    return {"answer": formatted_answer, "intermediate_steps": None}
         except Exception as fallback_error:
             logging.error(f"Fallback execution also failed: {str(fallback_error)}")
 
         # If all else fails, raise the original error
         raise agent_error
 
-    def _get_column_headers_for_prompt(self) -> Optional[str]:
+    def _extract_table_name_from_sql(self, sql_query: str) -> Optional[str]:
+        """
+        Extract the table name from a SQL query.
+
+        Args:
+            sql_query: The SQL query string
+
+        Returns:
+            Optional[str]: The extracted table name or None if not found
+        """
+        if not sql_query:
+            return None
+
+        try:
+            import re
+
+            # Remove comments and normalize whitespace
+            sql_query = re.sub(r"--.*$", "", sql_query, flags=re.MULTILINE)
+            sql_query = re.sub(r"/\*.*?\*/", "", sql_query, flags=re.DOTALL)
+            sql_query = " ".join(sql_query.split())
+
+            # Pattern to match table name after FROM clause
+            # Matches: FROM table_name, FROM `table_name`, FROM "table_name", etc.
+            pattern = r"\bFROM\s+([`\"]?)(\w+)\1"
+            match = re.search(pattern, sql_query, re.IGNORECASE)
+
+            if match:
+                table_name = match.group(2)
+                logging.info(f"Extracted table name from SQL: {table_name}")
+                return table_name
+
+            # If no match, try to find any table name in the query
+            # by checking against known table names
+            if self.file_id and self.file_id in self.database_summaries:
+                db_summary = self.database_summaries[self.file_id]
+                table_names = db_summary.get("table_names", [])
+                sql_upper = sql_query.upper()
+                for table_name in table_names:
+                    if table_name.upper() in sql_upper:
+                        logging.info(
+                            f"Found table name by matching known tables: {table_name}"
+                        )
+                        return table_name
+
+            return None
+
+        except Exception as e:
+            logging.warning(f"Error extracting table name from SQL: {str(e)}")
+            return None
+
+    def _get_column_headers_for_prompt(
+        self, table_name: Optional[str] = None
+    ) -> Optional[str]:
         """
         Extract column headers from the database information for inclusion in prompts.
+
+        Args:
+            table_name: Optional. The specific table name to get headers from.
+                       If None, defaults to the first table.
 
         Returns:
             Optional[str]: Comma-separated column headers or None if not available
@@ -1462,8 +1633,23 @@ class TabularDataHandler:
             if not db_summary or "tables" not in db_summary:
                 return None
 
-            # Get the first table (assuming single table for now)
-            table = db_summary["tables"][0] if db_summary["tables"] else None
+            # Find the specific table or use the first one
+            table = None
+            if table_name:
+                # Search for the table by name
+                for tbl in db_summary["tables"]:
+                    if tbl.get("name") == table_name:
+                        table = tbl
+                        break
+                if not table:
+                    logging.warning(
+                        f"Table '{table_name}' not found, using first table"
+                    )
+                    table = db_summary["tables"][0] if db_summary["tables"] else None
+            else:
+                # Default to first table
+                table = db_summary["tables"][0] if db_summary["tables"] else None
+
             if not table or "columns" not in table:
                 return None
 
@@ -1482,7 +1668,7 @@ class TabularDataHandler:
 
     def get_forced_answer(
         self, question: str, answer: str, language: str = "en"
-    ) -> str:
+    ) -> dict:
         """
         Attempts to extract an answer from a given text when a direct answer is not available.
 
@@ -1492,11 +1678,14 @@ class TabularDataHandler:
             language (str): The language of the user's question.
 
         Returns:
-            str: An extracted answer or "Cannot find answer" if no suitable answer is found.
+            dict: Dictionary with 'answer' and 'intermediate_steps' keys.
         """
         try:
+            # Try to extract table name from the answer (which might contain SQL)
+            table_name = self._extract_table_name_from_sql(answer)
+
             # Get column headers if available for better formatting
-            column_headers = self._get_column_headers_for_prompt()
+            column_headers = self._get_column_headers_for_prompt(table_name)
 
             # Add column headers on the next line if available
             answer_with_headers = answer
@@ -1510,19 +1699,24 @@ class TabularDataHandler:
             # Use the appropriate model based on model_choice
             if self.model_choice.startswith("gemini"):
                 try:
-                    return get_gemini_non_rag_response(
+                    formatted_answer = get_gemini_non_rag_response(
                         self.config, base_prompt, self.model_choice
                     )
                 except GeminiSafetyFilterError as e:
                     logging.warning(
                         f"Safety filter blocked response in get_forced_answer: {str(e)}"
                     )
-                    return f"I apologize, but I cannot provide a response to this question. {str(e)}"
+                    formatted_answer = f"I apologize, but I cannot provide a response to this question. {str(e)}"
             else:
-                return get_azure_non_rag_response(self.config, base_prompt)
+                formatted_answer = get_azure_non_rag_response(self.config, base_prompt)
+
+            return {"answer": formatted_answer, "intermediate_steps": None}
         except Exception as e:
             logging.error(f"Error in get_forced_answer: {str(e)}")
-            return f"An error occurred while processing your question: {str(e)}"
+            return {
+                "answer": f"An error occurred while processing your question: {str(e)}",
+                "intermediate_steps": None,
+            }
 
     def _truncate_intermediate_steps(
         self,
@@ -1682,6 +1876,139 @@ class TabularDataHandler:
                         break
 
         return essential_info
+
+    def _extract_thought_from_action(
+        self, action: Any, observation: Any
+    ) -> Optional[str]:
+        """Extract the agent's thought text from action/observation in a robust way."""
+        try:
+            if hasattr(action, "log") and action.log:
+                return action.log
+            if hasattr(action, "message"):
+                msg = getattr(action, "message")
+                if hasattr(msg, "content") and msg.content:
+                    return msg.content
+                if (
+                    hasattr(msg, "additional_kwargs")
+                    and isinstance(msg.additional_kwargs, dict)
+                    and "thought" in msg.additional_kwargs
+                ):
+                    return msg.additional_kwargs.get("thought")
+            if hasattr(action, "tool_input") and isinstance(action.tool_input, dict):
+                if "thought" in action.tool_input:
+                    return action.tool_input.get("thought")
+            obs_str = str(observation)
+            if "Thought:" in obs_str or "in_tableThought:" in obs_str:
+                for line in obs_str.split("\n"):
+                    if "Thought:" in line or "in_tableThought:" in line:
+                        return (
+                            line.replace("Thought:", "")
+                            .replace("in_tableThought:", "")
+                            .strip()
+                        )
+            act_str = str(action)
+            if "Thought" in act_str or "thinking" in act_str.lower():
+                return act_str
+        except Exception:
+            return None
+        return None
+
+    def _format_tool_input_block(self, tool_name: str, tool_input: Any) -> List[str]:
+        """Format tool input with SQL-aware pretty printing."""
+        lines: List[str] = []
+        if tool_name in {"sql_db_query", "query_sql_db"} and isinstance(
+            tool_input, str
+        ):
+            lines.append("\nSQL Query:")
+            sql_clean = self._clean_sql_query(tool_input)
+            for sql_line in sql_clean.split("\n"):
+                lines.append(f"  {sql_line}")
+        else:
+            lines.append(f"Input: {str(tool_input)[:500]}")
+        return lines
+
+    def _format_observation_block(self, observation: Any) -> List[str]:
+        """Format observation text with truncation and line splitting."""
+        out: List[str] = ["\nObservation:"]
+        obs_str = str(observation)
+        if len(obs_str) > 2000:
+            out.append(f"  {obs_str[:2000]}...")
+            out.append(f"  [Truncated - {len(obs_str)} total characters]")
+            return out
+        obs_lines = obs_str.split("\n")
+        for obs_line in obs_lines[:50]:
+            out.append(f"  {obs_line}")
+        if len(obs_lines) > 50:
+            out.append(f"  ... [{len(obs_lines) - 50} more lines]")
+        return out
+
+    def _format_step_block(self, idx: int, step: Any) -> List[str]:
+        """Format one intermediate step into a list of lines."""
+        lines: List[str] = [f"Step {idx}:", "-" * 80]
+        if not (isinstance(step, tuple) and len(step) >= 2):
+            lines.append(f"  {str(step)[:500]}")
+            lines.append("")
+            return lines
+
+        action, observation = step[0], step[1]
+        logging.debug(f"Action type: {type(action)}, attributes: {dir(action)}")
+
+        thought = self._extract_thought_from_action(action, observation)
+        if thought:
+            lines.append("Thought:")
+            thought_lines = str(thought).split("\n")
+            for tl in thought_lines[:10]:
+                lines.append(f"  {tl}")
+            if len(thought_lines) > 10:
+                lines.append(f"  ... [{len(thought_lines) - 10} more lines]")
+            lines.append("")
+
+        if hasattr(action, "tool"):
+            tool_name = action.tool
+            lines.append(f"Tool: {tool_name}")
+            if hasattr(action, "tool_input"):
+                lines.extend(
+                    self._format_tool_input_block(tool_name, action.tool_input)
+                )
+        else:
+            lines.append(f"Action: {str(action)[:500]}")
+
+        lines.extend(self._format_observation_block(observation))
+        lines.append("")
+        return lines
+
+    def _format_intermediate_steps(self, intermediate_steps: list) -> str:
+        """
+        Format intermediate steps into human-readable text.
+
+        Args:
+            intermediate_steps: List of tuples (action, observation) from agent execution
+
+        Returns:
+            str: Formatted text showing agent actions, observations, and reasoning
+        """
+        if not intermediate_steps:
+            return ""
+
+        formatted_lines: List[str] = []
+        formatted_lines.append("=" * 80)
+        formatted_lines.append("AGENT EXECUTION TRACE")
+        formatted_lines.append("=" * 80)
+        formatted_lines.append("")
+
+        for idx, step in enumerate(intermediate_steps, 1):
+            try:
+                formatted_lines.extend(self._format_step_block(idx, step))
+            except Exception as e:
+                logging.warning(f"Error formatting step {idx}: {str(e)}")
+                formatted_lines.append(f"Step {idx}: [Error formatting step]")
+                formatted_lines.append("")
+
+        formatted_lines.append("=" * 80)
+        formatted_lines.append(f"Total Steps: {len(intermediate_steps)}")
+        formatted_lines.append("=" * 80)
+
+        return "\n".join(formatted_lines)
 
     def _extract_sql_from_formatted_question(
         self, formatted_question: str

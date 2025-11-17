@@ -1,6 +1,8 @@
 # Fix line length violations and add missing blank lines
 import json
 import logging
+import re
+from typing import List
 
 from configs.app_config import Config
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
@@ -137,15 +139,26 @@ User Question: {user_question}
 - Extract actual category counts from database_info statistics
 - Extract table sizes and column information
 - **CRITICAL**: Identify the actual table names from database_info.tables or database_info.table_names
+- **CRITICAL**: Extract ALL column names from database_info.tables[].columns[] and verify they exist
+  before using them in SELECT, WHERE, GROUP BY, ORDER BY, or any SQL clause
 - Make decisions based on REAL data characteristics, not assumptions
 
 **RESPONSE RULES:**
 - For DIRECT_SUMMARY: Provide answer directly from database_info
 - For SQL-requiring queries: Generate ONLY the SQL statement, no explanations
 - Always use case-insensitive comparisons for text searches
+- **CRITICAL NAME/TEXT MATCHING**: For name or text searches, ALWAYS use LIKE with wildcards:
+  - Example: For "Aaron" use `LOWER(customer_name) LIKE '%aaron%'` NOT `= 'aaron'`
+  - Example: For "Smith" use `LOWER(employee_name) LIKE '%smith%'` NOT `= 'smith'`
+  - This ensures partial matches work (e.g., "Aaron" matches "Aaron Riggs")
+  - Only use exact equality (=) for categorical fields like status codes, IDs, or exact enums
 - Include aggregation strategy in the query when needed
 - Never include disclaimers or technical explanations
 - **CRITICAL**: Use the actual table names from database_info - NEVER use "your_table_name" or similar placeholders
+- **CRITICAL**: Use ONLY column names that exist in database_info.tables[].columns[].name
+  - If the user mentions "job", check if it's "job_type" or similar in the schema
+  - Map user terms to actual column names (e.g., "employee" → "employee_name", "job" → "job_type")
+  - NEVER invent or guess column names. Only use what exists in database_info
 - If multiple tables exist, choose the most appropriate one based on the question context
 - **HARD CAP RULE**: Apply LIMIT 25 intelligently based on query intent:
 - For specific row requests (e.g., "second row", "row 5", "first 3 rows"):
@@ -479,6 +492,7 @@ def enhance_query_with_context(
     classification: dict,
     database_context: dict,
     model_choice: str = "gpt_4o_mini",
+    database_info: dict = None,
 ) -> str:
     """
     Enhance query based on classification and actual data context.
@@ -488,6 +502,7 @@ def enhance_query_with_context(
         classification: Question classification result
         database_context: Database context analysis
         model_choice: The model choice to use for processing (default: "gpt_4o_mini")
+        database_info: Full database schema including column names
 
     Returns:
         str: Enhanced query with appropriate optimization
@@ -495,6 +510,22 @@ def enhance_query_with_context(
 
     category = classification.get("category", "SIMPLE_AGGREGATION")
     optimization = classification.get("optimization_strategy", "none")
+
+    # Extract table information and schema from database_info
+    schema_info = ""
+    if database_info and isinstance(database_info, dict):
+        tables = database_info.get("tables", [])
+        schema_parts = []
+        for table in tables:
+            table_name = table.get("name", "")
+            columns = table.get("columns", [])
+            if table_name and columns:
+                col_names = [col.get("name", "") for col in columns if col.get("name")]
+                schema_parts.append(
+                    f"Table '{table_name}' columns: {', '.join(col_names)}"
+                )
+        if schema_parts:
+            schema_info = "\n".join(schema_parts)
 
     # Extract table information from database context
     table_summaries = database_context.get("table_summaries", [])
@@ -506,6 +537,8 @@ def enhance_query_with_context(
         if table_names
         else "No table information available"
     )
+    if schema_info:
+        table_info_str = f"{table_info_str}\n\n{schema_info}"
 
     if category == "TIME_SERIES" and optimization == "temporal_aggregation":
         # Check actual temporal context
@@ -589,6 +622,12 @@ def enhance_query_with_context(
             enhancement_prompt
             + "\nSQL OUTPUT RULES:\n"
             + "- Use the accurate table name from context.\n"
+            + "- **CRITICAL**: Use ONLY column names from database_context that actually exist in the schema.\n"
+            + "- Map user terms to actual column names (e.g., 'job' → 'job_type').\n"
+            + "- NEVER invent or guess column names.\n"
+            + "- **CRITICAL NAME MATCHING**: For name/text searches, use LIKE with wildcards:\n"
+            + "  Example: LOWER(customer_name) LIKE '%aaron%' NOT = 'aaron'\n"
+            + "  This ensures partial matches (e.g., 'Aaron' matches 'Aaron Riggs').\n"
             + "- Return only raw SQL (no markdown or comments).\n"
             + "- Apply LIMIT intelligently: preserve specific row requests, add LIMIT 25 for general queries;\n"
             + "  when OFFSET is present, preserve it.\n"
@@ -607,8 +646,229 @@ def enhance_query_with_context(
         return user_question  # Fallback to original question
 
 
+def resolve_question_with_history(
+    conversation_history: List[str],
+    current_question: str,
+    previous_formatted_question: str = "",
+    previous_resolved_question: str = "",
+) -> str:
+    """
+    Resolve contextual references in the current question by analyzing conversation history.
+    Transforms questions that reference previous context into standalone questions.
+
+    This function uses llm to intelligently determine if the current question
+    needs to be modified based on conversation history. If the question is contextual
+    (e.g., "Only for 2023", "What about profit?"), it merges the context to create
+    a clear standalone question. If the question is already standalone, it returns
+    it unchanged.
+
+    Args:
+        conversation_history: List of previous messages in the conversation.
+                            Expected format: [msg1, msg2, ..., previous_question, previous_answer]
+        current_question: The user's current/latest question that may contain contextual references
+        previous_formatted_question: Optional. The formatted SQL or summary of the previous
+                                     question (holistic view of constraints like filters/groupings)
+        previous_resolved_question: Optional. The previously resolved question (fully
+                                    contextualized) actually used for querying.
+
+    Returns:
+        str: A standalone question that includes necessary context from history,
+             or the original question if no modification is needed
+
+    Examples:
+        History: ["Show me sales by region.", "Here's the sales data...", "Only for 2023."]
+        Current: "Only for 2023."
+        Returns: "Show me sales by region for 2023."
+
+        History: ["List top 10 products by revenue.", "Here are the products...", "What about profit?"]
+        Current: "What about profit?"
+        Returns: "List top 10 products by profit instead of revenue."
+
+        History: ["Show me all employees."]
+        Current: "What is the average salary?"
+        Returns: "What is the average salary?" (no modification needed)
+    """
+    # If there's no history, return the question as-is
+    if not conversation_history or len(conversation_history) == 0:
+        logging.info("No conversation history, returning original question")
+        return current_question
+
+    # If history exists but current question seems standalone (has clear SQL-like intent),
+    # we still pass it to LLM for verification but with lower weight
+    try:
+        # Build conversation context for the LLM
+        # Frontend history format (includes current question at the end):
+        # - First turn: [Q1]
+        # - Second turn: [Q1, A1, Q2]
+        # - Third turn: [Q1, A1, Q2, A2, Q3]
+        # Backend passes conversation_history WITHOUT the current question, and current_question separately.
+        # Therefore to anchor to the previous user question (Qn), use:
+        # - if len(conversation_history) == 0: no previous question
+        # - if len(conversation_history) == 1: previous question = conversation_history[-1]
+        # - if len(conversation_history) >= 2:
+        #   previous question = conversation_history[-2],
+        #   previous answer = conversation_history[-1]
+
+        messages = conversation_history
+
+        previous_user_question = ""
+        previous_assistant_answer = ""
+
+        if len(messages) == 0:
+            previous_user_question = ""
+            previous_assistant_answer = ""
+        elif len(messages) == 1:
+            previous_user_question = messages[-1]
+            previous_assistant_answer = ""
+        else:
+            previous_user_question = messages[-2]
+            previous_assistant_answer = messages[-1]
+
+        # Prefer the previously resolved question as the anchor if provided
+        if previous_resolved_question:
+            previous_user_question = previous_resolved_question
+
+        history_parts = []
+        if previous_user_question:
+            history_parts.append(
+                f"Previous question (resolved when available): {previous_user_question}"
+            )
+        if previous_assistant_answer:
+            history_parts.append(f"Previous answer: {previous_assistant_answer}")
+
+        if previous_formatted_question:
+            # Strip generic hard-cap LIMIT 25 from context while preserving other LIMIT values
+            try:
+                cleaned_prev_formatted = str(previous_formatted_question)
+                # Remove patterns: "LIMIT 25", optional "OFFSET n", or "LIMIT n, 25"
+                cleaned_prev_formatted = re.sub(
+                    r"(?is)\s+LIMIT\s+25\b(?:\s+OFFSET\s+\d+)?",
+                    "",
+                    cleaned_prev_formatted,
+                )
+                cleaned_prev_formatted = re.sub(
+                    r"(?is)\s+LIMIT\s+\d+\s*,\s*25\b",
+                    "",
+                    cleaned_prev_formatted,
+                )
+                # Tidy excess whitespace and trailing semicolons/spaces
+                cleaned_prev_formatted = cleaned_prev_formatted.strip().rstrip(";")
+            except Exception:
+                cleaned_prev_formatted = str(previous_formatted_question)
+
+            history_parts.append(
+                "Previous formatted question (holistic context): "
+                + cleaned_prev_formatted
+            )
+
+        history_context = "\n".join(history_parts)
+
+        resolution_prompt = f"""You are a question resolution assistant for a tabular data chat system.
+Your task is to determine if the current question EXPLICITLY references previous conversation context.
+
+**Conversation History:**
+{history_context}
+
+**Current Question:**
+{current_question}
+
+**CRITICAL RULES:**
+1. ONLY modify the question if it contains EXPLICIT contextual references like:
+   - Continuations: "Only for 2023", "Just Q1", "also", "too"
+   - Alternatives: "What about X?", "How about Y?", "instead"
+   - Pronouns: "those", "these", "that", "it", "them"
+   - Comparisons: "same for", "different from"
+   - Follow-ups: "more details", "tell me more", "specifically"
+
+2. If the question is COMPLETE and STANDALONE (has subject, verb, object), return it EXACTLY as is
+   - Example: "How many books are there in Fiction genre?" → Return unchanged
+   - Example: "Give me top 5 rows of the table" → Return unchanged
+   - Example: "What is the average price?" → Return unchanged
+
+3. ONLY add context when the question is INCOMPLETE without history
+   - Example: "What about Non Fiction?" → Needs previous context
+   - Example: "Only for 2023" → Needs previous context
+   - Example: "Those entries" → Needs previous context
+
+4. CONTEXT INHERITANCE (when modifying):
+   - When the current question uses references (e.g., "in this", "those", "that"), INHERIT the scope,
+     filters, and constraints from the Previous question/answer.
+   - Examples of constraints to inherit: population filters (e.g., Unemployed), time windows,
+     categories, groupings, joins, and previously established subsets.
+   - Do NOT broaden the scope. Preserve the exact subset unless the new question explicitly changes it.
+   - **CRITICAL**: Merge filters DIRECTLY into the new question. Do NOT use vague references like
+     "out of these rows", "from the previous results", "those shown", etc.
+   - Instead, explicitly restate the filters: e.g., "for Work Hours Per Day > 6 AND stress_level > 6"
+
+**Output Format:**
+Return ONLY the question (modified or unchanged). No explanations, no markdown, no prefixes.
+
+**Examples:**
+
+Example 1 - MODIFY (has contextual reference "Only"):
+History: Previous question: Show me sales by region.
+Current: Only for 2023.
+Output: Show me sales by region for 2023.
+
+Example 2 - MODIFY (has contextual reference "What about"):
+History: Previous question: How many books in Fiction genre?
+Current: What about Non Fiction?
+Output: How many books are there in Non Fiction genre?
+
+Example 3 - KEEP UNCHANGED (complete standalone question):
+History: Previous question: Show me sales by region.
+Current: How many books are there in Fiction genre?
+Output: How many books are there in Fiction genre?
+
+Example 4 - KEEP UNCHANGED (complete standalone question):
+History: Previous question: What's this file about?
+Current: Give me top 5 rows of the table.
+Output: Give me top 5 rows of the table.
+
+Example 5 - MODIFY (has pronoun "these entries"):
+History: Previous question: Search for "skills".
+Current: Now look at these entries in detail.
+Output: From the entries containing 'skills', show details about those that discuss Claude Skills.
+
+Example 6 - MODIFY (inherit prior filter "Unemployed"):
+History: Previous question: Give me the count of different social media platform names among Unemployed users.
+Current: In this what is the average stress level for each platform
+Output: What is the average stress level for each social platform among Unemployed users?
+
+Example 7 - MODIFY (inherit prior filter and merge with new condition):
+History: Previous question (resolved when available): Give data for Work Hours Per Day more than 6 hours
+Current: Out of these how many have stress level more than 6
+Output: Give data for Work Hours Per Day more than 6 hours who have stress_level greater than 6
+
+Now resolve the current question based on the conversation history provided above.
+"""
+
+        resolved_question = get_azure_non_rag_response(
+            configs, resolution_prompt, model_choice="gpt_5_mini"
+        )
+
+        # Clean up the response (remove any markdown, quotes, or extra whitespace)
+        resolved_question = resolved_question.strip()
+        if resolved_question.startswith('"') and resolved_question.endswith('"'):
+            resolved_question = resolved_question[1:-1]
+        if resolved_question.startswith("'") and resolved_question.endswith("'"):
+            resolved_question = resolved_question[1:-1]
+        logging.info(3 * "--------------------------------")
+        logging.info(f"Previous user question: {previous_user_question}")
+        logging.info(f"Original question: {current_question}")
+        logging.info(f"Resolved question: {resolved_question}")
+        logging.info(3 * "--------------------------------")
+
+        return resolved_question
+
+    except Exception as e:
+        logging.error(f"Error resolving question with history: {str(e)}")
+        # Fallback to original question on error
+        return current_question
+
+
 def format_question(
-    database_info: dict, user_question: str, model_choice: str = "gpt_4o_mini"
+    database_info: dict, user_question: str, model_choice: str = "gpt_5_mini"
 ) -> dict:
     """
     Enhanced question formatting with intelligent context awareness and optimization.
@@ -616,7 +876,7 @@ def format_question(
     Args:
         database_info: Information about the database structure (full database_summary)
         user_question: The original user question
-        model_choice: The model choice to use for processing (default: "gpt_4o_mini")
+        model_choice: The model choice to use for processing (default: "gpt_5_mini")
 
     Returns:
         dict: Contains 'formatted_question' and 'needs_sql' flag
@@ -658,7 +918,11 @@ def format_question(
             if classification.get("optimization_strategy") != "none":
                 # Apply intelligent optimization
                 formatted_question = enhance_query_with_context(
-                    user_question, classification, database_context, model_choice
+                    user_question,
+                    classification,
+                    database_context,
+                    model_choice,
+                    database_info,
                 )
             else:
                 # Standard query formatting

@@ -3255,7 +3255,7 @@ async def _format_chat_response(
     Helper function to format the chat response based on response type and query parameters.
 
     Args:
-        response: The raw response from the model
+        response: The raw response from the model (can be string, dict, or list)
         query: Original query object
         generate_visualization: Whether visualization was requested
         is_tabular: Whether the response is for tabular data
@@ -3263,23 +3263,43 @@ async def _format_chat_response(
         configs: Application configuration
 
     Returns:
-        Formatted response dictionary
+        Formatted response dictionary with optional intermediate_steps
     """
+    # Handle dict response from TabularDataHandler (with intermediate steps)
+    intermediate_steps = None
+    if isinstance(response, dict) and "answer" in response:
+        intermediate_steps = response.get("intermediate_steps")
+        response = response["answer"]
+
     # If the model returned a table-like structure [headers, *rows], format it
     if isinstance(response, list):
         try:
             if response and isinstance(response[0], (list, tuple)):
-                return format_table_response(response)
+                table_response = format_table_response(response)
+                # Add intermediate steps if available
+                if intermediate_steps:
+                    table_response["intermediate_steps"] = intermediate_steps
+                return table_response
         except Exception:
             pass
 
     if generate_visualization:
-        return handle_visualization(response, query, is_tabular, configs, temperature)
+        viz_response = handle_visualization(
+            response, query, is_tabular, configs, temperature
+        )
+        # Add intermediate steps if available
+        if intermediate_steps:
+            viz_response["intermediate_steps"] = intermediate_steps
+        return viz_response
 
     final_response_data = {
         "response": str(response),
         "is_table": is_tabular if is_tabular is not None else False,
     }
+
+    # Add intermediate steps if available
+    if intermediate_steps is not None:
+        final_response_data["intermediate_steps"] = intermediate_steps
 
     if is_multi_file and query.file_ids:
         final_response_data["sources"] = query.file_ids
@@ -3552,19 +3572,31 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             else:
                 question_to_model = current_actual_question
 
-            if len(query.text) > 1:
-                previous_messages = "\n".join(
-                    [f"Previous message: {msg}" for msg in query.text[:-1]]
-                )
-                chat_context = (
-                    f"{previous_messages}\nCurrent question: {question_to_model}"
-                )
+            # Different history handling for tabular vs non-tabular data
+            if is_tabular:
+                # For tabular data, pass the full conversation array
+                # The TabularDataHandler will resolve contextual references internally
+                if len(query.text) > 1:
+                    # Pass full array including history
+                    response = model.get_answer(query.text)
+                else:
+                    # Single question, pass as-is
+                    response = model.get_answer(question_to_model)
             else:
-                chat_context = question_to_model
+                # For PDF/document chat, use traditional string concatenation
+                if len(query.text) > 1:
+                    previous_messages = "\n".join(
+                        [f"Previous message: {msg}" for msg in query.text[:-1]]
+                    )
+                    chat_context = (
+                        f"{previous_messages}\nCurrent question: {question_to_model}"
+                    )
+                else:
+                    chat_context = question_to_model
 
-            # Todo: If multiple file and tablular collect all responses
-            # and give to non rag and return answer.
-            response = model.get_answer(chat_context)
+                # Todo: If multiple file and tabular collect all responses
+                # and give to non rag and return answer.
+                response = model.get_answer(chat_context)
 
             return await _format_chat_response(
                 response=response,

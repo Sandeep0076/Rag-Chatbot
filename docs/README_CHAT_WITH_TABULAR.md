@@ -9,6 +9,7 @@ This document outlines the workflow and implementation details for chatting with
 - Manages SQL query generation and execution
 - Handles response formatting and visualization requests
 - Integrates with LLM models for natural language processing
+- **NEW**: Supports conversation history for contextual follow-up questions
 - **NEW**: Supports configurable temperature parameter for fine-tuning response creativity
 
 ### PrepareSQLFromTabularData
@@ -33,6 +34,7 @@ This document outlines the workflow and implementation details for chatting with
 
 ### Query Capabilities
 - Natural language to SQL conversion
+- Contextual follow-up questions with conversation history
 - Complex aggregations and calculations
 - Multi-table joins
 - Data visualization queries
@@ -104,10 +106,118 @@ SQLite database with SQLAlchemy ORM
 ```
 
 ### Query Processing Pipeline
-1. Query preprocessing and validation
-2. SQL generation using LangChain
-3. Database query execution
-4. Result formatting and response generation
+
+**Enhanced with Conversation History Support**
+
+1. **History Resolution** (NEW)
+   - Analyzes conversation history to detect contextual references
+   - Transforms contextual questions into standalone queries
+   - Uses gpt-4o-mini for fast, cost-effective processing
+   - Preserves original question if no history context is needed
+
+2. **Database Context Enrichment**
+   - Adds table schema and metadata to the question
+   - Optimizes query structure based on data characteristics
+
+3. **SQL Generation**
+   - Converts natural language to SQL using LangChain
+   - Applies intelligent query optimization
+
+4. **Database Query Execution**
+   - Executes SQL against SQLite database
+   - Handles errors and edge cases
+
+5. **Result Formatting**
+   - Formats results into natural language responses
+   - Applies visualization if requested
+
+### Conversation History Feature
+
+**Overview**
+
+The tabular data chat now maintains conversation context, allowing users to ask follow-up questions without repeating information. The system intelligently resolves contextual references to create clear, standalone questions.
+
+**How It Works**
+
+1. User sends conversation array: `["Previous Q", "Previous A", ..., "Current Q"]`
+2. System extracts history and current question
+3. `resolve_question_with_history()` analyzes if current question references history
+4. If contextual, creates a merged standalone question
+5. Proceeds with normal SQL generation and execution
+
+**Processing Model**
+
+- History resolution always uses **gpt-4o-mini** (regardless of query model)
+- Fast processing with minimal cost impact
+- Happens BEFORE database context enrichment
+- Falls back to original question on any errors
+
+**Examples**
+
+**Example 1: Filter Continuation**
+```
+History:
+  User: "Show me sales by region."
+  Assistant: "Here's the table of sales totals by region."
+  User: "Only for 2023."
+
+Resolved Question: "Show me sales by region for 2023."
+```
+
+**Example 2: Column Reference Change**
+```
+History:
+  User: "List top 10 products by revenue."
+  Assistant: "Here's the top 10 products by total revenue."
+  User: "What about profit?"
+
+Resolved Question: "List top 10 products by profit instead of revenue."
+```
+
+**Example 3: Contextual Refinement**
+```
+History:
+  User: "Search markdown_content for 'skills' and return IDs and titles."
+  Assistant: "Here is a list of IDs and titles containing 'skills'..."
+  User: "Now look at these entries and output which deal with Claude Skills."
+
+Resolved Question: "From the entries whose markdown_content contains 'skills',
+identify and list those that specifically discuss Claude Skills,
+including their IDs and titles."
+```
+
+**Example 4: Standalone Question (No Modification)**
+```
+History:
+  User: "Show me all employees."
+  Assistant: "Here are all employee records..."
+  User: "What is the average salary across all departments?"
+
+Resolved Question: "What is the average salary across all departments?"
+(No modification needed - question is already standalone)
+```
+
+**API Usage with History**
+
+```json
+{
+  "text": [
+    "Show me sales by region.",
+    "Here's the data showing sales totals by region...",
+    "Only for 2023."
+  ],
+  "file_id": "csv-file-id",
+  "model_choice": "gpt_4o_mini",
+  "user_id": "user123"
+}
+```
+
+**Benefits**
+
+- Natural conversational flow like PDF chat
+- Reduces need to repeat context in follow-up questions
+- Maintains accuracy by resolving ambiguity before SQL generation
+- No API changes required (uses existing `text` array parameter)
 
 ### Response Types
 
