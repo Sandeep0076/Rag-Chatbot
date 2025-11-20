@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 from rtl_rag_chatbot_api.chatbot.dalle_handler import DalleImageGenerator
 from rtl_rag_chatbot_api.chatbot.imagen_handler import ImagenGenerator
+from rtl_rag_chatbot_api.common.errors import ImageCreationError
 
 
 class CombinedImageGenerator:
@@ -100,10 +101,15 @@ class CombinedImageGenerator:
             return combined_result
 
         except Exception as e:
-            logging.error(f"Error in combined image generation: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "prompt": prompt,
-                "models": ["dall-e-3", self.configs.vertexai_imagen.model_name],
-            }
+            raw_error = str(e)
+            logging.error(f"Error in combined image generation: {raw_error}")
+            error = ImageCreationError(
+                f"Combined image generation failed: {raw_error}",
+                details={
+                    "prompt": prompt,
+                    "models": ["dall-e-3", self.configs.vertexai_imagen.model_name],
+                    "error_type": type(e).__name__,
+                    "provider_error": raw_error,
+                },
+            )
+            return error.to_response()

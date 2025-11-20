@@ -8,6 +8,11 @@ from typing import Any, Dict, List, Optional, Union
 import vertexai
 from vertexai.preview.vision_models import ImageGenerationModel
 
+from rtl_rag_chatbot_api.common.errors import (
+    ImageCreationError,
+    ImagePromptRejectedError,
+)
+
 
 class ImagenGenerator:
     """
@@ -243,36 +248,37 @@ class ImagenGenerator:
         prompt: str,
         error_details: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Create an error response using structured error format.
+        """Create standardized error response using BaseAppError hierarchy.
 
-        Args:
-            error_msg: Error message
-            prompt: Original prompt
-            error_details: Optional dictionary with detailed error information
-
-        Returns:
-            Error response dictionary with structured error format (code, key, message)
+        Maps safety / blocked content to ImagePromptRejectedError (3004), other issues
+        to ImageCreationError (3003).
         """
-        # Use structured error format matching ErrorRegistry.ERROR_IMAGE_CREATION_FAILED
-        response = {
-            "success": False,
-            "status": "error",
-            "code": 3003,  # ERROR_IMAGE_CREATION_FAILED
-            "key": "ERROR_IMAGE_CREATION_FAILED",
-            "error_code": 3003,  # Backward compatibility
-            "error_key": "ERROR_IMAGE_CREATION_FAILED",  # Backward compatibility
-            "message": error_msg,
-            "error": error_msg,  # Backward compatibility
-            "prompt": prompt,
-            "http_status": 500,
-        }
+        lower_msg = error_msg.lower()
+        safety_indicators = [
+            "safety",
+            "blocked",
+            "policy",
+            "filter",
+            "adult",
+            "violation",
+        ]
+        is_prompt_rejected = any(k in lower_msg for k in safety_indicators)
 
-        # Add detailed error information if available
-        if error_details:
-            response["details"] = error_details
-            response["error_details"] = error_details  # Backward compatibility
+        details = error_details.copy() if error_details else {}
+        details.update(
+            {
+                "prompt": prompt,
+                "model": self.configs.vertexai_imagen.model_name,
+            }
+        )
 
-        return response
+        if is_prompt_rejected:
+            err = ImagePromptRejectedError(
+                "Prompt rejected by safety filters", details=details
+            )
+        else:
+            err = ImageCreationError(error_msg, details=details)
+        return err.to_response()
 
     def _extract_image_data(self, generated_image: Any) -> Optional[str]:
         """Try all methods to extract image data from the generated image.
