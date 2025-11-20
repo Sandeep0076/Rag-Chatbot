@@ -33,3 +33,5 @@ temp_files/
 .coverage.*
 .env
 GEMINI.md
+./kilo/*
+.kilocode/
