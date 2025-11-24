@@ -4,6 +4,11 @@ from typing import Any, Dict
 
 from openai import AzureOpenAI
 
+from rtl_rag_chatbot_api.common.errors import (
+    ImageCreationError,
+    ImagePromptRejectedError,
+)
+
 
 class DalleImageGenerator:
     """
@@ -82,5 +87,42 @@ class DalleImageGenerator:
             }
 
         except Exception as e:
-            logging.error(f"Error generating image with DALL-E 3: {str(e)}")
-            return {"success": False, "error": str(e), "prompt": prompt}
+            raw_error = str(e)
+            logging.error(f"Error generating image with DALL-E 3: {raw_error}")
+
+            lower_err = raw_error.lower()
+            # Detect content policy / safety rejection -> map to prompt rejected spec (3004)
+            prompt_rejected_keywords = [
+                "content_policy_violation",
+                "responsibleaipolicyviolation",
+                "safety system",
+                "prompt may contain",
+                "violat",  # covers 'violation'
+                "blocked",
+            ]
+            is_prompt_rejected = any(k in lower_err for k in prompt_rejected_keywords)
+
+            if is_prompt_rejected:
+                error = ImagePromptRejectedError(
+                    "Prompt rejected by safety filters",
+                    details={
+                        "model": self.configs.azure_dalle_3.model_name,
+                        "size": size,
+                        "prompt": prompt,
+                        "provider_error": raw_error,
+                    },
+                )
+            else:
+                error = ImageCreationError(
+                    f"Image generation failed: {raw_error}",
+                    details={
+                        "model": self.configs.azure_dalle_3.model_name,
+                        "size": size,
+                        "prompt": prompt,
+                        "error_type": type(e).__name__,
+                        "provider_error": raw_error,
+                    },
+                )
+
+            # Return standardized error payload (matches BaseAppError format)
+            return error.to_response()

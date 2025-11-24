@@ -50,7 +50,6 @@ from rtl_rag_chatbot_api.chatbot.utils.image_prompt_rewriter import ImagePromptR
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
 from rtl_rag_chatbot_api.common.errors import (
-    BaseAppError,
     EmbeddingCreationError,
     FileUploadError,
     SafetyFilterError,
@@ -4076,11 +4075,16 @@ async def generate_image(
         Follow-up request:
         {"prompt": ["a red car", "make it blue"], "size": "1024x1024"}
     """
-    try:
-        # Validate prompt array is not empty
-        if not request.prompt or len(request.prompt) == 0:
-            raise HTTPException(status_code=400, detail="Prompt array cannot be empty")
+    # Validate prompt array is not empty
+    if not request.prompt or len(request.prompt) == 0:
+        from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
 
+        error = BaseAppError(
+            ErrorRegistry.ERROR_BAD_REQUEST, "Prompt array cannot be empty"
+        )
+        return JSONResponse(status_code=400, content=error.to_response())
+
+    try:
         # Extract current prompt and history (similar to chat endpoint)
         current_prompt = request.prompt[-1]
         prompt_history = request.prompt[:-1] if len(request.prompt) > 1 else []
@@ -4144,43 +4148,70 @@ async def generate_image(
                 prompt=final_prompt, size=request.size, n=n_images
             )
 
+        # Log the complete result for debugging
+        logging.info(
+            f"Image generation result: success={result.get('success')}, keys={list(result.keys())}"
+        )
+
         # Check if generation failed - the handler already returns structured error format
         if not result.get("success", False):
-            # The result already contains structured error format (code, key, message, details)
-            # Just add context information and return it directly
-            result["final_prompt"] = final_prompt
-            result["used_context"] = used_context
-            result["rewrite_method"] = rewrite_method
-            result["context_type"] = (
-                context_type if "context_type" in locals() else "none"
+            # Normalize to standard error format (remove success/prompt fields).
+            normalized = {
+                "status": result.get("status", "error"),
+                "code": result.get("code"),
+                "key": result.get("key"),
+                "http_status": result.get("http_status", 500),
+                "error_code": result.get("error_code", result.get("code")),
+                "error_key": result.get("error_key", result.get("key")),
+                "message": result.get("message"),
+                "details": result.get("details", {}),
+            }
+            # Move prompt/provider info into details consistently
+            if "prompt" in result and "prompt" not in normalized["details"]:
+                normalized["details"]["prompt"] = current_prompt
+            if "model" in result and "model" not in normalized["details"]:
+                normalized["details"]["model"] = result["model"]
+            if "size" in result and "size" not in normalized["details"]:
+                normalized["details"]["size"] = result["size"]
+            if "error" in result and "provider_error" not in normalized["details"]:
+                normalized["details"]["provider_error"] = result["error"]
+            # Add context usage meta into details
+            normalized["details"].update(
+                {
+                    "final_prompt": final_prompt,
+                    "used_context": used_context,
+                    "rewrite_method": rewrite_method,
+                    "context_type": context_type,
+                }
             )
-
-            # Return the error response with proper HTTP status
-            http_status = result.get("http_status", 500)
-            return JSONResponse(status_code=http_status, content=result)
+            logging.error(f"Returning standardized image error response: {normalized}")
+            return JSONResponse(
+                status_code=normalized["http_status"], content=normalized
+            )
 
         # Add context information to successful response
         result["final_prompt"] = final_prompt
         result["used_context"] = used_context
         result["rewrite_method"] = rewrite_method
-        result["context_type"] = context_type if "context_type" in locals() else "none"
+        result["context_type"] = context_type
 
         return result
 
-    except BaseAppError:
-        # Re-raise structured errors from our error system
-        raise
     except Exception as e:
-        logging.error(f"Error generating image: {str(e)}", exc_info=True)
-        from rtl_rag_chatbot_api.common.errors import ImageCreationError
+        # For any unexpected exceptions, return standardized error format directly
+        logging.error(f"Unexpected error generating image: {str(e)}", exc_info=True)
+        from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
 
-        raise ImageCreationError(
+        error = BaseAppError(
+            ErrorRegistry.ERROR_IMAGE_CREATION_FAILED,
             f"Unexpected error during image generation: {str(e)}",
             details={
                 "prompt": request.prompt[-1] if request.prompt else "",
                 "model": request.model_choice or "dall-e-3",
+                "error_type": type(e).__name__,
             },
         )
+        return JSONResponse(status_code=500, content=error.to_response())
 
 
 @app.post("/image/generate-combined")
@@ -4265,12 +4296,16 @@ async def generate_combined_images(
         return result
     except Exception as e:
         logging.error(f"Error generating combined images: {str(e)}")
-        return {
-            "success": False,
-            "error": str(e),
-            "prompt": request.prompt[-1] if request.prompt else "",
-            "models": ["dall-e-3", configs.vertexai_imagen.model_name],
-        }
+        from rtl_rag_chatbot_api.common.errors import ImageCreationError
+
+        raise ImageCreationError(
+            f"Combined image generation failed: {str(e)}",
+            details={
+                "prompt": request.prompt[-1] if request.prompt else "",
+                "models": ["dall-e-3", configs.vertexai_imagen.model_name],
+                "error_type": type(e).__name__,
+            },
+        )
 
 
 def start():
