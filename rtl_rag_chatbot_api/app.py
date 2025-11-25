@@ -47,9 +47,11 @@ from rtl_rag_chatbot_api.chatbot.imagen_handler import ImagenGenerator
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.chatbot.utils.image_prompt_rewriter import ImagePromptRewriter
+from rtl_rag_chatbot_api.chatbot.utils.language_detector import detect_lang
 from rtl_rag_chatbot_api.common.chroma_manager import ChromaDBManager
 from rtl_rag_chatbot_api.common.cleanup_coordinator import CleanupCoordinator
 from rtl_rag_chatbot_api.common.errors import (
+    BaseAppError,
     EmbeddingCreationError,
     FileUploadError,
     SafetyFilterError,
@@ -74,6 +76,7 @@ from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
 )
 from rtl_rag_chatbot_api.common.prompts_storage import (
     CHART_DETECTION_PROMPT,
+    IMAGE_GENERATION_TITLE_PROMPT,
     TITLE_GENERATION_PROMPT,
     VISUALISATION_PROMPT,
 )
@@ -4075,16 +4078,11 @@ async def generate_image(
         Follow-up request:
         {"prompt": ["a red car", "make it blue"], "size": "1024x1024"}
     """
-    # Validate prompt array is not empty
-    if not request.prompt or len(request.prompt) == 0:
-        from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
-
-        error = BaseAppError(
-            ErrorRegistry.ERROR_BAD_REQUEST, "Prompt array cannot be empty"
-        )
-        return JSONResponse(status_code=400, content=error.to_response())
-
     try:
+        # Validate prompt array is not empty
+        if not request.prompt or len(request.prompt) == 0:
+            raise HTTPException(status_code=400, detail="Prompt array cannot be empty")
+
         # Extract current prompt and history (similar to chat endpoint)
         current_prompt = request.prompt[-1]
         prompt_history = request.prompt[:-1] if len(request.prompt) > 1 else []
@@ -4148,70 +4146,43 @@ async def generate_image(
                 prompt=final_prompt, size=request.size, n=n_images
             )
 
-        # Log the complete result for debugging
-        logging.info(
-            f"Image generation result: success={result.get('success')}, keys={list(result.keys())}"
-        )
-
         # Check if generation failed - the handler already returns structured error format
         if not result.get("success", False):
-            # Normalize to standard error format (remove success/prompt fields).
-            normalized = {
-                "status": result.get("status", "error"),
-                "code": result.get("code"),
-                "key": result.get("key"),
-                "http_status": result.get("http_status", 500),
-                "error_code": result.get("error_code", result.get("code")),
-                "error_key": result.get("error_key", result.get("key")),
-                "message": result.get("message"),
-                "details": result.get("details", {}),
-            }
-            # Move prompt/provider info into details consistently
-            if "prompt" in result and "prompt" not in normalized["details"]:
-                normalized["details"]["prompt"] = current_prompt
-            if "model" in result and "model" not in normalized["details"]:
-                normalized["details"]["model"] = result["model"]
-            if "size" in result and "size" not in normalized["details"]:
-                normalized["details"]["size"] = result["size"]
-            if "error" in result and "provider_error" not in normalized["details"]:
-                normalized["details"]["provider_error"] = result["error"]
-            # Add context usage meta into details
-            normalized["details"].update(
-                {
-                    "final_prompt": final_prompt,
-                    "used_context": used_context,
-                    "rewrite_method": rewrite_method,
-                    "context_type": context_type,
-                }
+            # The result already contains structured error format (code, key, message, details)
+            # Just add context information and return it directly
+            result["final_prompt"] = final_prompt
+            result["used_context"] = used_context
+            result["rewrite_method"] = rewrite_method
+            result["context_type"] = (
+                context_type if "context_type" in locals() else "none"
             )
-            logging.error(f"Returning standardized image error response: {normalized}")
-            return JSONResponse(
-                status_code=normalized["http_status"], content=normalized
-            )
+
+            # Return the error response with proper HTTP status
+            http_status = result.get("http_status", 500)
+            return JSONResponse(status_code=http_status, content=result)
 
         # Add context information to successful response
         result["final_prompt"] = final_prompt
         result["used_context"] = used_context
         result["rewrite_method"] = rewrite_method
-        result["context_type"] = context_type
+        result["context_type"] = context_type if "context_type" in locals() else "none"
 
         return result
 
+    except BaseAppError:
+        # Re-raise structured errors from our error system
+        raise
     except Exception as e:
-        # For any unexpected exceptions, return standardized error format directly
-        logging.error(f"Unexpected error generating image: {str(e)}", exc_info=True)
-        from rtl_rag_chatbot_api.common.errors import BaseAppError, ErrorRegistry
+        logging.error(f"Error generating image: {str(e)}", exc_info=True)
+        from rtl_rag_chatbot_api.common.errors import ImageCreationError
 
-        error = BaseAppError(
-            ErrorRegistry.ERROR_IMAGE_CREATION_FAILED,
+        raise ImageCreationError(
             f"Unexpected error during image generation: {str(e)}",
             details={
                 "prompt": request.prompt[-1] if request.prompt else "",
                 "model": request.model_choice or "dall-e-3",
-                "error_type": type(e).__name__,
             },
         )
-        return JSONResponse(status_code=500, content=error.to_response())
 
 
 @app.post("/image/generate-combined")
@@ -4296,16 +4267,12 @@ async def generate_combined_images(
         return result
     except Exception as e:
         logging.error(f"Error generating combined images: {str(e)}")
-        from rtl_rag_chatbot_api.common.errors import ImageCreationError
-
-        raise ImageCreationError(
-            f"Combined image generation failed: {str(e)}",
-            details={
-                "prompt": request.prompt[-1] if request.prompt else "",
-                "models": ["dall-e-3", configs.vertexai_imagen.model_name],
-                "error_type": type(e).__name__,
-            },
-        )
+        return {
+            "success": False,
+            "error": str(e),
+            "prompt": request.prompt[-1] if request.prompt else "",
+            "models": ["dall-e-3", configs.vertexai_imagen.model_name],
+        }
 
 
 def start():
@@ -5104,7 +5071,8 @@ async def generate_chat_title(
     """
     Generate an automatically generated title for a chat conversation based on its content.
 
-    This endpoint uses GPT nano model with the TITLE_GENERATION_PROMPT to create
+    This endpoint uses GPT nano model with the appropriate prompt (TITLE_GENERATION_PROMPT
+    for text chat or IMAGE_GENERATION_TITLE_PROMPT for image generation) to create
     concise, descriptive titles (around 5 words) that accurately reflect the
     conversation's main topic or task.
 
@@ -5112,6 +5080,8 @@ async def generate_chat_title(
         request (TitleGenerationRequest): Request body containing:
             - conversation (List[str]): Array of strings alternating between user questions and assistant answers
             - model_choice (Optional[str]): Model to use (defaults to "gpt_4_1_nano")
+            - mode (Optional[str]): Mode for title generation - "text" for normal chat
+              or "image" for image generation (defaults to "text")
         current_user: Authenticated user information
 
     Returns:
@@ -5125,14 +5095,23 @@ async def generate_chat_title(
     try:
         import json
 
-        # Format the conversation with the title generation prompt
-        full_prompt = (
-            TITLE_GENERATION_PROMPT + "\n\n" + json.dumps(request.conversation)
-        )
+        # Detect language from the first conversation message
+        first_message = request.conversation[0] if request.conversation else ""
+        detected_language = detect_lang(first_message)
 
-        logging.info(
-            f"Generating title for conversation with {len(request.conversation)}"
-            f"messages using {request.model_choice}"
+        # Select the appropriate prompt based on mode
+        if request.mode == "image":
+            selected_prompt = IMAGE_GENERATION_TITLE_PROMPT
+        else:
+            selected_prompt = TITLE_GENERATION_PROMPT
+
+        # Format the prompt with language and conversation
+        full_prompt = (
+            selected_prompt
+            + "\n\nCritical: Generate the title in "
+            + detected_language
+            + "\n\n"
+            + json.dumps(request.conversation)
         )
 
         # Call Azure OpenAI to generate the title
@@ -5151,7 +5130,9 @@ async def generate_chat_title(
             if not title:
                 raise ValueError("Empty title in response")
 
-            logging.info(f"Successfully generated title: '{title}'")
+            logging.info(
+                f"Successfully generated title: '{title}' in {detected_language}"
+            )
 
             return {"title": title, "success": True}
 

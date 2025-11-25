@@ -12,6 +12,7 @@ This guide provides detailed instructions on how to use each endpoint of the RAG
   - [Chat with File](#chat-with-file)
   - [Get Available Models](#get-available-models)
   - [Chat with Gemini](#chat-with-gemini)
+  - [Generate Chat Title](#generate-chat-title)
   - [Get Neighbors](#get-neighbors)
   - [Analyze Image](#analyze-image)
   - [Generate Image](#generate-image)
@@ -443,6 +444,95 @@ Chat with Gemini models (Flash, Pro, 2.5 Flash, or 2.5 Pro) without RAG or file 
   5. Enter the JSON request body with your message
   6. Click "Send" to chat with Gemini
 
+### Generate Chat Title
+
+Generate an automatically generated title for a chat conversation based on its content. The endpoint uses language detection to automatically determine the language and generates titles in the detected language.
+
+- **Endpoint URL**: `/chat/generate-title`
+- **HTTP Method**: POST
+- **Request Headers**:
+  - `Authorization`: Your auth token
+  - `Content-Type`: `application/json`
+- **Request Body**:
+  ```json
+  {
+    "conversation": ["What is machine learning?", "Machine learning is a subset of AI...", "How does it work?"],
+    "model_choice": "gpt_4_1_nano",
+    "mode": "text"
+  }
+  ```
+- **Request Parameters**:
+  - `conversation` (required): Array of strings alternating between user questions and assistant answers, with the current user question as the last element
+  - `model_choice` (optional): Model to use for title generation (defaults to "gpt_4_1_nano")
+  - `mode` (optional): Mode for title generation
+    - `"text"` (default): For normal chat conversations using TITLE_GENERATION_PROMPT
+    - `"image"`: For image generation sessions using IMAGE_GENERATION_TITLE_PROMPT
+- **Response Format**:
+  ```json
+  {
+    "title": "Machine Learning Explanation",
+    "success": true
+  }
+  ```
+- **Language Detection**:
+  - The endpoint automatically detects the language from the first conversation message
+  - Uses a dedicated LanguageDetector that returns full language names (e.g., "English", "German")
+  - Titles are generated in the detected language automatically
+  - No manual language specification needed
+- **Usage Examples**:
+
+  **Text Chat Title Generation**:
+  ```json
+  {
+    "conversation": [
+      "What is machine learning?",
+      "Machine learning is a subset of artificial intelligence...",
+      "How does it differ from deep learning?"
+    ],
+    "model_choice": "gpt_4_1_nano",
+    "mode": "text"
+  }
+  ```
+
+  **Image Generation Title Generation**:
+  ```json
+  {
+    "conversation": [
+      "A cyberpunk city with neon lights",
+      "make the cars red"
+    ],
+    "model_choice": "gpt_4_1_nano",
+    "mode": "image"
+  }
+  ```
+
+  **German Conversation Example**:
+  ```json
+  {
+    "conversation": [
+      "Was ist künstliche Intelligenz?",
+      "Künstliche Intelligenz ist..."
+    ],
+    "mode": "text"
+  }
+  ```
+  Response: `{"title": "Künstliche Intelligenz Erklärung", "success": true}`
+
+- **Title Characteristics**:
+  - Concise: 3-5 words (max 40 characters)
+  - Language-aware: Automatically matches the conversation language
+  - Context-aware: Captures the main topic or task
+  - Mode-specific: Different prompts for text chat vs image generation
+- **Usage Example**:
+  1. Create a new request in Postman
+  2. Set the request method to POST
+  3. Enter the URL: `http://your-api-domain/chat/generate-title`
+  4. Go to the "Body" tab and select "raw" and "JSON"
+  5. Enter the JSON request body with your conversation array
+  6. Optionally specify `mode` as "text" or "image"
+  7. Click "Send" to generate the title
+
+Note : for the title generation the input messages in text is question and answer however for image is just prompts, prompt1 prompt2.
 ### Get Neighbors
 
 Retrieve nearest neighbors for a given text query from a specific file.

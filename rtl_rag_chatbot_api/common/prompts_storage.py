@@ -226,26 +226,39 @@ If it doesn't contain substantive data, return `False` otherwise return `True`.
 TITLE_GENERATION_PROMPT = """
 You are a chat title generator for a RAG chatbot supporting file uploads (PDF/DOCX/CSV/images),
 image generation, and general Q&A. Generate one concise, search-friendly title capturing the
-main task or topic. Match the user's language (EN/DE preferred). Be concrete, specific, descriptive and neutral.
+main task or topic. Be concrete, specific, descriptive and neutral.
 Do not include quotes/emojis or file/user/model/org names. Aim for a title between 3 and 5 words (max 40 characters).
+You will always be given an explicit target language for the title as a language name (e.g., "English", "German").
+Always generate the title in exactly that language; do not infer or change the language yourself.
 Output ONLY: {"title":"<text>"}.
+
+Language input:
+- Before the conversation array you receive a single line:
+  Critical: Generate the title in <language name>
+- Treat this language name as the single source of truth for which language to use.
+- Do not perform your own language detection or apply any default/fallback language.
 
 Conversation format:
 - Input is an array of strings alternating between user question and assistant answer:
   ["question 1", "answer 1", "question 2", "answer 2", ...]
 - First user message = index 0; first assistant response (if present) = index 1.
-- If unclear language from latest turn, fall back to the first user message; else German.
 
 Categorize in order:
-1) GREETING → "Greeting" / "Begrüßung" (exact ≤3-word greeting; no question; no action verb)
-2) TEST → "Test Conversation" / "Test-Unterhaltung" (exact: test/testing/check/verify/debug/ping)
-3) ACKNOWLEDGMENT → "Quick Exchange" / "Kurzer Austausch" (exact ≤2 words: ok/yes/no/sure/thanks/ja/nein/danke)
-4) LEGITIMATE → generate context-aware title (rules below)
-5) VAGUE → "General Inquiry" / "Allgemeine Anfrage" (≤3 words: help/info/question; no topic/action)
+1) GREETING → Use a simple greeting title in the requested language
+   (exact ≤3-word greeting; no question; no action verb).
+2) TEST → Use a short test-related title in the requested language
+   (e.g., for test/testing/check/verify/debug/ping).
+3) ACKNOWLEDGMENT → Use a brief acknowledgment title in the requested language
+   (exact ≤2 words: ok/yes/no/sure/thanks or their equivalents).
+4) LEGITIMATE → generate context-aware title (rules below).
+5) VAGUE → Use a generic inquiry title in the requested language
+   (≤3 words: help/info/question; no topic/action).
 
-Legitimate triggers (any):
-- Action verbs (even 1 word): summarize/explain/translate/analyze/extract/compare/visualize/create/
-  calculate/list/show/convert/classify (DE: zusammenfassen/erklären/übersetzen/analysieren/visualisieren …)
+- Legitimate triggers (any):
+- Action verbs (even 1 word): summarize/explain/translate/analyze/extract/
+  compare/visualize/create/calculate/list/show/convert/classify
+  (DE: zusammenfassen/erklären/übersetzen/analysieren/
+  visualisieren …)
 - Contains a question mark, or >5 words, or domain keywords
   (API, CSV, PDF, image, RAG, table, data, chart, code, model…)
 
@@ -284,16 +297,77 @@ Fallbacks (topic unclear):
 - NEVER use "Initial clarification needed" or "General chat".
 
 Language & capitalization:
-- Match user's language. Use natural capitalization (German noun capitalization; English sentence/title case).
+- Match the language specified by the detected language name. Use natural capitalization for that language
+  (e.g., German noun capitalization; English sentence/title case).
 
 Output format:
 Return ONLY this JSON object:
-{"title":"<3–5 words, ≤40 chars, language of latest user>"}
+{"title":"<3–5 words, ≤40 chars, in the requested language>"}
 
 Self-check (do not print):
 - Correct category? Topic specific? Pattern used? 3–5 words? ≤40 chars? Language matches? JSON valid?
 """
+IMAGE_GENERATION_TITLE_PROMPT = """
+You are a title generator specialized for an AI Image Generation session.
+The input provided is a list of USER PROMPTS only (a sequence of image descriptions/refinements).
+Your task is to generate ONE concise, descriptive title (3-5 words) that captures the visual subject
+of the latest or most dominant theme.
 
+Language input:
+- Before the conversation array you receive a single line:
+  Critical: Generate the title in <language name>
+- Treat this language name as the single source of truth for which language to use.
+- Do not perform your own language detection or apply any default/fallback language.
+
+CRITICAL INPUT CONTEXT:
+- The input `conversation` array contains only User Prompts (e.g., ["prompt 1", "prompt 2"]).
+  There are no assistant answers.
+- Users often type very short, specific noun phrases (e.g., "Neon city", "Ein roter Apfel").
+- IGNORE "General Enquiry" classifications. Short inputs are VALID topics here.
+
+
+TITLE GENERATION RULES:
+1. Length: 3 to 5 words (Max 40 chars)
+2. Style: Visual, descriptive, aesthetic. Avoid generic words like "Image", "Picture", "Photo"
+   unless necessary
+3. Language: Match the user's input language EXACTLY
+4. Format: Return strictly the JSON object found in the "OUTPUT FORMAT" section
+
+EXAMPLES (ENGLISH):
+1. Input: ["A cyberpunk city with neon lights"]
+   Output: {"title": "Neon Cyberpunk City"}
+
+2. Input: ["A photo of a Christmas tree in the middle of a snow with many children playing around"]
+   Output: {"title": "Christmas Tree Snow Scene"}
+
+3. Input: ["fantasy castle", "add a dragon", "make it dark"]
+   Output: {"title": "Dark Fantasy Castle Dragon"}
+
+4. Input: ["Gift for my friend"]
+   Output: {"title": "Friend's Gift Concept"}
+
+5. Input: ["Blue"]
+   Output: {"title": "Blue Aesthetic Theme"}
+
+6. Input: ["Porsche 911"]
+   Output: {"title": "Porsche 911 Design"}
+
+EXAMPLES (GERMAN):
+1. Input: ["Eine Katze im Weltraum, digital art"]
+   Output: {"title": "Katze im Weltraum Kunst"}
+
+2. Input: ["Ein roter Apfel auf einem Tisch"]
+   Output: {"title": "Roter Apfel Stillleben"}
+
+3. Input: ["Das Gift"]
+   Output: {"title": "Giftige Substanz"}
+
+4. Input: ["Ein Handy auf dem Tisch"]
+   Output: {"title": "Mobiltelefon Design"}
+
+OUTPUT FORMAT (JSON ONLY):
+{"title": "YOUR_CALCULATED_TITLE"}
+"""
 Image_prompt_rewriter_prompt = """You are an expert at understanding user intent for image generation.
 Each API call requires a complete, standalone prompt. Determine if the user's request modifies the current image
  or requests something new.

@@ -128,3 +128,7 @@ class TitleGenerationRequest(BaseModel):
         default="gpt_4_1_nano",
         description="Model to use for title generation (defaults to gpt_4_1_nano)",
     )
+    mode: Optional[str] = Field(
+        default="text",
+        description="Mode for title generation: 'text' for normal chat or 'image' for image generation",
+    )
