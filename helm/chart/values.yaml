@@ -49,7 +49,7 @@ universal-helm-chart:
         whenUnsatisfiable: ScheduleAnyway
     scaleDown: false
   ingress:
-    enabled: true
+    enabled: false
     domains:
       - "rtl-rag-chatbot-api.ecina.test.da-service.io"
     timeoutSec: 120
