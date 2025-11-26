@@ -1700,7 +1700,7 @@ def setup_default_model_types():
     image_models = [
         m
         for m in st.session_state.available_models
-        if "dall-e" in m.lower() or "imagen" in m.lower()
+        if "dall-e" in m.lower() or "imagen" in m.lower() or "nanobanana" in m.lower()
     ]
     text_models = [
         m for m in st.session_state.available_models if m not in image_models
@@ -1725,6 +1725,7 @@ def setup_fallback_models():
         "image": [
             "dall-e-3",
             "imagen-3.0-generate-002",
+            "NanoBanana",
         ],  # Assuming dall-e and imagen are your image models
     }
 

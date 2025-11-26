@@ -45,6 +45,7 @@ from rtl_rag_chatbot_api.chatbot.gemini_handler import (
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.imagen_handler import ImagenGenerator
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
+from rtl_rag_chatbot_api.chatbot.nanobanana_handler import NanoBananaGenerator
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.chatbot.utils.image_prompt_rewriter import ImagePromptRewriter
 from rtl_rag_chatbot_api.chatbot.utils.language_detector import detect_lang
@@ -109,6 +110,7 @@ embedding_handler = EmbeddingHandler(configs, gcs_handler, file_handler)
 # Initialize image handlers only once
 dalle_handler = DalleImageGenerator(configs)
 imagen_handler = ImagenGenerator(configs)
+nanobanana_handler = NanoBananaGenerator(configs)
 # Pass existing handlers to avoid duplicate initialization
 combined_image_handler = CombinedImageGenerator(configs, dalle_handler, imagen_handler)
 # Initialize image prompt rewriter for context-aware image generation
@@ -3655,6 +3657,7 @@ async def get_available_models(current_user=Depends(get_current_user)):
         configs.vertexai_imagen.model_name,
         "imagen-4.0-ultra-generate-001",
         "imagen-4.0-generate-001",
+        "NanoBanana",
         "Dalle + Imagen",
     ]
 
@@ -4118,7 +4121,16 @@ async def generate_image(
         )
 
         # Select the appropriate image generator based on model_choice
-        if request.model_choice and "imagen" in request.model_choice.lower():
+        if request.model_choice and "nanobanana" in request.model_choice.lower():
+            # Generate image using NanoBanana
+            logging.info(
+                f"Using NanoBanana (Gemini Flash Image) model for image generation - "
+                f"Original prompt: '{current_prompt}' -> Final prompt: '{final_prompt}'"
+            )
+            result = nanobanana_handler.generate_image(
+                prompt=final_prompt, size=request.size, n=n_images
+            )
+        elif request.model_choice and "imagen" in request.model_choice.lower():
             # Generate image using the imagen_handler
             logging.info(
                 f"Using Vertex AI Imagen model for image generation - "

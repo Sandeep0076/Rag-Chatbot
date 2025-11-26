@@ -29,7 +29,7 @@ def validate_image_model():
     if "model_types" not in st.session_state:
         st.session_state.model_types = {
             "text": [],
-            "image": ["dall-e-3", "imagen", "Dalle + Imagen"],
+            "image": ["dall-e-3", "imagen", "NanoBanana", "Dalle + Imagen"],
         }
 
     # Verify it's an image model
@@ -67,6 +67,11 @@ def display_model_information(current_model):
                 "[DALL-E Prompt Guide](https://platform.openai.com/docs/guides/images) | "
                 "[Vertex AI Imagen Prompt Guide]("
                 "https://cloud.google.com/vertex-ai/generative-ai/docs/image/img-gen-prompt-guide)"
+            )
+        elif "nanobanana" in current_model.lower():
+            st.markdown(
+                "[Gemini Image Generation Guide](https://ai.google.dev/gemini-api/docs/image-generation) - "
+                "Learn how to craft effective prompts for Gemini image generation."
             )
         elif "imagen" in current_model.lower():
             st.markdown(
@@ -128,18 +133,19 @@ def get_image_generation_inputs():
         ]
         selected_size = st.selectbox("Select image size:", image_sizes)
 
-    # Add a dropdown for number of images only for Imagen model
+    # Add a dropdown for number of images only for Imagen and NanoBanana models
     num_images = 1  # Default for DALL-E and combined
     with col2:
         # The combined model has a specific name "Dalle + Imagen"
         is_combined = current_model == "Dalle + Imagen"
 
-        # Check if this is a pure Imagen model by looking for 'imagen' in the model name
+        # Check if this is a pure Imagen or NanoBanana model
         # This will match 'imagen', 'imagen-3.0-generate-002', 'imagen-1.5-pro-002', etc.
         is_pure_imagen = "imagen" in current_model.lower() and not is_combined
+        is_nanobanana = "nanobanana" in current_model.lower()
 
-        if is_pure_imagen:
-            # Only show number selection for pure Imagen model
+        if is_pure_imagen or is_nanobanana:
+            # Show number selection for Imagen and NanoBanana models
             num_images = st.selectbox("Number of images:", [1, 2, 3, 4], index=0)
         else:
             # For DALL-E or combined, show a static message since only 1 image is allowed
