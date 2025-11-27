@@ -1780,7 +1780,16 @@ def initialize_model(model_choice):
     is_image_model = model_choice in st.session_state.model_types.get("image", [])
 
     # Store model type in session state
+    previous_model_type = st.session_state.get("current_model_type", "text")
     st.session_state.current_model_type = "image" if is_image_model else "text"
+
+    # Auto-switch to Image generation tab only when model changes TO an image model
+    # Don't switch if user is already on Chat tab with a text model
+    if is_image_model and previous_model_type != "image":
+        st.session_state.nav_option = "Image generation"
+    elif not is_image_model and previous_model_type == "image":
+        # If switching from image to text model, go to Chat tab
+        st.session_state.nav_option = "Chat"
 
     # If it's an image model, we don't need to initialize with a file_id
     if is_image_model:
@@ -1963,12 +1972,8 @@ def render_navigation():
     if "model_types" not in st.session_state:
         st.session_state.model_types = {"text": [], "image": []}
 
-    # If current model is an image model, automatically switch to Image generation tab
-    if (
-        "current_model_type" in st.session_state
-        and st.session_state.current_model_type == "image"
-    ):
-        st.session_state.nav_option = "Image generation"
+    # Don't auto-switch here - let initialize_model handle it when model changes
+    # This prevents overriding user's explicit navigation choices
 
     # Create navigation container with modern styling
     st.markdown(
