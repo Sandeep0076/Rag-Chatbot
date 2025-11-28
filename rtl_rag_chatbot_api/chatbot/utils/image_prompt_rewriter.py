@@ -233,7 +233,7 @@ class ImagePromptRewriter:
         prompt_history: List[str],
         current_prompt: str,
         llm_call: Callable[[str], str],
-    ) -> Tuple[str, str, str]:
+    ) -> Tuple[str, str, str, bool]:
         """
         Rewrite prompt by combining historical context with new instruction using LLM.
 
@@ -243,24 +243,29 @@ class ImagePromptRewriter:
             llm_call: LLM callable for prompt rewriting
 
         Returns:
-            Tuple of (rewritten_prompt, method_used, context_type) where:
+            Tuple of (rewritten_prompt, method_used, context_type, is_edit_operation) where:
             - rewritten_prompt: The final prompt to use
             - method_used: "llm", "none", or "error"
             - context_type: "modification", "new_request", or "none"
+            - is_edit_operation: True if this should use image-to-image editing (modification context)
         """
         if not prompt_history or len(prompt_history) == 0:
             logging.info("No prompt history, using current prompt as-is")
-            return current_prompt, "none", "none"
+            return current_prompt, "none", "none", False
 
         # Get the last prompt from history as base
         base_prompt = prompt_history[-1]
 
         if not llm_call:
             logging.error("No LLM call provided, cannot rewrite prompt")
-            return current_prompt, "none", "none"
+            return current_prompt, "none", "none", False
 
         # Use LLM for classification and get a minimal-diff full rewrite when modifying
         rewritten, context_type = self._llm_rewrite(
             base_prompt, current_prompt, llm_call
         )
-        return rewritten, "llm", context_type
+
+        # Determine if this should be an edit operation (modification of previous image)
+        is_edit_operation = context_type == "modification"
+
+        return rewritten, "llm", context_type, is_edit_operation

@@ -100,7 +100,20 @@ class ImageGenerationRequest(BaseModel):
     n: int = Field(default=1, description="Number of images to generate")
     model_choice: Optional[str] = Field(
         default=None,
-        description="Model to use for image generation (dall-e-3 or imagen-3.0)",
+        description="Model to use for image generation (dall-e-3, imagen-3.0, or NanoBanana)",
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Session ID for tracking conversation context across image generations",
+    )
+    reference_image_file_id: Optional[str] = Field(
+        default=None,
+        description="File ID of the reference image (for tracking in frontend database)",
+    )
+    input_image_base64: Optional[str] = Field(
+        default=None,
+        description="Base64-encoded image data for image-to-image editing (NanoBanana only). "
+        "Format: 'data:image/png;base64,<data>' or raw base64 string. Max 10MB.",
     )
 
 
