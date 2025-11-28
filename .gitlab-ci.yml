@@ -8,7 +8,7 @@ variables:
 
 include:
   - project: dataalliance/infra/common/ci-templates
-    ref: v40.0.1
+    ref: v40.0.3
     file: /infra/pipelines/apps/main/include-all.yml
   - local: /ci/helm.yml
   # add dev specific env variables.
