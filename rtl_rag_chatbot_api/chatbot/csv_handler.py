@@ -1281,6 +1281,7 @@ class TabularDataHandler:
                     previous_formatted_question,
                     self.previous_resolved_by_file.get(self.file_id, ""),
                 )
+                logging.info(f"Resolved question: {resolved_question}")
 
                 # Use the resolved question for further processing
                 question_to_process = resolved_question
@@ -1303,6 +1304,7 @@ class TabularDataHandler:
             formatted_question = format_result["formatted_question"]
             needs_sql = format_result["needs_sql"]
             classification = format_result.get("classification", {})
+            logging.info(f"Formatted question: {formatted_question}")
             logging.info(f"Needs SQL: {needs_sql}")
             if not needs_sql:
                 # Cache formatted for next turn and return direct summary
@@ -1331,7 +1333,14 @@ class TabularDataHandler:
             try:
                 response = self.agent.invoke({"input": formatted_question})
                 return self._process_agent_response(
-                    response, question_to_process, query_type, language
+                    response,
+                    question_to_process,
+                    query_type,
+                    language,
+                    resolved_question=resolved_question
+                    if isinstance(question, list) and len(question) > 1
+                    else "",
+                    formatted_question=formatted_question,
                 )
 
             except Exception as agent_error:
@@ -1348,7 +1357,13 @@ class TabularDataHandler:
             raise
 
     def _process_agent_response(
-        self, response: dict, question: str, query_type: str, language: str
+        self,
+        response: dict,
+        question: str,
+        query_type: str,
+        language: str,
+        resolved_question: str = "",
+        formatted_question: str = "",
     ) -> dict:
         """
         Process the agent response and format it appropriately.
@@ -1358,6 +1373,8 @@ class TabularDataHandler:
             question: Original user question
             query_type: Type of query for formatting
             language: Language for response
+            resolved_question: Question after context resolution
+            formatted_question: Question after SQL formatting
 
         Returns:
             dict: Dictionary with 'answer' and 'intermediate_steps' keys
@@ -1434,7 +1451,13 @@ class TabularDataHandler:
 
         # Format intermediate steps for display
         formatted_steps = (
-            self._format_intermediate_steps(intermediate_steps)
+            self._format_intermediate_steps(
+                intermediate_steps,
+                resolved_question=resolved_question,
+                formatted_question=formatted_question,
+                raw_agent_output=final_answer,
+                processed_output=formatted_answer,
+            )
             if intermediate_steps
             else None
         )
@@ -1977,20 +2000,49 @@ class TabularDataHandler:
         lines.append("")
         return lines
 
-    def _format_intermediate_steps(self, intermediate_steps: list) -> str:
+    def _format_intermediate_steps(
+        self,
+        intermediate_steps: list,
+        resolved_question: str = "",
+        formatted_question: str = "",
+        raw_agent_output: str = "",
+        processed_output: str = "",
+    ) -> str:
         """
-        Format intermediate steps into human-readable text.
+        Format intermediate steps into human-readable text with question context.
 
         Args:
-            intermediate_steps: List of tuples (action, observation) from agent execution
+            intermediate_steps: List of tuples (action, observation) from agent
+            resolved_question: Question after context resolution
+            formatted_question: Question after SQL formatting
+            raw_agent_output: Raw output from agent before processing
+            processed_output: Final processed output after formatting
 
         Returns:
-            str: Formatted text showing agent actions, observations, and reasoning
+            str: Formatted text showing complete execution trace
         """
         if not intermediate_steps:
             return ""
 
         formatted_lines: List[str] = []
+
+        # Add question processing section at the start
+        formatted_lines.append("=" * 80)
+        formatted_lines.append("QUESTION PROCESSING")
+        formatted_lines.append("=" * 80)
+        formatted_lines.append("")
+
+        if resolved_question:
+            formatted_lines.append("Resolved question:")
+            formatted_lines.append(f"  {resolved_question}")
+            formatted_lines.append("")
+
+        if formatted_question:
+            formatted_lines.append("Formatted question:")
+            formatted_lines.append(f"  {formatted_question}")
+            formatted_lines.append("")
+
+        # Add agent execution trace section
         formatted_lines.append("=" * 80)
         formatted_lines.append("AGENT EXECUTION TRACE")
         formatted_lines.append("=" * 80)
@@ -2007,6 +2059,24 @@ class TabularDataHandler:
         formatted_lines.append("=" * 80)
         formatted_lines.append(f"Total Steps: {len(intermediate_steps)}")
         formatted_lines.append("=" * 80)
+        formatted_lines.append("")
+
+        # Add post-processing section if available
+        if raw_agent_output or processed_output:
+            formatted_lines.append("=" * 80)
+            formatted_lines.append("POST-PROCESSING")
+            formatted_lines.append("=" * 80)
+            formatted_lines.append("")
+
+            if raw_agent_output:
+                formatted_lines.append("Raw agent output:")
+                formatted_lines.append(f"  {raw_agent_output}")
+                formatted_lines.append("")
+
+            if processed_output:
+                formatted_lines.append("Final formatted answer:")
+                formatted_lines.append(f"  {processed_output}")
+                formatted_lines.append("")
 
         return "\n".join(formatted_lines)
 
