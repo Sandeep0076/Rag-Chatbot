@@ -4159,12 +4159,16 @@ def _determine_image_for_editing(
         request.model_choice and "nanobanana" in request.model_choice.lower()
     )
 
+    # Priority 1: History-based modification (follow-up edit)
+    # For follow-up edits, use the last generated image (sent by Streamlit)
     if is_edit_operation and is_nanobanana:
-        # Try to use provided input image
+        # Try to use provided input image (from history - last generated image)
         if request.input_image_base64:
             input_image_for_generation = request.input_image_base64
             reference_image_used = True
-            logging.info("Using provided input_image_base64 for image editing")
+            logging.info(
+                "Using provided input_image_base64 for image editing (from history - last generated image)"
+            )
         else:
             # No input image provided but modification was requested
             logging.warning(
@@ -4172,6 +4176,16 @@ def _determine_image_for_editing(
                 "Falling back to text-to-image generation."
             )
             is_edit_operation = False
+    # Priority 2: Uploaded image (no history, first edit)
+    # If NanoBanana and input_image_base64 is provided, treat as edit operation
+    # This handles the case where user uploads an image (no history needed)
+    elif is_nanobanana and request.input_image_base64:
+        input_image_for_generation = request.input_image_base64
+        reference_image_used = True
+        is_edit_operation = True  # Override to enable image editing
+        logging.info(
+            "Using provided input_image_base64 for image editing (uploaded image)"
+        )
     elif is_edit_operation and not is_nanobanana:
         # Image editing requested but not using NanoBanana
         logging.warning(

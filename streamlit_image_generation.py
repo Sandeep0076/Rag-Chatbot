@@ -597,14 +597,24 @@ def _display_image_history_for_nanobanana(is_nanobanana, current_model):
 def _prepare_input_image_for_nanobanana(is_nanobanana, input_image_base64):
     """Prepare the final input image for NanoBanana, using history if needed."""
     final_input_image = input_image_base64
-    if (
-        is_nanobanana
-        and not input_image_base64
-        and st.session_state.image_generation_history
-    ):
-        # Use the most recent generated image as reference
-        final_input_image = st.session_state.image_generation_history[-1]
-        st.info("ℹ️ Using the last generated image as reference for modification")
+
+    if is_nanobanana:
+        # Check if this is a follow-up edit (has prompt history)
+        has_prompt_history = (
+            hasattr(st.session_state, "image_prompt_history")
+            and st.session_state.image_prompt_history
+        )
+
+        # For follow-up edits, prioritize last generated image over uploaded image
+        if has_prompt_history and st.session_state.image_generation_history:
+            # Use the most recent generated image as reference for follow-up edits
+            final_input_image = st.session_state.image_generation_history[-1]
+            st.info("ℹ️ Using the last generated image as reference for modification")
+        elif not input_image_base64 and st.session_state.image_generation_history:
+            # No uploaded image, but we have history - use last generated image
+            final_input_image = st.session_state.image_generation_history[-1]
+            st.info("ℹ️ Using the last generated image as reference for modification")
+
     return final_input_image
 
 
