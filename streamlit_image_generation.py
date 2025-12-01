@@ -9,7 +9,7 @@ import streamlit as st
 API_URL = "http://localhost:8080"
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -583,21 +583,12 @@ def _display_prompt_history():
 
 def _display_image_history_for_nanobanana(is_nanobanana, current_model):
     """Display image history specifically for NanoBanana models."""
-    logger.info(
-        f"Image generation: model={current_model}, is_nanobanana={is_nanobanana}, "
-        f"history_count={len(st.session_state.image_generation_history)}"
-    )
-
     if is_nanobanana and st.session_state.image_generation_history:
         st.info(
             f"**Generated images:** {len(st.session_state.image_generation_history)} images in session"
         )
         with st.expander("View previous generated images"):
-            logger.info(
-                f"Displaying {len(st.session_state.image_generation_history)} images in history"
-            )
             for i, img_data in enumerate(st.session_state.image_generation_history):
-                logger.debug(f"Displaying image {i + 1} from history")
                 st.image(
                     img_data, caption=f"Generated Image {i + 1}", use_column_width=True
                 )
@@ -613,7 +604,6 @@ def _prepare_input_image_for_nanobanana(is_nanobanana, input_image_base64):
     ):
         # Use the most recent generated image as reference
         final_input_image = st.session_state.image_generation_history[-1]
-        logger.info("Using last generated image as reference for modification")
         st.info("ℹ️ Using the last generated image as reference for modification")
     return final_input_image
 
@@ -629,19 +619,14 @@ def _update_image_history_for_nanobanana(is_nanobanana, result):
     """Update image generation history for NanoBanana models."""
     if is_nanobanana:
         image_urls = result.get("image_urls", [])
-        logger.info(f"NanoBanana generated {len(image_urls)} images")
         if image_urls:
             # Store the first generated image for future reference
             st.session_state.image_generation_history.append(image_urls[0])
-            logger.info(
-                f"Added image to history. Total history count: {len(st.session_state.image_generation_history)}"
-            )
             # Keep only last 5 images to avoid memory issues
             if len(st.session_state.image_generation_history) > 5:
                 st.session_state.image_generation_history = (
                     st.session_state.image_generation_history[-5:]
                 )
-                logger.info("Trimmed image history to last 5 images")
 
 
 def _display_operation_type_info(result):
@@ -675,11 +660,6 @@ def _display_context_information(result, final_prompt):
 
 def _handle_successful_generation(result, current_model, prompt, is_nanobanana):
     """Handle successful image generation results."""
-    logger.info(
-        f"Image generation result: success={result.get('success')}, "
-        f"model={result.get('model', 'unknown')}"
-    )
-
     if current_model == "Dalle + Imagen" and result.get("success"):
         display_combined_model_results(result, prompt)
     elif result.get("success"):
@@ -731,10 +711,7 @@ def _handle_generation_button_click(
         is_nanobanana, input_image_base64
     )
 
-    logger.info(
-        f"Generating image: model={current_model}, prompt_length={len(prompt)}, "
-        f"has_input_image={final_input_image is not None}"
-    )
+    logger.info(f"Generating image with {current_model}")
 
     # Generate the image with prompt history and optional input image
     result = generate_image(
@@ -773,7 +750,6 @@ def _handle_clear_history_button():
 
 def _validate_prerequisites():
     """Validate prerequisites for image generation."""
-    logger.info("Starting image generation validation")
     current_model = validate_image_model()
     if not current_model:
         logger.warning("Image model validation failed")
@@ -784,13 +760,11 @@ def _validate_prerequisites():
         st.error("Username is required. Please enter a username in the sidebar.")
         return None
 
-    logger.info(f"Prerequisites validated successfully for model: {current_model}")
     return current_model
 
 
 def _setup_ui_components(current_model):
     """Setup UI components for image generation."""
-    logger.info(f"Setting up UI components for model: {current_model}")
     # Show title with current model
     st.markdown(
         f'<div class="subheader">Generate images using {current_model}</div>',
@@ -802,13 +776,11 @@ def _setup_ui_components(current_model):
 
     # Get user inputs (now includes input_image_base64)
     inputs = get_image_generation_inputs()
-    logger.info("UI components setup completed")
     return inputs
 
 
 def _display_interface_elements(current_model):
     """Display interface elements including model info and history."""
-    logger.info("Displaying interface elements")
     # Display model information
     display_model_information(current_model)
 
@@ -819,7 +791,6 @@ def _display_interface_elements(current_model):
     is_nanobanana = "nanobanana" in current_model.lower()
     _display_image_history_for_nanobanana(is_nanobanana, current_model)
 
-    logger.info(f"Interface elements displayed, is_nanobanana: {is_nanobanana}")
     return is_nanobanana
 
 
@@ -827,10 +798,8 @@ def _handle_action_buttons(
     current_model, prompt, selected_size, num_images, input_image_base64, is_nanobanana
 ):
     """Handle action buttons for image generation and history clearing."""
-    logger.info("Rendering action buttons")
     # Add a generate button
     if st.button("Generate Image", type="primary"):
-        logger.info(f"Generate image button clicked for model: {current_model}")
         _handle_generation_button_click(
             current_model,
             prompt,
@@ -846,8 +815,6 @@ def _handle_action_buttons(
 
 def handle_image_generation():
     """Handle the image generation functionality."""
-    logger.info("Starting handle_image_generation function")
-
     # Validate prerequisites
     current_model = _validate_prerequisites()
     if not current_model:
@@ -871,5 +838,3 @@ def handle_image_generation():
         input_image_base64,
         is_nanobanana,
     )
-
-    logger.info("handle_image_generation function completed")
