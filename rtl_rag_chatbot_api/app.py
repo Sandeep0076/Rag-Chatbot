@@ -4189,14 +4189,17 @@ def _determine_image_for_editing(
 
 
 def _generate_image_with_model(
-    request: ImageGenerationRequest, final_prompt: str, input_image_for_generation: str
+    request: ImageGenerationRequest,
+    generation_prompt: str,
+    input_image_for_generation: str,
 ) -> dict:
     """
     Generate image using the appropriate model based on request.
 
     Args:
         request: The image generation request
-        final_prompt: The processed prompt to use
+        generation_prompt: The prompt to use for generation (raw user message for NanoBanana,
+         rewritten prompt for others)
         input_image_for_generation: Input image for editing (if any)
 
     Returns:
@@ -4220,10 +4223,10 @@ def _generate_image_with_model(
         )
         logging.info(
             f"Using NanoBanana for {operation_type} generation - "
-            f"Final prompt: '{final_prompt}'"
+            f"Prompt: '{generation_prompt}'"
         )
         return nanobanana_handler.generate_image(
-            prompt=final_prompt,
+            prompt=generation_prompt,
             size=request.size,
             n=n_images,
             input_image_base64=input_image_for_generation,
@@ -4231,7 +4234,7 @@ def _generate_image_with_model(
     elif request.model_choice and "imagen" in request.model_choice.lower():
         logging.info(
             f"Using Vertex AI Imagen model for image generation - "
-            f"Final prompt: '{final_prompt}'"
+            f"Final prompt: '{generation_prompt}'"
         )
         # Only pass an override when a specific Imagen variant is requested
         imagen_override = (
@@ -4240,7 +4243,7 @@ def _generate_image_with_model(
             else None
         )
         return imagen_handler.generate_image(
-            prompt=final_prompt,
+            prompt=generation_prompt,
             size=request.size,
             n=n_images,
             model_name=imagen_override,
@@ -4249,10 +4252,10 @@ def _generate_image_with_model(
         # Default to DALL-E 3
         logging.info(
             f"Using DALL-E 3 model for image generation - "
-            f"Final prompt: '{final_prompt}'"
+            f"Final prompt: '{generation_prompt}'"
         )
         return dalle_handler.generate_image(
-            prompt=final_prompt, size=request.size, n=n_images
+            prompt=generation_prompt, size=request.size, n=n_images
         )
 
 
@@ -4369,6 +4372,18 @@ async def generate_image(
             is_edit_operation,
         ) = _process_prompt_with_context(request.prompt)
 
+        # Extract current prompt (latest user message)
+        current_prompt = request.prompt[-1]
+
+        # Determine if this is NanoBanana model
+        is_nanobanana = (
+            request.model_choice and "nanobanana" in request.model_choice.lower()
+        )
+
+        # For NanoBanana, use the raw latest user message instead of rewritten prompt
+        # For DALL-E and Imagen, use the rewritten final_prompt
+        generation_prompt = current_prompt if is_nanobanana else final_prompt
+
         # Determine image for editing operations
         (
             input_image_for_generation,
@@ -4378,7 +4393,7 @@ async def generate_image(
 
         # Generate image using appropriate model
         result = _generate_image_with_model(
-            request, final_prompt, input_image_for_generation
+            request, generation_prompt, input_image_for_generation
         )
 
         # Check if generation failed
