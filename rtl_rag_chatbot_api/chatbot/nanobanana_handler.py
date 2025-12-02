@@ -1,6 +1,6 @@
 import base64
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import vertexai
 from google import genai
@@ -343,6 +343,22 @@ class NanoBananaGenerator:
         )
         return self._create_success_response(image_urls, prompt, size)
 
+    def _detect_mime_type(self, input_image_base64: str) -> Optional[str]:
+        """
+        Detect MIME type from data URI.
+
+        Args:
+            input_image_base64: Base64-encoded image data (with or without data URI prefix)
+
+        Returns:
+            MIME type string (e.g., "image/jpeg", "image/png") or None
+        """
+        if input_image_base64.startswith("data:image/"):
+            # Format: data:image/png;base64,<data> or data:image/jpeg;base64,<data>
+            mime_part = input_image_base64.split(";", 1)[0]
+            return mime_part.replace("data:", "")
+        return None
+
     def _prepare_image_input(self, input_image_base64: str) -> Optional[bytes]:
         """
         Prepare base64 image input for Gemini API.
@@ -374,17 +390,19 @@ class NanoBananaGenerator:
         prompt: str,
         size: str = "1024x1024",
         n: int = 1,
-        input_image_base64: Optional[str] = None,
+        input_image_base64: Optional[Union[str, List[str]]] = None,
     ) -> Dict[str, Any]:
         """
         Generate an image based on the provided prompt using NanoBanana (Gemini Flash Image).
-        Supports both text-to-image and image-to-image generation.
+        Supports both text-to-image and image-to-image generation with single or multiple input images.
 
         Args:
             prompt (str): The text prompt to generate an image from
             size (str): Image size (default: "1024x1024")
             n (int): Number of images to generate (default: 1, max: 4)
-            input_image_base64 (Optional[str]): Base64-encoded input image for image-to-image editing
+            input_image_base64 (Optional[Union[str, List[str]]]): Base64-encoded input
+                image(s) for image-to-image editing. Can be a single string (legacy) or
+                list of strings (multi-image support). Supports 1-3 images.
 
         Returns:
             Dict[str, Any]: Response containing the generated image URLs and other metadata
@@ -401,9 +419,27 @@ class NanoBananaGenerator:
                 )
                 n = 4
 
-            operation_type = "edit_existing" if input_image_base64 else "new_generation"
+            # Normalize input_image_base64 to list format
+            input_images = None
+            if input_image_base64:
+                if isinstance(input_image_base64, str):
+                    input_images = [input_image_base64]
+                elif isinstance(input_image_base64, list):
+                    # Validate list length (max 3 images)
+                    if len(input_image_base64) > 3:
+                        logging.warning(
+                            f"NanoBanana: Too many input images ({len(input_image_base64)}), limiting to 3"
+                        )
+                        input_images = input_image_base64[:3]
+                    else:
+                        input_images = input_image_base64
+
+            operation_type = "edit_existing" if input_images else "new_generation"
+            num_input_images = len(input_images) if input_images else 0
+            prompt_preview = prompt[:100]
             logging.info(
-                f"NanoBanana: {operation_type} - Generating {n} image(s) with prompt: '{prompt[:100]}...'"
+                f"NanoBanana: {operation_type} - Generating {n} image(s) with "
+                f"{num_input_images} input image(s) and prompt: '{prompt_preview}...'"
             )
 
             # Prepare prompt with size specifications and number of images
@@ -416,22 +452,40 @@ class NanoBananaGenerator:
             # Create content parts for the request
             content_parts = []
 
-            # Add input image if provided (for image-to-image editing)
-            if input_image_base64:
-                image_bytes = self._prepare_image_input(input_image_base64)
-                if image_bytes:
-                    # Add image as inline data
-                    content_parts.append(
-                        types.Part(
-                            inline_data=types.Blob(
-                                mime_type="image/png", data=image_bytes
+            # Add input images if provided (for image-to-image editing)
+            # Multiple images are added first, then text prompt (following Gemini API pattern)
+            if input_images:
+                images_added = 0
+                for idx, image_base64 in enumerate(input_images):
+                    image_bytes = self._prepare_image_input(image_base64)
+                    if image_bytes:
+                        # Detect MIME type from data URI or default to image/jpeg
+                        mime_type = self._detect_mime_type(image_base64) or "image/jpeg"
+                        # Add image as inline data
+                        content_parts.append(
+                            types.Part(
+                                inline_data=types.Blob(
+                                    mime_type=mime_type, data=image_bytes
+                                )
                             )
                         )
-                    )
-                    logging.info("NanoBanana: Added input image for editing")
-                else:
+                        images_added += 1
+                        logging.info(
+                            f"NanoBanana: Added input image {idx + 1}/{len(input_images)} for editing "
+                            f"(MIME: {mime_type}, size: {len(image_bytes)} bytes)"
+                        )
+                    else:
+                        logging.warning(
+                            f"NanoBanana: Failed to prepare input image {idx + 1}, skipping"
+                        )
+
+                if images_added == 0:
                     logging.warning(
-                        "NanoBanana: Failed to prepare input image, proceeding with text-to-image"
+                        "NanoBanana: Failed to prepare any input images, proceeding with text-to-image"
+                    )
+                else:
+                    logging.info(
+                        f"NanoBanana: Added {images_added} input image(s) for editing"
                     )
 
             # Add text prompt

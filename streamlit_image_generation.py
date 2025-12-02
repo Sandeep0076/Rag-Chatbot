@@ -124,59 +124,91 @@ def get_image_generation_inputs():
     is_nanobanana = "nanobanana" in current_model.lower()
 
     # Image upload section for NanoBanana only
-    uploaded_image = None
+    uploaded_images = None
     input_image_base64 = None
 
     if is_nanobanana:
         st.markdown("### 🎨 Image Editing (Optional)")
         st.info(
-            "💡 NanoBanana supports image-to-image editing! Upload an image to modify it,"
+            "💡 NanoBanana supports image-to-image editing! Upload 1-3 images to modify them together,"
             " or leave empty for text-to-image generation."
         )
 
-        uploaded_image = st.file_uploader(
-            "Upload an image to edit (optional):",
+        uploaded_images = st.file_uploader(
+            "Upload images to edit (optional):",
             type=["png", "jpg", "jpeg", "webp"],
-            help="Upload an image to modify it based on your prompt. Max size: 10MB",
+            accept_multiple_files=True,
+            help="Upload 1-3 images to modify together based on your prompt. Max 10MB per image.",
         )
 
-        if uploaded_image is not None:
-            # Validate file size (10MB limit)
-            file_size_mb = uploaded_image.size / (1024 * 1024)
-            if file_size_mb > 10:
+        if uploaded_images is not None and len(uploaded_images) > 0:
+            # Limit to 3 images
+            if len(uploaded_images) > 3:
                 st.error(
-                    f"❌ Image size ({file_size_mb:.2f}MB) exceeds 10MB limit. Please upload a smaller image."
+                    f"❌ Too many images uploaded ({len(uploaded_images)}). Maximum 3 images allowed."
                 )
-                uploaded_image = None
+                uploaded_images = None
+                input_image_base64 = None
             else:
-                # Convert to base64
-                image_bytes = uploaded_image.read()
-                base64_encoded = base64.b64encode(image_bytes).decode("utf-8")
+                # Process all uploaded images
+                input_image_base64 = []
+                valid_images = True
 
-                # Determine MIME type
-                mime_type = uploaded_image.type
-                input_image_base64 = f"data:{mime_type};base64,{base64_encoded}"
+                for idx, uploaded_image in enumerate(uploaded_images):
+                    # Validate file size (10MB limit)
+                    file_size_mb = uploaded_image.size / (1024 * 1024)
+                    if file_size_mb > 10:
+                        st.error(
+                            f"❌ Image {idx + 1} size ({file_size_mb:.2f}MB) exceeds 10MB limit. "
+                            "Please upload a smaller image."
+                        )
+                        valid_images = False
+                        break
+                    else:
+                        # Convert to base64
+                        image_bytes = uploaded_image.read()
+                        base64_encoded = base64.b64encode(image_bytes).decode("utf-8")
 
-                # Show preview
-                st.image(
-                    uploaded_image,
-                    caption="Reference Image for Editing",
-                    use_column_width=True,
-                )
-                st.success(f"✅ Image uploaded successfully ({file_size_mb:.2f}MB)")
+                        # Determine MIME type
+                        mime_type = uploaded_image.type
+                        image_data_uri = f"data:{mime_type};base64,{base64_encoded}"
+                        input_image_base64.append(image_data_uri)
 
-                # Reset file pointer for potential re-reading
-                uploaded_image.seek(0)
+                        # Show preview
+                        st.image(
+                            uploaded_image,
+                            caption=f"Reference Image {idx + 1} for Editing ({file_size_mb:.2f}MB)",
+                            use_column_width=True,
+                        )
+
+                        # Reset file pointer for potential re-reading
+                        uploaded_image.seek(0)
+
+                if valid_images:
+                    if len(input_image_base64) == 1:
+                        st.success(
+                            f"✅ {len(input_image_base64)} image uploaded successfully"
+                        )
+                    else:
+                        st.success(
+                            f"✅ {len(input_image_base64)} images uploaded successfully"
+                        )
+                else:
+                    input_image_base64 = None
 
     # Create a text area for the prompt
+    has_images = input_image_base64 is not None and (
+        (isinstance(input_image_base64, list) and len(input_image_base64) > 0)
+        or (isinstance(input_image_base64, str) and input_image_base64)
+    )
     prompt_label = (
-        "Enter a prompt to modify the image:"
-        if (is_nanobanana and input_image_base64)
+        "Enter a prompt to modify the image(s):"
+        if (is_nanobanana and has_images)
         else "Enter a prompt describing the image you want to generate:"
     )
     prompt_placeholder = (
-        "Example: Make the sky purple and add stars..."
-        if (is_nanobanana and input_image_base64)
+        "Example: Take the couple from the first picture and make them stand near that stone building..."
+        if (is_nanobanana and has_images)
         else "Example: A photo of a cat in space..."
     )
 
@@ -595,7 +627,7 @@ def _display_image_history_for_nanobanana(is_nanobanana, current_model):
 
 
 def _prepare_input_image_for_nanobanana(is_nanobanana, input_image_base64):
-    """Prepare the final input image for NanoBanana, using history if needed."""
+    """Prepare the final input image(s) for NanoBanana, using history if needed."""
     final_input_image = input_image_base64
 
     if is_nanobanana:
@@ -605,15 +637,23 @@ def _prepare_input_image_for_nanobanana(is_nanobanana, input_image_base64):
             and st.session_state.image_prompt_history
         )
 
-        # For follow-up edits, prioritize last generated image over uploaded image
+        # For follow-up edits, prioritize last generated image over uploaded image(s)
         if has_prompt_history and st.session_state.image_generation_history:
             # Use the most recent generated image as reference for follow-up edits
-            final_input_image = st.session_state.image_generation_history[-1]
+            # Convert to list format for consistency
+            final_input_image = [st.session_state.image_generation_history[-1]]
             st.info("ℹ️ Using the last generated image as reference for modification")
         elif not input_image_base64 and st.session_state.image_generation_history:
             # No uploaded image, but we have history - use last generated image
-            final_input_image = st.session_state.image_generation_history[-1]
+            final_input_image = [st.session_state.image_generation_history[-1]]
             st.info("ℹ️ Using the last generated image as reference for modification")
+        elif input_image_base64:
+            # Normalize to list format if it's a single string
+            if isinstance(input_image_base64, str):
+                final_input_image = [input_image_base64]
+            # If it's already a list, keep it as is
+            elif isinstance(input_image_base64, list):
+                final_input_image = input_image_base64
 
     return final_input_image
 

@@ -4046,38 +4046,59 @@ def find_file_by_name(
         )
 
 
-def _validate_image_size(input_image_base64: str) -> None:
+def _validate_image_size(input_image_base64) -> None:
     """
-    Validate the size of a base64-encoded image (10MB limit).
+    Validate the size of base64-encoded image(s) (10MB limit per image).
 
     Args:
-        input_image_base64: Base64-encoded image data
+        input_image_base64: Base64-encoded image data (str or List[str])
 
     Raises:
-        HTTPException: If image is too large or invalid
+        HTTPException: If any image is too large or invalid
     """
     try:
         logging.info("Starting image size validation")
-        # Remove data URI prefix if present
-        base64_data = input_image_base64
-        if "base64," in base64_data:
-            base64_data = base64_data.split("base64,")[1]
-
-        # Calculate approximate size in bytes
         import base64
 
-        image_bytes = base64.b64decode(base64_data)
-        size_mb = len(image_bytes) / (1024 * 1024)
-
-        if size_mb > 10:
-            logging.error(
-                f"Image size validation failed: {size_mb:.2f}MB exceeds 10MB limit"
-            )
+        # Normalize to list (handles both str and list)
+        images_to_validate = []
+        if isinstance(input_image_base64, str):
+            images_to_validate = [input_image_base64]
+        elif isinstance(input_image_base64, (list, tuple)):
+            images_to_validate = list(input_image_base64)
+        else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Input image size ({size_mb:.2f}MB) exceeds 10MB limit",
+                detail="input_image_base64 must be a string or list of strings",
             )
-        logging.info(f"Image size validation successful: {size_mb:.2f}MB")
+
+        # Validate each image
+        for idx, image_data in enumerate(images_to_validate):
+            # Remove data URI prefix if present
+            base64_data = image_data
+            if "base64," in base64_data:
+                base64_data = base64_data.split("base64,")[1]
+
+            # Calculate approximate size in bytes
+            image_bytes = base64.b64decode(base64_data)
+            size_mb = len(image_bytes) / (1024 * 1024)
+
+            if size_mb > 10:
+                image_num = (
+                    f"Image {idx + 1}" if len(images_to_validate) > 1 else "Image"
+                )
+                logging.error(
+                    f"{image_num} size validation failed: {size_mb:.2f}MB exceeds 10MB limit"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{image_num} size ({size_mb:.2f}MB) exceeds 10MB limit",
+                )
+
+        total_images = len(images_to_validate)
+        logging.info(
+            f"Image size validation successful: {total_images} image(s) validated"
+        )
     except Exception as e:
         if isinstance(e, HTTPException):
             raise
@@ -4159,15 +4180,32 @@ def _determine_image_for_editing(
         request.model_choice and "nanobanana" in request.model_choice.lower()
     )
 
+    # Normalize input_image_base64 to list format for consistent handling
+    normalized_images = None
+    if request.input_image_base64:
+        if isinstance(request.input_image_base64, str):
+            normalized_images = [request.input_image_base64]
+        elif isinstance(request.input_image_base64, list):
+            # Limit to 3 images max
+            if len(request.input_image_base64) > 3:
+                logging.warning(
+                    f"Too many input images ({len(request.input_image_base64)}), limiting to 3"
+                )
+                normalized_images = request.input_image_base64[:3]
+            else:
+                normalized_images = request.input_image_base64
+
     # Priority 1: History-based modification (follow-up edit)
     # For follow-up edits, use the last generated image (sent by Streamlit)
     if is_edit_operation and is_nanobanana:
         # Try to use provided input image (from history - last generated image)
-        if request.input_image_base64:
-            input_image_for_generation = request.input_image_base64
+        if normalized_images:
+            input_image_for_generation = normalized_images
             reference_image_used = True
+            num_images = len(normalized_images)
             logging.info(
-                "Using provided input_image_base64 for image editing (from history - last generated image)"
+                f"Using provided input_image_base64 ({num_images} image(s)) for image editing "
+                "(from history - last generated image)"
             )
         else:
             # No input image provided but modification was requested
@@ -4176,15 +4214,16 @@ def _determine_image_for_editing(
                 "Falling back to text-to-image generation."
             )
             is_edit_operation = False
-    # Priority 2: Uploaded image (no history, first edit)
+    # Priority 2: Uploaded image(s) (no history, first edit)
     # If NanoBanana and input_image_base64 is provided, treat as edit operation
-    # This handles the case where user uploads an image (no history needed)
-    elif is_nanobanana and request.input_image_base64:
-        input_image_for_generation = request.input_image_base64
+    # This handles the case where user uploads image(s) (no history needed)
+    elif is_nanobanana and normalized_images:
+        input_image_for_generation = normalized_images
         reference_image_used = True
         is_edit_operation = True  # Override to enable image editing
+        num_images = len(normalized_images)
         logging.info(
-            "Using provided input_image_base64 for image editing (uploaded image)"
+            f"Using provided input_image_base64 ({num_images} image(s)) for image editing (uploaded image(s))"
         )
     elif is_edit_operation and not is_nanobanana:
         # Image editing requested but not using NanoBanana
@@ -4205,7 +4244,7 @@ def _determine_image_for_editing(
 def _generate_image_with_model(
     request: ImageGenerationRequest,
     generation_prompt: str,
-    input_image_for_generation: str,
+    input_image_for_generation,
 ) -> dict:
     """
     Generate image using the appropriate model based on request.
@@ -4214,7 +4253,7 @@ def _generate_image_with_model(
         request: The image generation request
         generation_prompt: The prompt to use for generation (raw user message for NanoBanana,
          rewritten prompt for others)
-        input_image_for_generation: Input image for editing (if any)
+        input_image_for_generation: Input image(s) for editing (str or List[str], if any)
 
     Returns:
         Generation result dictionary
@@ -4373,7 +4412,7 @@ async def generate_image(
         if not request.prompt or len(request.prompt) == 0:
             raise HTTPException(status_code=400, detail="Prompt array cannot be empty")
 
-        # Validate input image size if provided (10MB limit)
+        # Validate input image size(s) if provided (10MB limit per image)
         if request.input_image_base64:
             _validate_image_size(request.input_image_base64)
 

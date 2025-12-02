@@ -30,16 +30,17 @@ The Image Generation module in the RTL-Deutschland RAG Chatbot API provides capa
   - Generally lower latency
 
 ### NanoBanana (Gemini 2.5 Flash Image)
-- **Strengths**: Fast generation, Google's latest image generation model, ability to create multiple images per request, **supports image-to-image editing**
+- **Strengths**: Fast generation, Google's latest image generation model, ability to create multiple images per request, **supports image-to-image editing with single or multiple input images**
 - **Capabilities**:
   - Can generate up to **10 images per API request** (significantly more than DALL-E 3 and Imagen)
   - Supports the same image sizes as DALL-E 3 and Imagen (1024x1024, 1024x1792, 1792x1024)
   - **Unique Feature**: Supports image-to-image editing (modify existing images based on prompts)
+  - **Multi-Image Input Support**: Can accept 1-3 input images and edit them together with a text prompt
   - Uses Vertex AI authentication (shares configuration with Gemini models)
   - Base64-encoded image responses for seamless integration
   - **Enhanced Multi-Image Generation**: Explicitly requests multiple distinct images in the prompt for better variety
 - **Model Name**: `gemini-2.5-flash-image` (displayed as "NanoBanana" in UI)
-- **Image Editing**: Unlike DALL-E and Imagen which only support text-to-image generation, NanoBanana can accept an input image and modify it based on your prompt
+- **Image Editing**: Unlike DALL-E and Imagen which only support text-to-image generation, NanoBanana can accept one or more input images and modify them based on your prompt
 - **Multi-Image Support**: When requesting multiple images, the system automatically enhances the prompt to ensure variety and distinctness between generated images
 
 ### Combined Mode
@@ -74,10 +75,14 @@ The Image Generation module in the RTL-Deutschland RAG Chatbot API provides capa
 - `model_choice` (string, required): Model to use (e.g., "dall-e-3", "imagen-3.0-generate-002", "NanoBanana")
 - `session_id` (string, optional): Session identifier for tracking conversation context across requests
 - `reference_image_file_id` (string, optional): File ID of reference image (for frontend tracking purposes)
-- `input_image_base64` (string, optional): Base64-encoded input image for image-to-image editing (NanoBanana only)
-  - Format: `data:image/png;base64,{base64_data}`
-  - Maximum size: 10MB
+- `input_image_base64` (string or array, optional): Base64-encoded input image(s) for image-to-image editing (NanoBanana only)
+  - Can be a single string (legacy) or array of strings (multi-image support)
+  - Format: `data:image/png;base64,{base64_data}` or `data:image/jpeg;base64,{base64_data}`
+  - Supports 1-3 images for multi-image editing
+  - Maximum size: 10MB per image
   - Only supported by NanoBanana model
+  - Example single image: `"data:image/png;base64,iVBORw0KG..."`
+  - Example multiple images: `["data:image/jpeg;base64,...", "data:image/png;base64,..."]`
 
 **Response**:
 ```json
@@ -157,6 +162,22 @@ The Image Generation module in the RTL-Deutschland RAG Chatbot API provides capa
   "model_choice": "NanoBanana"
 }
 ```
+
+**Example 5: Multi-Image Editing with NanoBanana**:
+```json
+{
+  "prompt": "Take the couple from the first picture and make them stand near that stone building",
+  "size": "1024x1024",
+  "n": 1,
+  "model_choice": "NanoBanana",
+  "input_image_base64": [
+    "data:image/jpeg;base64,/9j/4AAQSkZJRg...",
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgA..."
+  ],
+  "session_id": "user-session-123"
+}
+```
+This example shows how to upload 2 images and edit them together. NanoBanana supports 1-3 input images for multi-image editing.
 
 ### Combined Model Image Generation
 

@@ -110,10 +110,12 @@ class ImageGenerationRequest(BaseModel):
         default=None,
         description="File ID of the reference image (for tracking in frontend database)",
     )
-    input_image_base64: Optional[str] = Field(
+    input_image_base64: Optional[Union[str, List[str]]] = Field(
         default=None,
         description="Base64-encoded image data for image-to-image editing (NanoBanana only). "
-        "Format: 'data:image/png;base64,<data>' or raw base64 string. Max 10MB.",
+        "Can be a single string (legacy) or list of strings (multi-image support). "
+        "Format: 'data:image/png;base64,<data>' or raw base64 string. Max 10MB per image. "
+        "Supports 1-3 images for multi-image editing.",
     )
 
 
