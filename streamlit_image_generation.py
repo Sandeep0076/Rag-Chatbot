@@ -1,9 +1,16 @@
 # New functions to extract from main() to reduce complexity
+import base64
+import logging
+
 import requests
 import streamlit as st
 
 # Define API URL as it's used across functions
 API_URL = "http://localhost:8080"
+
+# Configure logging
+logging.basicConfig(level=logging.WARNING)
+logger = logging.getLogger(__name__)
 
 
 def display_app_header():
@@ -29,7 +36,7 @@ def validate_image_model():
     if "model_types" not in st.session_state:
         st.session_state.model_types = {
             "text": [],
-            "image": ["dall-e-3", "imagen", "Dalle + Imagen"],
+            "image": ["dall-e-3", "imagen", "NanoBanana", "Dalle + Imagen"],
         }
 
     # Verify it's an image model
@@ -68,6 +75,11 @@ def display_model_information(current_model):
                 "[Vertex AI Imagen Prompt Guide]("
                 "https://cloud.google.com/vertex-ai/generative-ai/docs/image/img-gen-prompt-guide)"
             )
+        elif "nanobanana" in current_model.lower():
+            st.markdown(
+                "[Gemini Image Generation Guide](https://ai.google.dev/gemini-api/docs/image-generation) - "
+                "Learn how to craft effective prompts for Gemini image generation."
+            )
         elif "imagen" in current_model.lower():
             st.markdown(
                 "[Vertex AI Imagen Prompt Guide]("
@@ -104,14 +116,105 @@ def display_model_information(current_model):
 
 
 def get_image_generation_inputs():
-    """Get user inputs for image generation: prompt and size."""
+    """Get user inputs for image generation: prompt, size, and optional input image."""
     # Get the current model
     current_model = st.session_state.model_choice
 
+    # Check if this is NanoBanana (supports image editing)
+    is_nanobanana = "nanobanana" in current_model.lower()
+
+    # Image upload section for NanoBanana only
+    uploaded_images = None
+    input_image_base64 = None
+
+    if is_nanobanana:
+        st.markdown("### 🎨 Image Editing (Optional)")
+        st.info(
+            "💡 NanoBanana supports image-to-image editing! Upload 1-3 images to modify them together,"
+            " or leave empty for text-to-image generation."
+        )
+
+        uploaded_images = st.file_uploader(
+            "Upload images to edit (optional):",
+            type=["png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+            help="Upload 1-3 images to modify together based on your prompt. Max 10MB per image.",
+        )
+
+        if uploaded_images is not None and len(uploaded_images) > 0:
+            # Limit to 3 images
+            if len(uploaded_images) > 3:
+                st.error(
+                    f"❌ Too many images uploaded ({len(uploaded_images)}). Maximum 3 images allowed."
+                )
+                uploaded_images = None
+                input_image_base64 = None
+            else:
+                # Process all uploaded images
+                input_image_base64 = []
+                valid_images = True
+
+                for idx, uploaded_image in enumerate(uploaded_images):
+                    # Validate file size (10MB limit)
+                    file_size_mb = uploaded_image.size / (1024 * 1024)
+                    if file_size_mb > 10:
+                        st.error(
+                            f"❌ Image {idx + 1} size ({file_size_mb:.2f}MB) exceeds 10MB limit. "
+                            "Please upload a smaller image."
+                        )
+                        valid_images = False
+                        break
+                    else:
+                        # Convert to base64
+                        image_bytes = uploaded_image.read()
+                        base64_encoded = base64.b64encode(image_bytes).decode("utf-8")
+
+                        # Determine MIME type
+                        mime_type = uploaded_image.type
+                        image_data_uri = f"data:{mime_type};base64,{base64_encoded}"
+                        input_image_base64.append(image_data_uri)
+
+                        # Show preview
+                        st.image(
+                            uploaded_image,
+                            caption=f"Reference Image {idx + 1} for Editing ({file_size_mb:.2f}MB)",
+                            use_column_width=True,
+                        )
+
+                        # Reset file pointer for potential re-reading
+                        uploaded_image.seek(0)
+
+                if valid_images:
+                    if len(input_image_base64) == 1:
+                        st.success(
+                            f"✅ {len(input_image_base64)} image uploaded successfully"
+                        )
+                    else:
+                        st.success(
+                            f"✅ {len(input_image_base64)} images uploaded successfully"
+                        )
+                else:
+                    input_image_base64 = None
+
     # Create a text area for the prompt
+    has_images = input_image_base64 is not None and (
+        (isinstance(input_image_base64, list) and len(input_image_base64) > 0)
+        or (isinstance(input_image_base64, str) and input_image_base64)
+    )
+    prompt_label = (
+        "Enter a prompt to modify the image(s):"
+        if (is_nanobanana and has_images)
+        else "Enter a prompt describing the image you want to generate:"
+    )
+    prompt_placeholder = (
+        "Example: Take the couple from the first picture and make them stand near that stone building..."
+        if (is_nanobanana and has_images)
+        else "Example: A photo of a cat in space..."
+    )
+
     prompt = st.text_area(
-        "Enter a prompt describing the image you want to generate:",
-        placeholder="Example: A photo of a cat in space...",
+        prompt_label,
+        placeholder=prompt_placeholder,
         height=100,
     )
 
@@ -128,24 +231,33 @@ def get_image_generation_inputs():
         ]
         selected_size = st.selectbox("Select image size:", image_sizes)
 
-    # Add a dropdown for number of images only for Imagen model
+    # Add a dropdown for number of images only for Imagen and NanoBanana models
     num_images = 1  # Default for DALL-E and combined
     with col2:
         # The combined model has a specific name "Dalle + Imagen"
         is_combined = current_model == "Dalle + Imagen"
 
-        # Check if this is a pure Imagen model by looking for 'imagen' in the model name
+        # Check if this is a pure Imagen or NanoBanana model
         # This will match 'imagen', 'imagen-3.0-generate-002', 'imagen-1.5-pro-002', etc.
         is_pure_imagen = "imagen" in current_model.lower() and not is_combined
 
         if is_pure_imagen:
-            # Only show number selection for pure Imagen model
+            # Show number selection for Imagen models (1-4)
             num_images = st.selectbox("Number of images:", [1, 2, 3, 4], index=0)
+        elif is_nanobanana:
+            # Show number selection for NanoBanana models (1-10)
+            num_images = st.selectbox(
+                "Number of images:", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], index=0
+            )
+            if num_images > 4:
+                st.info(
+                    f"🚀 NanoBanana supports generating up to 10 images per request (selected: {num_images})"
+                )
         else:
             # For DALL-E or combined, show a static message since only 1 image is allowed
             st.info("DALL-E 3 supports generating 1 image per request")
 
-    return prompt, selected_size, num_images
+    return prompt, selected_size, num_images, input_image_base64
 
 
 def setup_dual_image_display_css():
@@ -404,7 +516,13 @@ def _parse_image_error_response(response):
 
 
 def generate_image(
-    current_model, prompt, selected_size, num_images, prompt_history=None
+    current_model,
+    prompt,
+    selected_size,
+    num_images,
+    prompt_history=None,
+    input_image_base64=None,
+    session_id=None,
 ):
     """Call the appropriate API endpoint to generate an image."""
     API_URL = "http://localhost:8080"
@@ -440,15 +558,24 @@ def generate_image(
                 # If using DALL-E, force n=1, otherwise use selected number
                 actual_n = 1 if "dall-e" in current_model.lower() else num_images
 
+                # Build request payload
+                payload = {
+                    "prompt": prompt_array,  # Send as array
+                    "size": selected_size,
+                    "n": actual_n,
+                    "model_choice": current_model,
+                }
+
+                # Add optional parameters for NanoBanana image editing
+                if input_image_base64:
+                    payload["input_image_base64"] = input_image_base64
+                if session_id:
+                    payload["session_id"] = session_id
+
                 # Call the single model endpoint
                 response = requests.post(
                     f"{API_URL}/image/generate",
-                    json={
-                        "prompt": prompt_array,  # Send as array
-                        "size": selected_size,
-                        "n": actual_n,
-                        "model_choice": current_model,
-                    },
+                    json=payload,
                 )
 
             if response.status_code == 200:
@@ -463,35 +590,20 @@ def generate_image(
             return None
 
 
-def handle_image_generation():
-    """Handle the image generation functionality."""
-    # Get the current model
-    current_model = validate_image_model()
-    if not current_model:
-        return
-
-    # Show title with current model
-    st.markdown(
-        f'<div class="subheader">Generate images using {current_model}</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Check if username is provided
-    if not st.session_state.username:
-        st.error("Username is required. Please enter a username in the sidebar.")
-        return
-
-    # Initialize image prompt history in session state
+def _initialize_image_session_state():
+    """Initialize session state variables for image generation."""
     if "image_prompt_history" not in st.session_state:
         st.session_state.image_prompt_history = []
+    if "image_generation_history" not in st.session_state:
+        st.session_state.image_generation_history = []
+    if "image_session_id" not in st.session_state:
+        import uuid
 
-    # Get user inputs
-    prompt, selected_size, num_images = get_image_generation_inputs()
+        st.session_state.image_session_id = str(uuid.uuid4())
 
-    # Display model information
-    display_model_information(current_model)
 
-    # Show prompt history if available
+def _display_prompt_history():
+    """Display the prompt history if available."""
     if st.session_state.image_prompt_history:
         st.info(
             f"**Previous prompts:** {len(st.session_state.image_prompt_history)} prompts in history"
@@ -500,68 +612,279 @@ def handle_image_generation():
             for i, hist_prompt in enumerate(st.session_state.image_prompt_history):
                 st.text(f"{i + 1}. {hist_prompt}")
 
+
+def _display_image_history_for_nanobanana(is_nanobanana, current_model):
+    """Display image history specifically for NanoBanana models."""
+    if is_nanobanana and st.session_state.image_generation_history:
+        st.info(
+            f"**Generated images:** {len(st.session_state.image_generation_history)} images in session"
+        )
+        with st.expander("View previous generated images"):
+            for i, img_data in enumerate(st.session_state.image_generation_history):
+                st.image(
+                    img_data, caption=f"Generated Image {i + 1}", use_column_width=True
+                )
+
+
+def _prepare_input_image_for_nanobanana(is_nanobanana, input_image_base64):
+    """Prepare the final input image(s) for NanoBanana, using history if needed."""
+    final_input_image = input_image_base64
+
+    if is_nanobanana:
+        # Check if this is a follow-up edit (has prompt history)
+        has_prompt_history = (
+            hasattr(st.session_state, "image_prompt_history")
+            and st.session_state.image_prompt_history
+        )
+
+        # For follow-up edits, prioritize last generated image over uploaded image(s)
+        if has_prompt_history and st.session_state.image_generation_history:
+            # Use the most recent generated image as reference for follow-up edits
+            # Convert to list format for consistency
+            final_input_image = [st.session_state.image_generation_history[-1]]
+            st.info("ℹ️ Using the last generated image as reference for modification")
+        elif not input_image_base64 and st.session_state.image_generation_history:
+            # No uploaded image, but we have history - use last generated image
+            final_input_image = [st.session_state.image_generation_history[-1]]
+            st.info("ℹ️ Using the last generated image as reference for modification")
+        elif input_image_base64:
+            # Normalize to list format if it's a single string
+            if isinstance(input_image_base64, str):
+                final_input_image = [input_image_base64]
+            # If it's already a list, keep it as is
+            elif isinstance(input_image_base64, list):
+                final_input_image = input_image_base64
+
+    return final_input_image
+
+
+def _update_prompt_history(result, prompt):
+    """Update the prompt history after successful image generation."""
+    final_prompt = result.get("final_prompt", prompt)
+    st.session_state.image_prompt_history.append(final_prompt)
+    return final_prompt
+
+
+def _update_image_history_for_nanobanana(is_nanobanana, result):
+    """Update image generation history for NanoBanana models."""
+    if is_nanobanana:
+        image_urls = result.get("image_urls", [])
+        if image_urls:
+            # Store the first generated image for future reference
+            st.session_state.image_generation_history.append(image_urls[0])
+            # Keep only last 5 images to avoid memory issues
+            if len(st.session_state.image_generation_history) > 5:
+                st.session_state.image_generation_history = (
+                    st.session_state.image_generation_history[-5:]
+                )
+
+
+def _display_operation_type_info(result):
+    """Display information about the operation type (text-to-image vs image-to-image)."""
+    operation_type = result.get("operation_type", "text_to_image")
+    reference_used = result.get("reference_image_used", False)
+
+    if operation_type == "image_to_image":
+        st.success("🎨 Image-to-image editing completed!")
+        if reference_used:
+            st.info("✅ Used uploaded/previous image as reference")
+    else:
+        st.success("🖼️ Text-to-image generation completed!")
+
+
+def _display_context_information(result, final_prompt):
+    """Display context information if context was used in generation."""
+    if result.get("used_context"):
+        context_type = result.get("context_type", "unknown")
+        if context_type == "modification":
+            st.success("✅ Modified previous image (preserved original style)")
+        elif context_type == "new_request":
+            st.success("✅ Created new image (ignored previous context)")
+        else:
+            st.success(
+                f"✅ Used context from previous prompts "
+                f"(method: {result.get('rewrite_method', 'unknown')})"
+            )
+        st.info(f"**Final prompt:** {final_prompt}")
+
+
+def _handle_successful_generation(result, current_model, prompt, is_nanobanana):
+    """Handle successful image generation results."""
+    if current_model == "Dalle + Imagen" and result.get("success"):
+        display_combined_model_results(result, prompt)
+    elif result.get("success"):
+        display_single_model_results(result, current_model)
+
+        # Add successful prompt to history
+        final_prompt = _update_prompt_history(result, prompt)
+
+        # Store generated images in session history for NanoBanana
+        _update_image_history_for_nanobanana(is_nanobanana, result)
+
+        # Show operation type information
+        _display_operation_type_info(result)
+
+        # Show context information if used
+        _display_context_information(result, final_prompt)
+
+
+def _handle_generation_error(result):
+    """Handle error cases in image generation."""
+    # Extract structured error information
+    error_code = result.get("code") or result.get("error_code")
+    error_key = result.get("key") or result.get("error_key")
+    error_msg = result.get("message") or result.get("error", "Unknown error")
+    error_details = result.get("details") or result.get("error_details")
+
+    if error_code and error_key:
+        st.error(f"Error {error_code}: {error_key} - {error_msg}")
+    else:
+        st.error(f"Failed to generate image: {error_msg}")
+
+    # Display detailed error information if available
+    if error_details:
+        with st.expander("🔍 Error Details"):
+            for key, value in error_details.items():
+                st.text(f"{key}: {value}")
+
+
+def _handle_generation_button_click(
+    current_model, prompt, selected_size, num_images, input_image_base64, is_nanobanana
+):
+    """Handle the image generation button click event."""
+    if not prompt:
+        st.error("Please enter a prompt to generate an image.")
+        return
+
+    # Prepare input image for NanoBanana
+    final_input_image = _prepare_input_image_for_nanobanana(
+        is_nanobanana, input_image_base64
+    )
+
+    logger.info(f"Generating image with {current_model}")
+
+    # Generate the image with prompt history and optional input image
+    result = generate_image(
+        current_model,
+        prompt,
+        selected_size,
+        num_images,
+        st.session_state.image_prompt_history,
+        final_input_image,
+        st.session_state.image_session_id,
+    )
+
+    # Handle results
+    if result:
+        if result.get("success"):
+            _handle_successful_generation(result, current_model, prompt, is_nanobanana)
+        else:
+            _handle_generation_error(result)
+
+
+def _handle_clear_history_button():
+    """Handle the clear history button click event."""
+    if (
+        st.session_state.image_prompt_history
+        or st.session_state.image_generation_history
+    ) and st.button("Clear History"):
+        st.session_state.image_prompt_history = []
+        st.session_state.image_generation_history = []
+        # Generate new session ID
+        import uuid
+
+        st.session_state.image_session_id = str(uuid.uuid4())
+        st.success("History cleared and new session started!")
+        st.rerun()
+
+
+def _validate_prerequisites():
+    """Validate prerequisites for image generation."""
+    current_model = validate_image_model()
+    if not current_model:
+        logger.warning("Image model validation failed")
+        return None
+
+    if not st.session_state.username:
+        logger.warning("Username not provided")
+        st.error("Username is required. Please enter a username in the sidebar.")
+        return None
+
+    return current_model
+
+
+def _setup_ui_components(current_model):
+    """Setup UI components for image generation."""
+    # Show title with current model
+    st.markdown(
+        f'<div class="subheader">Generate images using {current_model}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Initialize session state for image generation
+    _initialize_image_session_state()
+
+    # Get user inputs (now includes input_image_base64)
+    inputs = get_image_generation_inputs()
+    return inputs
+
+
+def _display_interface_elements(current_model):
+    """Display interface elements including model info and history."""
+    # Display model information
+    display_model_information(current_model)
+
+    # Show prompt history if available
+    _display_prompt_history()
+
+    # Show image history for NanoBanana
+    is_nanobanana = "nanobanana" in current_model.lower()
+    _display_image_history_for_nanobanana(is_nanobanana, current_model)
+
+    return is_nanobanana
+
+
+def _handle_action_buttons(
+    current_model, prompt, selected_size, num_images, input_image_base64, is_nanobanana
+):
+    """Handle action buttons for image generation and history clearing."""
     # Add a generate button
     if st.button("Generate Image", type="primary"):
-        if not prompt:
-            st.error("Please enter a prompt to generate an image.")
-        else:
-            # Generate the image with prompt history
-            result = generate_image(
-                current_model,
-                prompt,
-                selected_size,
-                num_images,
-                st.session_state.image_prompt_history,
-            )
-
-            # Display results
-            if result:
-                if current_model == "Dalle + Imagen" and result.get("success"):
-                    display_combined_model_results(result, prompt)
-                elif result.get("success"):
-                    display_single_model_results(result, current_model)
-
-                    # Add successful prompt to history
-                    final_prompt = result.get("final_prompt", prompt)
-                    st.session_state.image_prompt_history.append(final_prompt)
-
-                    # Show context information if used
-                    if result.get("used_context"):
-                        context_type = result.get("context_type", "unknown")
-                        if context_type == "modification":
-                            st.success(
-                                "✅ Modified previous image (preserved original style)"
-                            )
-                        elif context_type == "new_request":
-                            st.success("✅ Created new image (ignored previous context)")
-                        else:
-                            st.success(
-                                f"✅ Used context from previous prompts "
-                                f"(method: {result.get('rewrite_method', 'unknown')})"
-                            )
-                        st.info(f"**Final prompt:** {final_prompt}")
-                else:
-                    # Extract structured error information
-                    error_code = result.get("code") or result.get("error_code")
-                    error_key = result.get("key") or result.get("error_key")
-                    error_msg = result.get("message") or result.get(
-                        "error", "Unknown error"
-                    )
-                    error_details = result.get("details") or result.get("error_details")
-
-                    if error_code and error_key:
-                        st.error(f"Error {error_code}: {error_key} - {error_msg}")
-                    else:
-                        st.error(f"Failed to generate image: {error_msg}")
-
-                    # Display detailed error information if available
-                    if error_details:
-                        with st.expander("🔍 Error Details"):
-                            for key, value in error_details.items():
-                                st.text(f"{key}: {value}")
+        _handle_generation_button_click(
+            current_model,
+            prompt,
+            selected_size,
+            num_images,
+            input_image_base64,
+            is_nanobanana,
+        )
 
     # Add clear history button
-    if st.session_state.image_prompt_history and st.button("Clear Prompt History"):
-        st.session_state.image_prompt_history = []
-        st.success("Prompt history cleared!")
-        st.rerun()
+    _handle_clear_history_button()
+
+
+def handle_image_generation():
+    """Handle the image generation functionality."""
+    # Validate prerequisites
+    current_model = _validate_prerequisites()
+    if not current_model:
+        logger.error("Prerequisites validation failed, exiting")
+        return
+
+    # Setup UI components and get inputs
+    (prompt, selected_size, num_images, input_image_base64) = _setup_ui_components(
+        current_model
+    )
+
+    # Display interface elements
+    is_nanobanana = _display_interface_elements(current_model)
+
+    # Handle action buttons
+    _handle_action_buttons(
+        current_model,
+        prompt,
+        selected_size,
+        num_images,
+        input_image_base64,
+        is_nanobanana,
+    )

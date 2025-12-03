@@ -48,6 +48,7 @@ from rtl_rag_chatbot_api.chatbot.gemini_handler import (
 from rtl_rag_chatbot_api.chatbot.image_reader import analyze_images
 from rtl_rag_chatbot_api.chatbot.imagen_handler import ImagenGenerator
 from rtl_rag_chatbot_api.chatbot.model_handler import ModelHandler
+from rtl_rag_chatbot_api.chatbot.nanobanana_handler import NanoBananaGenerator
 from rtl_rag_chatbot_api.chatbot.utils.encryption import encrypt_file
 from rtl_rag_chatbot_api.chatbot.utils.image_prompt_rewriter import ImagePromptRewriter
 from rtl_rag_chatbot_api.chatbot.utils.language_detector import detect_lang
@@ -118,6 +119,7 @@ embedding_handler = EmbeddingHandler(configs, gcs_handler, file_handler)
 # Initialize image handlers only once
 dalle_handler = DalleImageGenerator(configs)
 imagen_handler = ImagenGenerator(configs)
+nanobanana_handler = NanoBananaGenerator(configs)
 # Pass existing handlers to avoid duplicate initialization
 combined_image_handler = CombinedImageGenerator(configs, dalle_handler, imagen_handler)
 # Initialize image prompt rewriter for context-aware image generation
@@ -3767,6 +3769,7 @@ async def get_available_models(current_user=Depends(get_current_user)):
         configs.vertexai_imagen.model_name,
         "imagen-4.0-ultra-generate-001",
         "imagen-4.0-generate-001",
+        "NanoBanana",
         "Dalle + Imagen",
     ]
 
@@ -4356,13 +4359,325 @@ def find_file_by_name(
         )
 
 
+def _validate_image_size(input_image_base64) -> None:
+    """
+    Validate the size of base64-encoded image(s) (10MB limit per image).
+
+    Args:
+        input_image_base64: Base64-encoded image data (str or List[str])
+
+    Raises:
+        HTTPException: If any image is too large or invalid
+    """
+    try:
+        logging.info("Starting image size validation")
+        import base64
+
+        # Normalize to list (handles both str and list)
+        images_to_validate = []
+        if isinstance(input_image_base64, str):
+            images_to_validate = [input_image_base64]
+        elif isinstance(input_image_base64, (list, tuple)):
+            images_to_validate = list(input_image_base64)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="input_image_base64 must be a string or list of strings",
+            )
+
+        # Validate each image
+        for idx, image_data in enumerate(images_to_validate):
+            # Remove data URI prefix if present
+            base64_data = image_data
+            if "base64," in base64_data:
+                base64_data = base64_data.split("base64,")[1]
+
+            # Calculate approximate size in bytes
+            image_bytes = base64.b64decode(base64_data)
+            size_mb = len(image_bytes) / (1024 * 1024)
+
+            if size_mb > 10:
+                image_num = (
+                    f"Image {idx + 1}" if len(images_to_validate) > 1 else "Image"
+                )
+                logging.error(
+                    f"{image_num} size validation failed: {size_mb:.2f}MB exceeds 10MB limit"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{image_num} size ({size_mb:.2f}MB) exceeds 10MB limit",
+                )
+
+        total_images = len(images_to_validate)
+        logging.info(
+            f"Image size validation successful: {total_images} image(s) validated"
+        )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        logging.error(f"Error validating input image size: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid input_image_base64 format: {str(e)}",
+        )
+
+
+def _process_prompt_with_context(prompt_array: list) -> tuple:
+    """
+    Process prompt array and apply context-aware rewriting if needed.
+
+    Args:
+        prompt_array: List of prompts with history
+
+    Returns:
+        Tuple of (final_prompt, used_context, rewrite_method, context_type, is_edit_operation)
+    """
+    current_prompt = prompt_array[-1]
+    prompt_history = prompt_array[:-1] if len(prompt_array) > 1 else []
+
+    final_prompt = current_prompt
+    used_context = False
+    rewrite_method = "none"
+    context_type = "none"
+    is_edit_operation = False
+
+    # Check if we should use historical context for prompt rewriting
+    if prompt_history and len(prompt_history) > 0:
+        # Define LLM call for prompt rewriting using GPT-4o for better reasoning
+        def llm_call(prompt: str) -> str:
+            return get_azure_non_rag_response(
+                configs, prompt, model_choice="gpt_5_mini", max_tokens=1000
+            )
+
+        # Rewrite the prompt using historical context with LLM
+        (
+            final_prompt,
+            rewrite_method,
+            context_type,
+            is_edit_operation,
+        ) = image_prompt_rewriter.rewrite_prompt(
+            prompt_history, current_prompt, llm_call
+        )
+        used_context = True
+        logging.info(
+            f"Prompt rewriting result: is_edit={is_edit_operation}, "
+            f"context_type={context_type}, method={rewrite_method}"
+        )
+
+    return final_prompt, used_context, rewrite_method, context_type, is_edit_operation
+
+
+def _determine_image_for_editing(
+    request: ImageGenerationRequest, is_edit_operation: bool
+) -> tuple:
+    """
+    Determine which image to use for editing operations.
+
+    Args:
+        request: The image generation request
+        is_edit_operation: Whether this is an edit operation
+
+    Returns:
+        Tuple of (input_image_for_generation, reference_image_used, is_edit_operation_updated)
+    """
+    logging.info(
+        f"Determining image for editing: is_edit_operation={is_edit_operation}, "
+        f"model={request.model_choice}"
+    )
+
+    input_image_for_generation = None
+    reference_image_used = False
+
+    # Only NanoBanana supports image editing
+    is_nanobanana = (
+        request.model_choice and "nanobanana" in request.model_choice.lower()
+    )
+
+    # Normalize input_image_base64 to list format for consistent handling
+    normalized_images = None
+    if request.input_image_base64:
+        if isinstance(request.input_image_base64, str):
+            normalized_images = [request.input_image_base64]
+        elif isinstance(request.input_image_base64, list):
+            # Limit to 3 images max
+            if len(request.input_image_base64) > 3:
+                logging.warning(
+                    f"Too many input images ({len(request.input_image_base64)}), limiting to 3"
+                )
+                normalized_images = request.input_image_base64[:3]
+            else:
+                normalized_images = request.input_image_base64
+
+    # Priority 1: History-based modification (follow-up edit)
+    # For follow-up edits, use the last generated image (sent by Streamlit)
+    if is_edit_operation and is_nanobanana:
+        # Try to use provided input image (from history - last generated image)
+        if normalized_images:
+            input_image_for_generation = normalized_images
+            reference_image_used = True
+            num_images = len(normalized_images)
+            logging.info(
+                f"Using provided input_image_base64 ({num_images} image(s)) for image editing "
+                "(from history - last generated image)"
+            )
+        else:
+            # No input image provided but modification was requested
+            logging.warning(
+                "Modification requested (is_edit_operation=True) but no input_image_base64 provided. "
+                "Falling back to text-to-image generation."
+            )
+            is_edit_operation = False
+    # Priority 2: Uploaded image(s) (no history, first edit)
+    # If NanoBanana and input_image_base64 is provided, treat as edit operation
+    # This handles the case where user uploads image(s) (no history needed)
+    elif is_nanobanana and normalized_images:
+        input_image_for_generation = normalized_images
+        reference_image_used = True
+        is_edit_operation = True  # Override to enable image editing
+        num_images = len(normalized_images)
+        logging.info(
+            f"Using provided input_image_base64 ({num_images} image(s)) for image editing (uploaded image(s))"
+        )
+    elif is_edit_operation and not is_nanobanana:
+        # Image editing requested but not using NanoBanana
+        logging.warning(
+            f"Image editing requested with model {request.model_choice}, "
+            f"but only NanoBanana supports image editing. Falling back to text-to-image."
+        )
+        is_edit_operation = False
+
+    logging.info(
+        f"Image editing determination complete: reference_image_used={reference_image_used}, "
+        f"final_is_edit_operation={is_edit_operation}"
+    )
+
+    return input_image_for_generation, reference_image_used, is_edit_operation
+
+
+def _generate_image_with_model(
+    request: ImageGenerationRequest,
+    generation_prompt: str,
+    input_image_for_generation,
+) -> dict:
+    """
+    Generate image using the appropriate model based on request.
+
+    Args:
+        request: The image generation request
+        generation_prompt: The prompt to use for generation (raw user message for NanoBanana,
+         rewritten prompt for others)
+        input_image_for_generation: Input image(s) for editing (str or List[str], if any)
+
+    Returns:
+        Generation result dictionary
+    """
+    # Enforce n=1 for DALL-E 3 (as per model constraints)
+    n_images = (
+        1
+        if not request.model_choice or "dall-e" in request.model_choice.lower()
+        else request.n
+    )
+
+    is_nanobanana = (
+        request.model_choice and "nanobanana" in request.model_choice.lower()
+    )
+
+    # Select the appropriate image generator based on model_choice
+    if is_nanobanana:
+        operation_type = (
+            "image_to_image" if input_image_for_generation else "text_to_image"
+        )
+        logging.info(
+            f"Using NanoBanana for {operation_type} generation - "
+            f"Prompt: '{generation_prompt}'"
+        )
+        return nanobanana_handler.generate_image(
+            prompt=generation_prompt,
+            size=request.size,
+            n=n_images,
+            input_image_base64=input_image_for_generation,
+        )
+    elif request.model_choice and "imagen" in request.model_choice.lower():
+        logging.info(
+            f"Using Vertex AI Imagen model for image generation - "
+            f"Final prompt: '{generation_prompt}'"
+        )
+        # Only pass an override when a specific Imagen variant is requested
+        imagen_override = (
+            request.model_choice
+            if request.model_choice.lower().startswith("imagen-")
+            else None
+        )
+        return imagen_handler.generate_image(
+            prompt=generation_prompt,
+            size=request.size,
+            n=n_images,
+            model_name=imagen_override,
+        )
+    else:
+        # Default to DALL-E 3
+        logging.info(
+            f"Using DALL-E 3 model for image generation - "
+            f"Final prompt: '{generation_prompt}'"
+        )
+        return dalle_handler.generate_image(
+            prompt=generation_prompt, size=request.size, n=n_images
+        )
+
+
+def _enhance_result_with_metadata(
+    result: dict,
+    request: ImageGenerationRequest,
+    final_prompt: str,
+    used_context: bool,
+    rewrite_method: str,
+    context_type: str,
+    input_image_for_generation: str,
+    reference_image_used: bool,
+) -> dict:
+    """
+    Add metadata to the generation result.
+
+    Args:
+        result: Base result from image generation
+        request: Original request
+        final_prompt: Processed prompt
+        used_context: Whether context was used
+        rewrite_method: Method used for rewriting
+        context_type: Type of context usage
+        input_image_for_generation: Input image used (if any)
+        reference_image_used: Whether reference image was used
+
+    Returns:
+        Enhanced result with metadata
+    """
+    result["final_prompt"] = final_prompt
+    result["used_context"] = used_context
+    result["rewrite_method"] = rewrite_method
+    result["context_type"] = context_type
+
+    # Add operation metadata to response
+    result["operation_type"] = (
+        "image_to_image" if input_image_for_generation else "text_to_image"
+    )
+    result["reference_image_used"] = reference_image_used
+
+    # Include session_id and reference_image_file_id if provided
+    if request.session_id:
+        result["session_id"] = request.session_id
+    if request.reference_image_file_id:
+        result["reference_image_file_id"] = request.reference_image_file_id
+
+    return result
+
+
 @app.post("/image/generate")
 async def generate_image(
     request: ImageGenerationRequest, current_user=Depends(get_current_user)
 ):
     """
-    Generate an image based on the provided text prompt using selected model (DALL-E 3 or Imagen).
-    Supports context-aware follow-up instructions using prompt array (similar to chat).
+    Generate an image based on the provided text prompt using selected model (DALL-E 3, Imagen, or NanoBanana).
+    Supports context-aware follow-up instructions and image-to-image editing (NanoBanana only).
 
     Args:
         request (ImageGenerationRequest): Request body containing:
@@ -4370,7 +4685,11 @@ async def generate_image(
               previous elements are history. Format: ['prompt1', 'prompt2', 'current_prompt']
             - size (str, optional): Size of the generated image (default: "1024x1024")
             - n (int, optional): Number of images to generate (default: 1)
-            - model_choice (str, optional): Model to use ("dall-e-3" or Imagen variant). Default: "dall-e-3"
+            - model_choice (str, optional): Model to use ("dall-e-3", Imagen variant,
+            or "NanoBanana"). Default: "dall-e-3"
+            - session_id (str, optional): Session ID for tracking conversation context
+            - input_image_base64 (str, optional): Base64-encoded input image for editing (NanoBanana only)
+            - reference_image_file_id (str, optional): File ID of reference image (for frontend tracking)
         current_user: Authenticated user information
 
     Returns:
@@ -4383,102 +4702,87 @@ async def generate_image(
             - rewrite_method (str): Rewriting method used ("llm", "none", or "error")
             - context_type (str): How context was used ("modification", "new_request", or "none")
             - model (str): The model used for generation
+            - session_id (str, optional): Session ID if provided
+            - operation_type (str): Type of operation ("text_to_image" or "image_to_image")
+            - reference_image_used (bool): Whether an input image was used
+            - reference_image_file_id (str, optional): File ID of reference image if provided
 
     Example:
-        First request:
-        {"prompt": ["a red car"], "size": "1024x1024"}
+        Text-to-image request:
+        {"prompt": ["a red car"], "size": "1024x1024", "model_choice": "NanoBanana"}
 
-        Follow-up request:
-        {"prompt": ["a red car", "make it blue"], "size": "1024x1024"}
+        Image-to-image editing (with base64 image):
+        {
+            "prompt": ["a red car", "make it blue"],
+            "size": "1024x1024",
+            "model_choice": "NanoBanana",
+            "input_image_base64": "data:image/png;base64,iVBORw0KG...",
+            "session_id": "session-123"
+        }
     """
     try:
         # Validate prompt array is not empty
         if not request.prompt or len(request.prompt) == 0:
             raise HTTPException(status_code=400, detail="Prompt array cannot be empty")
 
-        # Extract current prompt and history (similar to chat endpoint)
+        # Validate input image size(s) if provided (10MB limit per image)
+        if request.input_image_base64:
+            _validate_image_size(request.input_image_base64)
+
+        # Process prompt with context-aware rewriting
+        (
+            final_prompt,
+            used_context,
+            rewrite_method,
+            context_type,
+            is_edit_operation,
+        ) = _process_prompt_with_context(request.prompt)
+
+        # Extract current prompt (latest user message)
         current_prompt = request.prompt[-1]
-        prompt_history = request.prompt[:-1] if len(request.prompt) > 1 else []
 
-        final_prompt = current_prompt
-        used_context = False
-        rewrite_method = "none"
-        context_type = "none"
-
-        # Check if we should use historical context for prompt rewriting
-        if prompt_history and len(prompt_history) > 0:
-            # Define LLM call for prompt rewriting using GPT-4o for better reasoning
-            def llm_call(prompt: str) -> str:
-                return get_azure_non_rag_response(
-                    configs, prompt, model_choice="gpt_5_mini", max_tokens=1000
-                )
-
-            # Rewrite the prompt using historical context with LLM
-            (
-                final_prompt,
-                rewrite_method,
-                context_type,
-            ) = image_prompt_rewriter.rewrite_prompt(
-                prompt_history, current_prompt, llm_call
-            )
-            used_context = True
-
-        # Enforce n=1 for DALL-E 3 (as per model constraints)
-        n_images = (
-            1
-            if not request.model_choice or "dall-e" in request.model_choice.lower()
-            else request.n
+        # Determine if this is NanoBanana model
+        is_nanobanana = (
+            request.model_choice and "nanobanana" in request.model_choice.lower()
         )
 
-        # Select the appropriate image generator based on model_choice
-        if request.model_choice and "imagen" in request.model_choice.lower():
-            # Generate image using the imagen_handler
-            logging.info(
-                f"Using Vertex AI Imagen model for image generation - "
-                f"Original prompt: '{current_prompt}' -> Final prompt: '{final_prompt}'"
-            )
-            # Only pass an override when a specific Imagen variant is requested (imagen-...)
-            imagen_override = (
-                request.model_choice
-                if request.model_choice.lower().startswith("imagen-")
-                else None
-            )
-            result = imagen_handler.generate_image(
-                prompt=final_prompt,
-                size=request.size,
-                n=n_images,
-                model_name=imagen_override,
-            )
-        else:
-            # Default to DALL-E 3
-            logging.info(
-                f"Using DALL-E 3 model for image generation - "
-                f"Original prompt: '{current_prompt}' -> Final prompt: '{final_prompt}'"
-            )
-            result = dalle_handler.generate_image(
-                prompt=final_prompt, size=request.size, n=n_images
-            )
+        # For NanoBanana, use the raw latest user message instead of rewritten prompt
+        # For DALL-E and Imagen, use the rewritten final_prompt
+        generation_prompt = current_prompt if is_nanobanana else final_prompt
 
-        # Check if generation failed - the handler already returns structured error format
+        # Determine image for editing operations
+        (
+            input_image_for_generation,
+            reference_image_used,
+            is_edit_operation,
+        ) = _determine_image_for_editing(request, is_edit_operation)
+
+        # Generate image using appropriate model
+        result = _generate_image_with_model(
+            request, generation_prompt, input_image_for_generation
+        )
+
+        # Check if generation failed
         if not result.get("success", False):
-            # The result already contains structured error format (code, key, message, details)
-            # Just add context information and return it directly
+            # Add context information and return error response
             result["final_prompt"] = final_prompt
             result["used_context"] = used_context
             result["rewrite_method"] = rewrite_method
-            result["context_type"] = (
-                context_type if "context_type" in locals() else "none"
-            )
-
-            # Return the error response with proper HTTP status
+            result["context_type"] = context_type
             http_status = result.get("http_status", 500)
             return JSONResponse(status_code=http_status, content=result)
 
-        # Add context information to successful response
-        result["final_prompt"] = final_prompt
-        result["used_context"] = used_context
-        result["rewrite_method"] = rewrite_method
-        result["context_type"] = context_type if "context_type" in locals() else "none"
+        # Enhance successful result with metadata
+        result = _enhance_result_with_metadata(
+            result,
+            request,
+            final_prompt,
+            used_context,
+            rewrite_method,
+            context_type,
+            input_image_for_generation,
+            reference_image_used,
+        )
 
         return result
 
