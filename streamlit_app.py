@@ -1,4 +1,5 @@
 import logging
+import warnings
 
 import plotly.graph_objects as go
 import requests
@@ -7,6 +8,13 @@ from PIL import Image
 
 from streamlit_image_generation import handle_image_generation
 
+# Suppress warnings from google-cloud-aiplatform and vertexai
+warnings.filterwarnings(
+    "ignore", category=FutureWarning, module="google.cloud.aiplatform"
+)
+warnings.filterwarnings(
+    "ignore", category=UserWarning, module="vertexai._model_garden._model_garden_models"
+)
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"

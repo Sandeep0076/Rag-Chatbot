@@ -3,11 +3,20 @@
 Multi-worker startup script for the RAG PDF API.
 This script starts the API with multiple worker processes to enable true concurrency.
 """
-
 import argparse
 import logging
+import warnings
 
 import uvicorn
+
+# Suppress warnings from google-cloud-aiplatform and vertexai
+warnings.filterwarnings(
+    "ignore", category=FutureWarning, module="google.cloud.aiplatform"
+)
+warnings.filterwarnings(
+    "ignore", category=UserWarning, module="vertexai._model_garden._model_garden_models"
+)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
