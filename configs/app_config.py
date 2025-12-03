@@ -106,6 +106,30 @@ class CleanupConfig(BaseModel):
     cleanup_interval_minutes: int = 60  # 1 hour default
 
 
+class GenerateSystemPromptRequest(BaseModel):
+    """Request model for generating custom GPT system prompts.
+
+    Moved from `rtl_rag_chatbot_api/app.py` into central config to ensure single source
+    of truth for request models and easier reuse across modules.
+    """
+
+    name: str = Field(..., description="Name of the custom GPT")
+    purpose: str = Field(..., description="Purpose and problems to solve")
+    audience: str = Field(..., description="Target audience and expertise level")
+    tone: str = Field(..., description="Communication tone and style")
+    capabilities: str = Field(..., description="Top 3-5 capabilities")
+    constraints: Optional[str] = Field(None, description="Things to avoid or refuse")
+    knowledge: str = Field(..., description="Specialized knowledge and terminology")
+    example_interaction: str = Field(..., description="Example of ideal interaction")
+    custom_instructions: Optional[str] = Field(
+        None, description="Additional custom instructions"
+    )
+    language: Optional[str] = Field(
+        "German",
+        description="Language name for the system prompt (e.g., 'English', 'German')",
+    )
+
+
 class Config(BaseSettings):
     azure_embedding: AzureEmbeddingConfig
     azure_embedding_3_large: AzureEmbedding3LargeConfig

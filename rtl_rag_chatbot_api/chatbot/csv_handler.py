@@ -64,6 +64,8 @@ class TabularDataHandler:
         database_summaries_param: Optional[Dict[str, Any]] = None,
         all_file_infos: Optional[Dict[str, Any]] = None,
         temperature: float = None,
+        custom_gpt: bool = False,
+        system_prompt: str = None,
     ):
         """
         Initializes the TabularDataHandler with the given configuration and file information.
@@ -91,6 +93,8 @@ class TabularDataHandler:
 
         self.config = config
         self.model_choice = model_choice
+        self.custom_gpt = custom_gpt
+        self.system_prompt = system_prompt
         self.db_name = "tabular_data.db"
         self.engines = {}
         self.sessions = {}
@@ -699,11 +703,16 @@ class TabularDataHandler:
             raise ValueError(f"No database initialized for file_id: {file_id}")
 
         toolkit = SQLDatabaseToolkit(db=self.dbs[file_id], llm=self.llm)
+        agent_prefix = None
+        if self.custom_gpt and self.system_prompt:
+            agent_prefix = self.system_prompt
+
         self.agents[file_id] = create_sql_agent(
             llm=self.llm,
             toolkit=toolkit,
             verbose=True,
             handle_parsing_errors=True,
+            prefix=agent_prefix,
             agent_executor_kwargs={
                 "handle_parsing_errors": True,
                 "return_intermediate_steps": True,

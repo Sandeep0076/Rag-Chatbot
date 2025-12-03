@@ -130,6 +130,8 @@ class GeminiHandler(VertexAIRAGHandler):
         collection_name_prefix: str = "rag_collection_",
         user_id: str = None,
         temperature: float = 0.8,
+        custom_gpt: bool = False,
+        system_prompt: str = None,
     ):
         # Initialize the unified base class
         super().__init__(
@@ -144,6 +146,8 @@ class GeminiHandler(VertexAIRAGHandler):
             temperature=temperature,
             vertex_project=configs.gemini.project,
             vertex_location=configs.gemini.location,
+            custom_gpt=custom_gpt,
+            system_prompt=system_prompt,
         )
 
         # Gemini-specific initialization
