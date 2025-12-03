@@ -22,6 +22,8 @@ class AzureChatbot(BaseRAGHandler):
         collection_name_prefix: str = "rag_collection_",
         user_id: str = None,
         chroma_manager=None,  # Accept an optional ChromaDBManager instance
+        custom_gpt: bool = False,
+        system_prompt: str = None,
     ):
         # Pass the existing chroma_manager to the parent, or let it create one
         super().__init__(configs, gcs_handler, chroma_manager)
@@ -29,6 +31,8 @@ class AzureChatbot(BaseRAGHandler):
         self.model_choice = model_choice
         self.user_id = user_id
         self.all_file_infos = all_file_infos if all_file_infos else {}
+        self.custom_gpt = custom_gpt
+        self.system_prompt = system_prompt
         self._collection_name_prefix = collection_name_prefix  # e.g. "RAG_CHATBOT_"
         self.active_file_ids: List[str] = []
         self.is_multi_file = False
@@ -357,7 +361,11 @@ class AzureChatbot(BaseRAGHandler):
 
             context_str = "\n".join(all_relevant_docs)
 
-            system_message = self.configs.chatbot.system_prompt_rag_llm
+            system_message = (
+                self.system_prompt
+                if self.custom_gpt and self.system_prompt
+                else self.configs.chatbot.system_prompt_rag_llm
+            )
             messages = [
                 {"role": "system", "content": system_message},
                 {
@@ -455,7 +463,11 @@ class AzureChatbot(BaseRAGHandler):
 
 
 def get_azure_non_rag_response(
-    configs, query: str, model_choice: str = "gpt_4o_mini", max_tokens: int = None
+    configs,
+    query: str,
+    model_choice: str = "gpt_4o_mini",
+    max_tokens: int = None,
+    temperature: float = None,
 ) -> str:
     """
     Retrieves a response from Azure OpenAI without using Retrieval-Augmented Generation (RAG).
@@ -464,6 +476,8 @@ def get_azure_non_rag_response(
         configs (Config): Configuration object containing necessary settings for the Chatbot.
         query (str): The user's input query or prompt.
         model_choice (str, optional): The specific Azure OpenAI model to use. Defaults to "gpt_4o_mini".
+        max_tokens (int, optional): Maximum tokens for the response. Defaults to config value if None.
+        temperature (float, optional): Sampling temperature. Defaults to config value if None.
 
     Returns:
         str: The generated response from the Azure OpenAI model.
@@ -498,10 +512,14 @@ def get_azure_non_rag_response(
             max_tokens if max_tokens is not None else configs.llm_hyperparams.max_tokens
         )
 
-        # Check if the model is O3, O4, or GPT-5 variant which requires max_completion_tokens
-        logging.info(
-            f"Non-RAG model deployment name: {configs.azure_llm.models[model_choice].deployment}"
+        # Use provided temperature or fall back to config default
+        effective_temperature = (
+            temperature
+            if temperature is not None
+            else configs.llm_hyperparams.temperature
         )
+
+        # Check if the model is O3, O4, or GPT-5 variant which requires max_completion_tokens
         deployment_lower = configs.azure_llm.models[model_choice].deployment.lower()
         use_max_completion = any(
             term in deployment_lower for term in ["o3", "o4", "gpt-5", "gpt_5"]
@@ -539,7 +557,7 @@ def get_azure_non_rag_response(
             # Do NOT include 'stop' for GPT-5/O-series models
         else:
             # Regular models: Use all standard parameters
-            completion_params["temperature"] = configs.llm_hyperparams.temperature
+            completion_params["temperature"] = effective_temperature
             completion_params["max_tokens"] = effective_max_tokens
             completion_params["top_p"] = configs.llm_hyperparams.top_p
             completion_params[
@@ -550,7 +568,6 @@ def get_azure_non_rag_response(
             ] = configs.llm_hyperparams.presence_penalty
             if configs.llm_hyperparams.stop is not None:
                 completion_params["stop"] = configs.llm_hyperparams.stop
-
         response = llm_client.chat.completions.create(**completion_params)
 
         return response.choices[0].message.content.strip()

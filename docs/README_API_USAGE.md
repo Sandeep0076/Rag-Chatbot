@@ -75,6 +75,7 @@ Upload files to create embeddings for subsequent chat queries. The API automatic
   - `is_image`: Boolean flag for image processing (default: false)
   - `username`: Required username for tracking
   - `urls`: Comma or newline separated URLs for web content processing (optional)
+  - `custom_gpt`: Boolean flag to mark files uploaded from Custom GPT (default: false). When set to `true`, the flag is stored in file metadata to track Custom GPT uploads.
 - **Response Format**:
   ```json
   {
@@ -100,6 +101,7 @@ Upload files to create embeddings for subsequent chat queries. The API automatic
      - Key: `is_image`, Value: `false` (or `true` if uploading an image)
      - Key: `username`, Value: Enter a username
      - Key: `urls`, Value: Enter URLs separated by commas or newlines (optional)
+     - Key: `custom_gpt`, Value: `true` (optional, set to `true` when uploading from Custom GPT)
   6. Click "Send" to upload the file
 
   **Multiple URL Processing Example**:
@@ -138,7 +140,16 @@ Upload files to create embeddings for subsequent chat queries. The API automatic
   - Key: `files`, Value: Select new files to upload
   - Key: `existing_file_ids`, Value: `uuid-file-1, uuid-file-2`
   - Key: `urls`, Value: `https://example.com`
+  - Key: `custom_gpt`, Value: `true` (optional, to mark as Custom GPT upload)
   - All files (new, existing, and URL content) will be processed in parallel
+
+  **Custom GPT Upload Example**:
+  To upload files from Custom GPT and track them in metadata:
+  - Key: `username`, Value: `your-username`
+  - Key: `files`, Value: Select files to upload
+  - Key: `custom_gpt`, Value: `true`
+  - The `custom_gpt` flag will be stored in the file's metadata (file_info.json) for tracking purposes
+  - Works with both single file (`file`) and multiple files (`files`) uploads
 
 ### Check Embeddings
 
