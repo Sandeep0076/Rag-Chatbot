@@ -1,8 +1,6 @@
 """
 Main FastAPI application for the RAG PDF API.
 """
-
-
 import asyncio
 import json
 import logging
@@ -11,6 +9,7 @@ import pathlib
 import pwd
 import time
 import uuid
+import warnings
 from asyncio import Semaphore
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
@@ -86,7 +85,13 @@ from rtl_rag_chatbot_api.common.prompts_storage import (
 )
 from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
 
-# from rtl_rag_chatbot_api.oauth.get_current_user import get_current_user
+# Suppress warnings from google-cloud-aiplatform and vertexai
+warnings.filterwarnings(
+    "ignore", category=FutureWarning, module="google.cloud.aiplatform"
+)
+warnings.filterwarnings(
+    "ignore", category=UserWarning, module="vertexai._model_garden._model_garden_models"
+)
 
 # Suppress logging warnings
 os.environ["GRPC_VERBOSITY"] = "ERROR"
