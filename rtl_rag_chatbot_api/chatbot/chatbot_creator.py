@@ -361,13 +361,15 @@ class AzureChatbot(BaseRAGHandler):
 
             context_str = "\n".join(all_relevant_docs)
 
-            system_message = (
-                self.system_prompt
-                if self.custom_gpt and self.system_prompt
-                else self.configs.chatbot.system_prompt_rag_llm
+            system_message = self.configs.chatbot.system_prompt_rag_llm
+            # GPT 5.1 uses "developer" role instead of "system" role
+            deployment_lower = self.model_config.deployment.lower()
+            is_gpt_5_1 = any(
+                term in deployment_lower for term in ["gpt-5.1", "gpt_5_1"]
             )
+            system_role = "developer" if is_gpt_5_1 else "system"
             messages = [
-                {"role": "system", "content": system_message},
+                {"role": system_role, "content": system_message},
                 {
                     "role": "user",
                     "content": f"{files_context}Context:\n{context_str}\n\nQuestion: {query}",
@@ -388,7 +390,8 @@ class AzureChatbot(BaseRAGHandler):
             # Check for O3, O4, or GPT-5 models which use max_completion_tokens
             deployment_lower = self.model_config.deployment.lower()
             use_max_completion = any(
-                term in deployment_lower for term in ["o3", "o4", "gpt-5", "gpt_5"]
+                term in deployment_lower
+                for term in ["o3", "o4", "gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
             )
 
             # Resolve optional env-configurable advanced params
@@ -415,7 +418,10 @@ class AzureChatbot(BaseRAGHandler):
                     "presence_penalty"
                 ] = self.configs.llm_hyperparams.presence_penalty
                 # 'reasoning_effort' and 'verbosity' are only supported by GPT-5 family, not by O4/O3
-                if any(term in deployment_lower for term in ["gpt-5", "gpt_5"]):
+                if any(
+                    term in deployment_lower
+                    for term in ["gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
+                ):
                     completion_params["reasoning_effort"] = (
                         configured_reasoning_effort or "minimal"
                     )
@@ -495,10 +501,16 @@ def get_azure_non_rag_response(
             api_version=configs.azure_llm.models[model_choice].api_version,
         )
 
+        # Get deployment name for model detection
+        deployment_lower = configs.azure_llm.models[model_choice].deployment.lower()
+
         # Create completion with system prompt and user query
+        # GPT 5.1 uses "developer" role instead of "system" role
+        is_gpt_5_1 = any(term in deployment_lower for term in ["gpt-5.1", "gpt_5_1"])
+        system_role = "developer" if is_gpt_5_1 else "system"
         messages = [
             {
-                "role": "system",
+                "role": system_role,
                 "content": (
                     "You are a helpful assistant that provides accurate and relevant "
                     "information based on the given data."
@@ -518,11 +530,9 @@ def get_azure_non_rag_response(
             if temperature is not None
             else configs.llm_hyperparams.temperature
         )
-
-        # Check if the model is O3, O4, or GPT-5 variant which requires max_completion_tokens
-        deployment_lower = configs.azure_llm.models[model_choice].deployment.lower()
         use_max_completion = any(
-            term in deployment_lower for term in ["o3", "o4", "gpt-5", "gpt_5"]
+            term in deployment_lower
+            for term in ["o3", "o4", "gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
         )
 
         # Resolve optional env-configurable advanced params
@@ -549,7 +559,10 @@ def get_azure_non_rag_response(
                 "presence_penalty"
             ] = configs.llm_hyperparams.presence_penalty
             # 'reasoning_effort' and 'verbosity' are only supported by GPT-5 family, not by O4/O3
-            if any(term in deployment_lower for term in ["gpt-5", "gpt_5"]):
+            if any(
+                term in deployment_lower
+                for term in ["gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
+            ):
                 completion_params["reasoning_effort"] = (
                     configured_reasoning_effort or "minimal"
                 )
