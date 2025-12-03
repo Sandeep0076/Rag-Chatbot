@@ -26,6 +26,8 @@ class AnthropicHandler(VertexAIRAGHandler):
         collection_name_prefix: str = "rag_collection_",
         user_id: str = None,
         temperature: float = 0.8,
+        custom_gpt: bool = False,
+        system_prompt: str = None,
     ):
         # Initialize the unified base class
         super().__init__(
@@ -40,6 +42,8 @@ class AnthropicHandler(VertexAIRAGHandler):
             temperature=temperature,
             vertex_project=configs.anthropic.project,
             vertex_location=configs.anthropic.location,
+            custom_gpt=custom_gpt,
+            system_prompt=system_prompt,
         )
 
         # Anthropic-specific initialization

@@ -14,6 +14,8 @@ class Query(BaseModel):
     user_id: str
     session_id: str  # Mandatory session ID for tracking and isolation
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+    custom_gpt: bool = False
+    system_prompt: Optional[str] = None
     model_config = {"protected_namespaces": ()}
 
 
@@ -82,8 +84,43 @@ class EmbeddingsCheckRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    model: str
-    message: str
+    # Support both simple chat and Custom GPT mode
+    model: Optional[str] = None  # Simple mode: model name
+    message: Optional[str] = None  # Simple mode: single message
+
+    # Custom GPT mode fields (alternative to model/message)
+    text: Optional[List[str]] = None  # Custom GPT: conversation history
+    model_choice: Optional[str] = None  # Custom GPT: model name
+    user_id: Optional[str] = None  # Custom GPT: user identifier
+    session_id: Optional[str] = None  # Custom GPT: session tracking
+
+    # Common fields
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+
+    # Custom GPT specific
+    custom_gpt: bool = False
+    system_prompt: Optional[str] = None
+    generate_visualization: bool = False
+    step_name: Optional[str] = None  # Identifies Custom GPT creation step for logging
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Validate: either (model + message) OR (text + model_choice) must be provided
+        has_simple = bool(self.model) and bool(self.message)
+        has_custom_gpt = bool(self.text) and bool(self.model_choice)
+
+        if not has_simple and not has_custom_gpt:
+            raise BaseAppError(
+                ErrorRegistry.ERROR_BAD_REQUEST,
+                "Either (model + message) for simple chat OR (text + model_choice) for Custom GPT must be provided",
+                details={
+                    "custom_gpt": self.custom_gpt,
+                    "has_model": bool(self.model),
+                    "has_message": bool(self.message),
+                    "has_text": bool(self.text),
+                    "has_model_choice": bool(self.model_choice),
+                },
+            )
 
 
 class ImageGenerationRequest(BaseModel):

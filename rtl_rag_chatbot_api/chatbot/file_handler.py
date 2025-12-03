@@ -721,6 +721,7 @@ class FileHandler:
         google_result,  # Kept for backwards compatibility
         azure_result,
         embedding_type,
+        custom_gpt: bool = False,
     ):
         """Handle processing for files that already exist in the system.
 
@@ -782,7 +783,16 @@ class FileHandler:
         # Update username list using the more comprehensive method
         # Use update_file_info which appends usernames (tracks frequency)
         # instead of update_username_list which deduplicates
-        self.gcs_handler.update_file_info(existing_file_id, {"username": username})
+        update_data = {"username": username}
+
+        # Update custom_gpt flag if True
+        if custom_gpt:
+            update_data["custom_gpt"] = True
+            logging.info(
+                f"Setting custom_gpt flag to True for existing file {existing_file_id}"
+            )
+
+        self.gcs_handler.update_file_info(existing_file_id, update_data)
         logging.info(
             f"Appended username '{username}' for existing file (tracks upload frequency)"
         )
@@ -887,6 +897,7 @@ class FileHandler:
         is_image: bool,
         username: str,
         embedding_type: str,
+        custom_gpt: bool = False,
     ) -> dict:
         """Handle short-circuit flow when embeddings already exist for the file hash."""
         logging.info(f"Found embeddings for: {original_filename}")
@@ -960,8 +971,15 @@ class FileHandler:
             logging.info(f"Downloading embeddings for file {existing_file_id}")
             self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
 
-        # Track username usage
-        self.gcs_handler.update_file_info(existing_file_id, {"username": username})
+        # Track username usage and custom_gpt flag
+        update_data = {"username": username}
+        if custom_gpt:
+            update_data["custom_gpt"] = True
+            logging.info(
+                f"Setting custom_gpt flag to True for existing file {existing_file_id}"
+            )
+
+        self.gcs_handler.update_file_info(existing_file_id, update_data)
         logging.info(
             f"Appended username '{username}' for existing file (tracks upload frequency)"
         )
@@ -1061,7 +1079,12 @@ class FileHandler:
             return build_error_result(error, file_id=file_id, is_image=is_image)
 
     async def process_file(
-        self, file: UploadFile, file_id: str, is_image: bool, username: str
+        self,
+        file: UploadFile,
+        file_id: str,
+        is_image: bool,
+        username: str,
+        custom_gpt: bool = False,
     ) -> dict:
         """Process uploaded file including handling images, tabular data and existing files."""
         try:
@@ -1102,6 +1125,7 @@ class FileHandler:
                     is_image,
                     username,
                     embedding_type,
+                    custom_gpt,
                 )
 
             # Only create directories and save file if we don't have existing embeddings
@@ -1144,6 +1168,7 @@ class FileHandler:
                 username,
                 original_filename,
                 actual_file_id,
+                custom_gpt,
             )
 
             # Process image analysis if needed
@@ -1184,6 +1209,7 @@ class FileHandler:
                 google_result,
                 azure_result,
                 embedding_type,
+                custom_gpt,
             )
 
             if existing_file_result:
@@ -1313,6 +1339,7 @@ class FileHandler:
         username: str,
         original_filename: str,
         file_id: str,
+        custom_gpt: bool = False,
     ):
         """Prepare metadata for the processed file"""
         metadata = {
@@ -1323,6 +1350,7 @@ class FileHandler:
             "original_filename": original_filename,
             "file_id": file_id,  # Always use the actual file_id (existing or new)
             "migrated": False,  # New files are not migrated
+            "custom_gpt": custom_gpt,  # Flag for Custom GPT mode
         }
 
         # Add extracted text and word count if available and feature is enabled

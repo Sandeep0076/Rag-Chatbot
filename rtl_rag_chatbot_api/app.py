@@ -26,11 +26,15 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
-from configs.app_config import Config
+from configs.app_config import Config, GenerateSystemPromptRequest
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot as Chatbot
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
 from rtl_rag_chatbot_api.chatbot.combined_image_handler import CombinedImageGenerator
 from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
+from rtl_rag_chatbot_api.chatbot.custom_gpt_handler import (
+    handle_custom_gpt_azure_request,
+    handle_custom_gpt_step_request,
+)
 from rtl_rag_chatbot_api.chatbot.dalle_handler import DalleImageGenerator
 from rtl_rag_chatbot_api.chatbot.data_visualization import detect_visualization_need
 from rtl_rag_chatbot_api.chatbot.embedding_handler import EmbeddingHandler
@@ -376,7 +380,9 @@ def get_conditional_db_session():
 
 
 # Asynchronous file processing function that runs concurrently with a semaphore limit
-async def process_file_with_semaphore(file_handler, file, file_id, is_image, username):
+async def process_file_with_semaphore(
+    file_handler, file, file_id, is_image, username, custom_gpt=False
+):
     async with file_processing_semaphore:
         logging.info(
             f"Starting parallel processing for file: {file.filename} with ID: {file_id}"
@@ -392,7 +398,9 @@ async def process_file_with_semaphore(file_handler, file, file_id, is_image, use
 
         start_time = time.time()
         # below function is for new file only encrypts and uploads to GCS
-        result = await file_handler.process_file(file, file_id, is_image, username)
+        result = await file_handler.process_file(
+            file, file_id, is_image, username, custom_gpt
+        )
         elapsed = time.time() - start_time
         logging.info(
             f"Completed processing for file: {file.filename} in {elapsed:.2f}s"
@@ -498,7 +506,9 @@ def prepare_file_list(file, files):
     return all_files
 
 
-async def process_files_in_parallel(file_handler, all_files, is_image, username):
+async def process_files_in_parallel(
+    file_handler, all_files, is_image, username, custom_gpt=False
+):
     """
     Process multiple files in parallel using asyncio.
 
@@ -507,6 +517,7 @@ async def process_files_in_parallel(file_handler, all_files, is_image, username)
         all_files: List of files to process
         is_image: Flag indicating if files are images
         username: Username for file ownership
+        custom_gpt: Flag indicating if files are from Custom GPT
 
     Returns:
         tuple: (results, processed_file_ids, original_filenames, is_tabular_flags, statuses)
@@ -520,7 +531,7 @@ async def process_files_in_parallel(file_handler, all_files, is_image, username)
         logging.info(f"Creating task for file {i + 1}/{len(all_files)}: {f.filename}")
         tasks.append(
             process_file_with_semaphore(
-                file_handler, f, file_ids[i], is_image, username
+                file_handler, f, file_ids[i], is_image, username, custom_gpt
             )
         )
 
@@ -905,6 +916,7 @@ async def process_files_by_type(
     is_tabular_flags,
     is_image,
     username,
+    custom_gpt: bool = False,
 ):
     """Process each uploaded file based on its type (tabular or document)."""
 
@@ -922,7 +934,7 @@ async def process_files_by_type(
     # Process document files in parallel if there are multiple
     if len(document_files) > 1:
         await process_document_files_parallel(
-            document_files, username, is_image, background_tasks
+            document_files, username, is_image, background_tasks, custom_gpt
         )
     # Process single document file normally
     elif len(document_files) == 1:
@@ -1016,7 +1028,11 @@ async def process_document_type_file(
 
 
 async def process_document_files_parallel(
-    document_files, username, is_image, background_tasks: BackgroundTasks = None
+    document_files,
+    username,
+    is_image,
+    background_tasks: BackgroundTasks = None,
+    custom_gpt: bool = False,
 ):
     """
     Process multiple document files in parallel, handling both new uploads and existing files.
@@ -1026,6 +1042,7 @@ async def process_document_files_parallel(
         document_files: List of document file information dictionaries
         username: Username for file ownership
         is_image: Flag indicating if files are images
+        custom_gpt: Flag to mark files uploaded from Custom GPT (default: False)
     """
     # Import here to avoid circular import
     from rtl_rag_chatbot_api.chatbot.parallel_embedding_creator import (
@@ -1085,6 +1102,15 @@ async def process_document_files_parallel(
                     logging.info(
                         f"Scheduled username append for existing file {file_id}: {username}"
                     )
+
+                    # Update custom_gpt flag in metadata if flag is True
+                    if custom_gpt:
+                        asyncio.create_task(
+                            update_custom_gpt_flag_for_existing_file(file_id)
+                        )
+                        logging.info(
+                            f"Scheduled custom_gpt flag update for existing file {file_id}"
+                        )
 
                     return None  # No need for embedding creation
 
@@ -1251,6 +1277,21 @@ async def update_username_for_existing_file(file_id, username, current_username_
     logging.info(f"Updated username list for existing file: {current_username_list}")
 
 
+async def update_custom_gpt_flag_for_existing_file(file_id):
+    """Update the custom_gpt flag in file_info.json metadata for an existing file."""
+    try:
+        gcs_handler = GCSHandler(configs)
+        # Update file_info.json to set custom_gpt flag to True
+        gcs_handler.update_file_info(file_id, {"custom_gpt": True})
+        logging.info(
+            f"Updated custom_gpt flag to True for existing file {file_id} in file_info.json"
+        )
+    except Exception as e:
+        logging.error(f"Error updating custom_gpt flag for file {file_id}: {str(e)}")
+        # Re-raise to ensure the task failure is visible
+        raise
+
+
 async def recreate_embeddings_for_existing_file(
     background_tasks, file_id, temp_file_path, username, result, current_username_list
 ):
@@ -1278,6 +1319,7 @@ async def _process_normal_upload_flow(
     background_tasks,
     is_migration: bool = False,
     migration_context: dict | None = None,
+    custom_gpt: bool = False,
 ):
     existing_results = []
     if parsed_existing_file_ids:
@@ -1287,10 +1329,11 @@ async def _process_normal_upload_flow(
                 username,
                 background_tasks,
                 migration_context,
+                custom_gpt,
             )
         else:
             existing_results = await process_existing_file_ids_in_parallel(
-                parsed_existing_file_ids, username, background_tasks
+                parsed_existing_file_ids, username, background_tasks, custom_gpt
             )
 
     new_file_results = []
@@ -1301,7 +1344,9 @@ async def _process_normal_upload_flow(
             original_filenames,
             is_tabular_flags,
             statuses,
-        ) = await process_files_in_parallel(file_handler, all_files, is_image, username)
+        ) = await process_files_in_parallel(
+            file_handler, all_files, is_image, username, custom_gpt
+        )
 
         # Check for errors in file processing
         error_results = [r for r in results if r.get("status") == "error"]
@@ -1326,6 +1371,7 @@ async def _process_normal_upload_flow(
             is_tabular_flags,
             is_image,
             username,
+            custom_gpt,
         )
 
         new_file_results = list(
@@ -1341,7 +1387,7 @@ async def _process_normal_upload_flow(
             if document_files:
                 if len(document_files) > 1:
                     await process_document_files_parallel(
-                        document_files, username, is_image, background_tasks
+                        document_files, username, is_image, background_tasks, custom_gpt
                     )
                 else:
                     file_info = document_files[0]
@@ -1383,6 +1429,7 @@ async def upload_file(
     username: str = Form(...),
     urls: str = Form(None),
     existing_file_ids: str = Form(None),  # New parameter for existing file IDs
+    custom_gpt: bool = Form(False),  # Flag for Custom GPT mode
     current_user=Depends(get_current_user),
 ):
     """
@@ -1515,6 +1562,7 @@ async def upload_file(
             is_image,
             username,
             background_tasks,
+            custom_gpt=custom_gpt,
         )
 
         return response
@@ -1624,7 +1672,10 @@ async def prepare_sqlite_db(file_id: str, temp_file_path: str):
 
 
 async def process_existing_file_ids_in_parallel(
-    file_ids: List[str], username: str, background_tasks: BackgroundTasks
+    file_ids: List[str],
+    username: str,
+    background_tasks: BackgroundTasks,
+    custom_gpt: bool = False,
 ) -> List[tuple]:
     """
     Process existing file IDs in parallel - validate embeddings and download if needed.
@@ -1634,6 +1685,7 @@ async def process_existing_file_ids_in_parallel(
         file_ids: List of existing file IDs to process
         username: Username to add to the file's username list
         background_tasks: Background tasks for async operations
+        custom_gpt: Flag to mark files uploaded from Custom GPT (default: False)
 
     Returns:
         List of tuples: (file_id, original_filename, is_tabular)
@@ -1681,6 +1733,16 @@ async def process_existing_file_ids_in_parallel(
                 username,
                 file_info.get("username", []),
             )
+
+            # Update custom_gpt flag in metadata if flag is True
+            if custom_gpt:
+                background_tasks.add_task(
+                    update_custom_gpt_flag_for_existing_file,
+                    file_id,
+                )
+                logging.info(
+                    f"Scheduled custom_gpt flag update for existing file {file_id}"
+                )
 
             logging.info(f"Successfully processed existing file ID: {file_id}")
             return (file_id, original_filename, is_tabular)
@@ -1814,6 +1876,7 @@ async def _handle_existing_no_migration_file_id(
     file_id: str,
     username: str,
     background_tasks: BackgroundTasks,
+    custom_gpt: bool = False,
 ) -> tuple:
     """Handle a single file_id that does not require migration using existing logic.
 
@@ -1853,6 +1916,16 @@ async def _handle_existing_no_migration_file_id(
             file_info.get("username", []),
         )
 
+        # Update custom_gpt flag in metadata if flag is True
+        if custom_gpt:
+            background_tasks.add_task(
+                update_custom_gpt_flag_for_existing_file,
+                file_id,
+            )
+            logging.info(
+                f"Scheduled custom_gpt flag update for existing file {file_id} (migration context)"
+            )
+
         return (file_id, original_filename, is_tabular)
 
     except Exception as e:
@@ -1867,6 +1940,7 @@ async def process_migration_file_ids_in_parallel(
     username: str,
     background_tasks: BackgroundTasks,
     migration_context: dict,
+    custom_gpt: bool = False,
 ) -> List[tuple]:
     """
     Process file IDs in migration context - handle both files needing migration and existing files.
@@ -1876,6 +1950,7 @@ async def process_migration_file_ids_in_parallel(
         username: Current username to add/preserve
         background_tasks: Background tasks for async operations
         migration_context: Migration context with file details
+        custom_gpt: Flag to mark files uploaded from Custom GPT (default: False)
 
     Returns:
         List of tuples: (file_id, original_filename, is_tabular)
@@ -1905,6 +1980,7 @@ async def process_migration_file_ids_in_parallel(
                     file_id=file_id,
                     username=username,
                     background_tasks=background_tasks,
+                    custom_gpt=custom_gpt,
                 )
             error_msg = f"File {file_id} not found in migration context"
             logging.error(error_msg)
@@ -2661,6 +2737,8 @@ def initialize_rag_model(
     gcs_handler: Any,
     file_info: dict,
     temperature: float,
+    custom_gpt: bool,
+    system_prompt: str,
 ):
     """
     Initialize RAG model based on query parameters.
@@ -2705,6 +2783,8 @@ def initialize_rag_model(
             all_file_infos=all_file_infos,  # Pass file info for context
             user_id=query.user_id,
             temperature=temperature,
+            custom_gpt=custom_gpt,
+            system_prompt=system_prompt,
         )
         # Note: GeminiHandler with constructor params doesn't need separate initialize() call
     elif query.model_choice in ["claude-sonnet-4@20250514", "claude-sonnet-4-5"]:
@@ -2720,6 +2800,8 @@ def initialize_rag_model(
             all_file_infos=all_file_infos,
             user_id=query.user_id,
             temperature=temperature,
+            custom_gpt=custom_gpt,
+            system_prompt=system_prompt,
         )
     else:
         # For AzureChatbot, all initialization happens in the constructor
@@ -2733,6 +2815,8 @@ def initialize_rag_model(
             all_file_infos=all_file_infos,  # Pass file info for context
             collection_name_prefix="rag_collection_",
             user_id=query.user_id,
+            custom_gpt=custom_gpt,
+            system_prompt=system_prompt,
         )
         # AzureChatbot doesn't have an initialize() method, it's all done in __init__
 
@@ -2869,6 +2953,8 @@ async def _initialize_chat_model(
     file_id_logging: str,  # For logging
     temperature: float,
     is_tabular: Optional[bool] = None,  # New parameter with default None
+    custom_gpt: bool = False,
+    system_prompt: Optional[str] = None,
 ) -> Tuple[Any, Optional[bool]]:  # Returns (model, determined_is_tabular)
     """
     Helper function to initialize and cache chat models.
@@ -2879,7 +2965,13 @@ async def _initialize_chat_model(
     if is_multi_file:
         # Handle multi-file mode
         model, determined_is_tabular = await _initialize_multi_file_model(
-            query, configs, gcs_handler, all_file_infos, temperature
+            query,
+            configs,
+            gcs_handler,
+            all_file_infos,
+            temperature,
+            custom_gpt,
+            system_prompt,
         )
         logging.info(f"Model initialized for multi-file: {query.file_ids}")
         logging.info(f"  User: {query.user_id}, Model: {query.model_choice}")
@@ -2888,7 +2980,14 @@ async def _initialize_chat_model(
     elif query.file_id:
         # Handle single file mode
         model, determined_is_tabular = await _initialize_single_file_model(
-            query, configs, gcs_handler, all_file_infos, is_tabular, temperature
+            query,
+            configs,
+            gcs_handler,
+            all_file_infos,
+            is_tabular,
+            temperature,
+            custom_gpt,
+            system_prompt,
         )
 
     else:
@@ -3557,6 +3656,12 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
         try:
             if not model:
+                if query.custom_gpt and query.system_prompt:
+                    logging.info(
+                        f"Custom GPT mode active for session {query.session_id} with prompt: "
+                        f"'{query.system_prompt[:100]}...'"
+                    )
+
                 # Call the helper function to initialize the model
                 # Pass the is_tabular flag from _process_file_info
                 model, is_tabular = await _initialize_chat_model(
@@ -3572,6 +3677,8 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                     is_tabular=file_data[
                         "is_tabular"
                     ],  # Pass is_tabular flag from file_data
+                    custom_gpt=query.custom_gpt,
+                    system_prompt=query.system_prompt,
                 )
 
             if generate_visualization and not is_tabular:
@@ -3929,33 +4036,86 @@ async def get_gemini_response_stream(
     request: ChatRequest, current_user=Depends(get_current_user)
 ):
     """
-    Get a streaming response from a Gemini model without RAG context.
+    Get a response from a Gemini model without RAG context.
+    Supports both simple non-RAG chat and Custom GPT mode without documents.
 
     Args:
-        request (ChatRequest): Request body containing:
-            - prompt (str): The prompt to send to the model
-            - model (str): The Gemini model to use. Must be either "gemini-2.5-flash" or "gemini-2.5-pro".
-            - temperature (float, optional): The sampling temperature. Defaults to 0.8.
+        request (ChatRequest): Request body containing either:
+          Simple mode:
+            - model (str): Model name
+            - message (str): Single message
+            - temperature (float, optional): Sampling temperature
+          Custom GPT mode:
+            - text (List[str]): Conversation history
+            - model_choice (str): Model name
+            - user_id (str): User identifier
+            - session_id (str): Session tracking
+            - custom_gpt (bool): True for Custom GPT mode
+            - system_prompt (str, optional): Custom system prompt
+            - temperature (float, optional): Sampling temperature
         current_user: Authenticated user information
 
     Returns:
-        StreamingResponse: A streaming response with the model's output
+        StreamingResponse or JSONResponse with the model's output
     """
     try:
-        # Validate model choice
-        if request.model not in ["gemini-2.5-flash", "gemini-2.5-pro"]:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid model choice. Use 'gemini-2.5-flash' or 'gemini-2.5-pro'.",
+        # Determine which mode we're in
+        is_custom_gpt = request.custom_gpt and request.text and request.model_choice
+
+        if is_custom_gpt:
+            # Custom GPT mode without documents
+            model_choice = request.model_choice
+            if model_choice not in ["gemini-2.5-flash", "gemini-2.5-pro"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid model choice. Use 'gemini-2.5-flash' or 'gemini-2.5-pro'.",
+                )
+
+            # Build conversation context from text array
+            current_question = request.text[-1]
+            if len(request.text) > 1:
+                previous_messages = "\n".join(
+                    [f"Previous message: {msg}" for msg in request.text[:-1]]
+                )
+                prompt = f"{previous_messages}\nCurrent question: {current_question}"
+            else:
+                prompt = current_question
+
+            # Add system prompt if provided
+            if request.system_prompt:
+                prompt = f"System Instructions: {request.system_prompt}\n\n{prompt}"
+
+            answer = get_gemini_non_rag_response(
+                configs,
+                prompt,
+                model_choice,
+                request.temperature or 0.8,
+                max_tokens=4096,
             )
 
-        model_handler = ModelHandler(configs, gcs_handler)
-        model = model_handler.initialize_model(
-            request.model, file_id=None, embedding_type="gemini"
-        )
-        return StreamingResponse(
-            model.get_gemini_response_stream(request.message), media_type="text/plain"
-        )
+            # Return JSON response with session info for Custom GPT
+            return JSONResponse(
+                content={
+                    "response": answer,
+                    "session_id": request.session_id or str(uuid.uuid4()),
+                }
+            )
+        else:
+            # Simple non-RAG mode
+            if request.model not in ["gemini-2.5-flash", "gemini-2.5-pro"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid model choice. Use 'gemini-2.5-flash' or 'gemini-2.5-pro'.",
+                )
+
+            model_handler = ModelHandler(configs, gcs_handler)
+            model = model_handler.initialize_model(
+                request.model, file_id=None, embedding_type="gemini"
+            )
+            return StreamingResponse(
+                model.get_gemini_response_stream(request.message),
+                media_type="text/plain",
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
@@ -3965,38 +4125,186 @@ async def get_anthropic_response(
     request: ChatRequest, current_user=Depends(get_current_user)
 ):
     """
-    Get a non-RAG response from an Anthropic (Vertex) model.
+    Get a response from an Anthropic (Vertex) model.
+    Supports both simple non-RAG chat and Custom GPT mode without documents.
 
     Args:
-        request (ChatRequest): Request body containing:
-            - prompt (str): The prompt to send to the model
-            - model (str): The Anthropic model to use. Must be "claude-sonnet-4@20250514" or "claude-sonnet-4-5".
-            - temperature (float, optional): The sampling temperature. Defaults to 0.8.
+        request (ChatRequest): Request body containing either:
+          Simple mode:
+            - model (str): Model name
+            - message (str): Single message
+            - temperature (float, optional): Sampling temperature
+          Custom GPT mode:
+            - text (List[str]): Conversation history
+            - model_choice (str): Model name
+            - user_id (str): User identifier
+            - session_id (str): Session tracking
+            - custom_gpt (bool): True for Custom GPT mode
+            - system_prompt (str, optional): Custom system prompt
+            - temperature (float, optional): Sampling temperature
         current_user: Authenticated user information
 
     Returns:
-        PlainTextResponse: A non-streaming response with the model's output
+        PlainTextResponse or JSONResponse with the model's output
     """
     try:
-        # Validate model choice
-        if request.model not in ["claude-sonnet-4@20250514", "claude-sonnet-4-5"]:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid model choice. Use 'claude-sonnet-4@20250514' or 'claude-sonnet-4-5'.",
+        # Determine which mode we're in
+        is_custom_gpt = request.custom_gpt and request.text and request.model_choice
+
+        if is_custom_gpt:
+            # Custom GPT mode without documents
+            model_choice = request.model_choice
+            if model_choice not in ["claude-sonnet-4@20250514", "claude-sonnet-4-5"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid model choice. Use 'claude-sonnet-4@20250514' or 'claude-sonnet-4-5'.",
+                )
+
+            from rtl_rag_chatbot_api.chatbot import get_anthropic_non_rag_response
+
+            # Build conversation context from text array
+            current_question = request.text[-1]
+            if len(request.text) > 1:
+                previous_messages = "\n".join(
+                    [f"Previous message: {msg}" for msg in request.text[:-1]]
+                )
+                prompt = f"{previous_messages}\nCurrent question: {current_question}"
+            else:
+                prompt = current_question
+
+            # Add system prompt if provided
+            if request.system_prompt:
+                prompt = f"System Instructions: {request.system_prompt}\n\n{prompt}"
+
+            answer = get_anthropic_non_rag_response(
+                config=configs,
+                prompt=prompt,
+                model_choice=model_choice,
+                temperature=request.temperature or 0.8,
+                max_tokens=4096,
             )
 
-        from rtl_rag_chatbot_api.chatbot import get_anthropic_non_rag_response
+            # Return JSON response with session info for Custom GPT
+            return JSONResponse(
+                content={
+                    "response": answer,
+                    "session_id": request.session_id or str(uuid.uuid4()),
+                }
+            )
+        else:
+            # Simple non-RAG mode
+            if request.model not in ["claude-sonnet-4@20250514", "claude-sonnet-4-5"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid model choice. Use 'claude-sonnet-4@20250514' or 'claude-sonnet-4-5'.",
+                )
 
-        answer = get_anthropic_non_rag_response(
-            config=configs,
-            prompt=request.message,
-            model_choice=request.model,
-            temperature=request.temperature or 0.8,
-            max_tokens=4096,
-        )
-        return PlainTextResponse(answer)
+            from rtl_rag_chatbot_api.chatbot import get_anthropic_non_rag_response
+
+            answer = get_anthropic_non_rag_response(
+                config=configs,
+                prompt=request.message,
+                model_choice=request.model,
+                temperature=request.temperature or 0.8,
+                max_tokens=4096,
+            )
+            return PlainTextResponse(answer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
+
+@app.post("/chat/azure")
+async def get_azure_response(
+    request: ChatRequest, current_user=Depends(get_current_user)
+):
+    """
+    Get a non-RAG response from an Azure OpenAI model.
+    Supports both simple non-RAG chat and Custom GPT mode without documents.
+
+    Args:
+        request (ChatRequest): Request body containing either:
+          Simple mode:
+            - model (str): Model name
+            - message (str): Single message
+            - temperature (float, optional): Sampling temperature
+          Custom GPT mode:
+            - text (List[str]): Conversation history
+            - model_choice (str): Model name
+            - user_id (str): User identifier
+            - session_id (str): Session tracking
+            - custom_gpt (bool): True for Custom GPT mode
+            - system_prompt (str, optional): Custom system prompt
+            - temperature (float, optional): Sampling temperature
+            - step_name (str, optional): Step name for logging
+        current_user: Authenticated user information
+
+    Returns:
+        PlainTextResponse or JSONResponse with the model's output
+    """
+    try:
+        # Check if this is a Custom GPT creation step (has step_name)
+        is_custom_gpt_step = request.step_name is not None
+
+        # Determine which mode we're in
+        is_custom_gpt = request.custom_gpt and request.text and request.model_choice
+
+        if is_custom_gpt:
+            # Custom GPT mode without documents - delegate to handler
+            return handle_custom_gpt_azure_request(request, configs)
+        elif is_custom_gpt_step:
+            # Custom GPT creation step - delegate to handler
+            return handle_custom_gpt_step_request(request, configs)
+        else:
+            # Simple non-RAG mode
+            available_azure_models = list(configs.azure_llm.models.keys())
+
+            if request.model not in available_azure_models:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid model choice. Available Azure models: {available_azure_models}",
+                )
+
+            answer = get_azure_non_rag_response(
+                configs=configs,
+                query=request.message,
+                model_choice=request.model,
+                max_tokens=None,  # Uses config default if None
+                temperature=request.temperature,  # Optional, uses config default if None
+            )
+
+            return PlainTextResponse(answer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
+
+@app.post("/language/detect")
+async def detect_language(
+    request: Dict[str, str] = Body(...), current_user=Depends(get_current_user)
+):
+    """
+    Detect the language of the given text.
+
+    Args:
+        request: Dictionary containing 'text' key with the text to analyze
+        current_user: Authenticated user information
+
+    Returns:
+        JSONResponse with detected language
+    """
+    try:
+        from rtl_rag_chatbot_api.chatbot.utils.language_detector import detect_lang
+
+        text = request.get("text", "")
+        if not text:
+            return JSONResponse(content={"language": "German"}, status_code=200)
+
+        detected_language = detect_lang(text)
+
+        return JSONResponse(content={"language": detected_language}, status_code=200)
+    except Exception as e:
+        logging.error(f"Language detection error: {str(e)}")
+        # Fallback to English if detection fails
+        return JSONResponse(content={"language": "German"}, status_code=200)
 
 
 @app.get("/long-task")
@@ -4351,6 +4659,8 @@ def _create_tabular_data_handler(
     database_summaries: Dict[str, Any],
     all_file_infos: Dict[str, Any],
     temperature: float,
+    custom_gpt: bool,
+    system_prompt: str,
 ) -> Any:
     """
     Create TabularDataHandler with error handling and fallback.
@@ -4441,6 +4751,8 @@ def _create_rag_model_for_multi_file(
     gcs_handler: Any,
     all_file_infos: Dict[str, Any],
     is_gemini: bool,
+    custom_gpt: bool,
+    system_prompt: str,
 ) -> Any:
     """
     Create appropriate RAG model for multi-file non-tabular content.
@@ -4466,6 +4778,8 @@ def _create_rag_model_for_multi_file(
             file_ids=query.file_ids,  # type: ignore
             all_file_infos=all_file_infos,
             user_id=query.user_id,
+            custom_gpt=custom_gpt,
+            system_prompt=system_prompt,
         )
     elif query.model_choice in ["claude-sonnet-4@20250514", "claude-sonnet-4-5"]:
         logging.info(
@@ -4480,6 +4794,8 @@ def _create_rag_model_for_multi_file(
             file_ids=query.file_ids,  # type: ignore
             all_file_infos=all_file_infos,
             user_id=query.user_id,
+            custom_gpt=custom_gpt,
+            system_prompt=system_prompt,
         )
     else:
         logging.info(
@@ -4491,6 +4807,8 @@ def _create_rag_model_for_multi_file(
             model_choice=query.model_choice,
             file_ids=query.file_ids,  # type: ignore
             all_file_infos=all_file_infos,
+            custom_gpt=custom_gpt,
+            system_prompt=system_prompt,
         )
 
 
@@ -4501,6 +4819,8 @@ async def _handle_mixed_file_types(
     all_file_infos: Dict[str, Any],
     tabular_file_ids: List[str],
     non_tabular_file_ids: List[str],
+    custom_gpt: bool,
+    system_prompt: str,
 ) -> Tuple[Any, bool]:
     """
     Handle mixed file types (tabular + non-tabular) in multi-file mode.
@@ -4528,6 +4848,8 @@ async def _handle_mixed_file_types(
         model_choice=query.model_choice,
         file_ids=query.file_ids,  # type: ignore
         all_file_infos=all_file_infos,
+        custom_gpt=custom_gpt,
+        system_prompt=system_prompt,
     )
     return model, False
 
@@ -4538,6 +4860,8 @@ async def _handle_all_tabular_files(
     all_file_infos: Dict[str, Any],
     tabular_file_ids: List[str],
     temperature: float,
+    custom_gpt: bool,
+    system_prompt: str,
 ) -> Tuple[Any, bool]:
     """
     Handle all tabular files in multi-file mode.
@@ -4572,6 +4896,8 @@ async def _handle_all_tabular_files(
             database_summaries,
             all_file_infos,
             temperature,
+            custom_gpt,
+            system_prompt,
         )
         logging.info(
             f"Successfully initialized TabularDataHandler for {len(tabular_file_ids)} files"
@@ -4591,6 +4917,8 @@ async def _handle_all_non_tabular_files(
     gcs_handler: Any,
     all_file_infos: Dict[str, Any],
     non_tabular_file_ids: List[str],
+    custom_gpt: bool,
+    system_prompt: str,
 ) -> Tuple[Any, bool]:
     """
     Handle all non-tabular files in multi-file mode.
@@ -4611,7 +4939,13 @@ async def _handle_all_non_tabular_files(
     is_gemini = query.model_choice.lower() in ["gemini-2.5-flash", "gemini-2.5-pro"]
 
     model = _create_rag_model_for_multi_file(
-        query, configs, gcs_handler, all_file_infos, is_gemini
+        query,
+        configs,
+        gcs_handler,
+        all_file_infos,
+        is_gemini,
+        custom_gpt,
+        system_prompt,
     )
     return model, False
 
@@ -4622,6 +4956,8 @@ async def _initialize_multi_file_model(
     gcs_handler: Any,
     all_file_infos: Dict[str, Any],
     temperature: float,
+    custom_gpt: bool,
+    system_prompt: str,
 ) -> Tuple[Any, bool]:
     """
     Initialize model for multi-file mode with proper classification and handling.
@@ -4667,11 +5003,19 @@ async def _initialize_multi_file_model(
             all_file_infos,
             tabular_file_ids,
             non_tabular_file_ids,
+            custom_gpt,
+            system_prompt,
         )
     elif has_tabular_files and not has_non_tabular_files:
         # All tabular files
         model, is_tabular = await _handle_all_tabular_files(
-            query, configs, all_file_infos, tabular_file_ids, temperature
+            query,
+            configs,
+            all_file_infos,
+            tabular_file_ids,
+            temperature,
+            custom_gpt,
+            system_prompt,
         )
         # If tabular handler failed, fall back to standard Chatbot
         if model is None:
@@ -4684,18 +5028,31 @@ async def _initialize_multi_file_model(
                 model_choice=query.model_choice,
                 file_ids=query.file_ids,  # type: ignore
                 all_file_infos=all_file_infos,
+                custom_gpt=custom_gpt,
+                system_prompt=system_prompt,
             )
             is_tabular = False
         return model, is_tabular
     else:
         # All non-tabular files
         return await _handle_all_non_tabular_files(
-            query, configs, gcs_handler, all_file_infos, non_tabular_file_ids
+            query,
+            configs,
+            gcs_handler,
+            all_file_infos,
+            non_tabular_file_ids,
+            custom_gpt,
+            system_prompt,
         )
 
 
 async def _initialize_single_file_tabular_model(
-    query: Query, configs: dict, all_file_infos: Dict[str, Any], temperature: float
+    query: Query,
+    configs: dict,
+    all_file_infos: Dict[str, Any],
+    temperature: float,
+    custom_gpt: bool,
+    system_prompt: str,
 ) -> Any:
     """
     Initialize TabularDataHandler for single file with proper error handling.
@@ -4727,6 +5084,8 @@ async def _initialize_single_file_tabular_model(
             database_summaries_param=database_summaries if database_summaries else None,
             all_file_infos=all_file_infos,
             temperature=temperature,
+            custom_gpt=custom_gpt,
+            system_prompt=system_prompt,
         )
         logging.info(f"Successfully initialized TabularDataHandler for {query.file_id}")
         return model
@@ -4743,6 +5102,8 @@ async def _initialize_single_file_model(
     all_file_infos: Dict[str, Any],
     is_tabular: Optional[bool],
     temperature: float,
+    custom_gpt: bool,
+    system_prompt: str,
 ) -> Tuple[Any, bool]:
     """
     Initialize model for single file mode.
@@ -4767,7 +5128,7 @@ async def _initialize_single_file_model(
     # Try to initialize TabularDataHandler for tabular files
     if is_tabular:
         model = await _initialize_single_file_tabular_model(
-            query, configs, all_file_infos, temperature
+            query, configs, all_file_infos, temperature, custom_gpt, system_prompt
         )
         if model:
             return model, True
@@ -4785,7 +5146,13 @@ async def _initialize_single_file_model(
     logging.info(f"Initializing RAG model for single file: {query.file_id}")
     logging.info(f"  User: {query.user_id}, Model: {query.model_choice}")
     model = initialize_rag_model(
-        query, configs, gcs_handler, single_file_info_for_init, temperature
+        query,
+        configs,
+        gcs_handler,
+        single_file_info_for_init,
+        temperature,
+        custom_gpt,
+        system_prompt,
     )
     return model, is_tabular
 
@@ -5067,6 +5434,83 @@ async def _prepare_migration_file_for_pipeline(
             f"Failed to refresh FileInfo DB record for {file_id}: {_db_err}"
         )
     return file_id, original_filename, is_tabular_flag
+
+
+@app.post("/gpt/generate-system-prompt")
+async def generate_system_prompt(
+    request: GenerateSystemPromptRequest, current_user=Depends(get_current_user)
+):
+    """
+    Generate a custom GPT system prompt based on user inputs.
+
+    Uses Azure OpenAI to synthesize user requirements into a production-ready system prompt.
+
+    Args:
+        request: GenerateSystemPromptRequest containing all GPT configuration details
+        current_user: Authenticated user information
+
+    Returns:
+        dict: Dictionary containing the generated system prompt
+    """
+    try:
+        from streamlit_components.custom_gpt_prompts import SYSTEM_PROMPT_GENERATOR
+
+        # Get language from request (defaults to "German" per model, but use "English" as fallback)
+        language = request.language or "English"
+
+        # Replace language placeholder in template
+        system_prompt_template = SYSTEM_PROMPT_GENERATOR.replace("{LANGUAGE}", language)
+
+        # Build structured input for system prompt generation
+        structured_input = f"""
+user_initial_response: {request.name}
+problems_to_solve: {request.purpose}
+target_users: {request.audience}
+tone_style: {request.tone}
+must_do_capabilities: {request.capabilities}
+must_not_do: {request.constraints or "No specific restrictions mentioned"}
+specialized_knowledge: {request.knowledge}
+example_interaction: {request.example_interaction}
+custom_instructions: {request.custom_instructions or "No additional custom instructions provided"}
+"""
+
+        # Combine template with input
+        full_prompt = system_prompt_template + "\n\n" + structured_input
+
+        logging.info(f"Generating system prompt for GPT: {request.name}")
+
+        # Call Azure OpenAI to generate system prompt
+        response = get_azure_non_rag_response(
+            configs=configs,
+            query=full_prompt,
+            model_choice="gpt_4_1",
+            temperature=1.0,
+            max_tokens=2000,
+        )
+
+        # Extract system prompt from between markers
+        system_prompt = response.strip()
+        if (
+            "BEGIN SYSTEM PROMPT" in system_prompt
+            and "END SYSTEM PROMPT" in system_prompt
+        ):
+            start_idx = system_prompt.find("BEGIN SYSTEM PROMPT") + len(
+                "BEGIN SYSTEM PROMPT"
+            )
+            end_idx = system_prompt.find("END SYSTEM PROMPT")
+            system_prompt = system_prompt[start_idx:end_idx].strip()
+
+        logging.info(
+            f"Successfully generated system prompt (length: {len(system_prompt)})"
+        )
+
+        return {"system_prompt": system_prompt}
+
+    except Exception as e:
+        logging.error(f"Error generating system prompt: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to generate system prompt: {str(e)}"
+        )
 
 
 @app.post("/chat/generate-title")

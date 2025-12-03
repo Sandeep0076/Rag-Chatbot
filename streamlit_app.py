@@ -6,6 +6,11 @@ import requests
 import streamlit as st
 from PIL import Image
 
+from streamlit_components.custom_gpt_creator import display_custom_gpt_creator
+from streamlit_components.custom_gpt_prompts import (
+    CUSTOM_GPT_GENERAL_PROMPT,
+    DOCUMENT_GROUNDING_PROMPT,
+)
 from streamlit_image_generation import handle_image_generation
 
 # Suppress warnings from google-cloud-aiplatform and vertexai
@@ -555,8 +560,6 @@ custom_css = """
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
-
-API_URL = "http://localhost:8080"
 
 
 # Custom CSS for better styling
@@ -1435,21 +1438,179 @@ def handle_file_upload():
     _display_uploaded_image()
 
 
+def _generate_initial_greeting():
+    """Generate initial greeting for Custom GPT based on name and system prompt."""
+    gpt_name = st.session_state.get("custom_gpt_name", "Assistant")
+    system_prompt = st.session_state.get("custom_gpt_system_prompt", "")
+
+    # Keywords that indicate a proactive GPT
+    proactive_keywords = ["tutor", "teacher", "coach", "trainer", "instructor", "guide"]
+
+    # Check if GPT should be proactive
+    is_proactive = any(
+        keyword in gpt_name.lower() or keyword in system_prompt.lower()
+        for keyword in proactive_keywords
+    )
+
+    if is_proactive:
+        # Proactive greeting - takes initiative
+        return (
+            f"Hello! I'm {gpt_name}. I'm here to help you learn and grow.\n"
+            "What topic would you like to explore today?"
+        )
+    else:
+        # Reactive greeting - waits for user input
+        return f"Hello! I'm {gpt_name}. How can I help you today?"
+
+
+def _display_conversation_starters(conversation_starters):
+    """Display conversation starter buttons and handle clicks."""
+    st.markdown("---")
+    st.markdown("### 💬 Conversation Starters")
+    st.markdown(
+        "<p style='color: var(--color-text-muted); margin-bottom: 1rem;'>"
+        "Choose a question to get started:</p>",
+        unsafe_allow_html=True,
+    )
+
+    # Create three columns for the buttons
+    col1, col2, col3 = st.columns(3)
+
+    # Button 1
+    with col1:
+        if st.button(
+            conversation_starters[0],
+            key="conv_starter_0",
+            use_container_width=True,
+            help="Click to ask this question",
+        ):
+            st.session_state.messages.append(
+                {"role": "user", "content": conversation_starters[0]}
+            )
+            _process_conversation_starter(conversation_starters[0])
+            st.rerun()
+
+    # Button 2
+    with col2:
+        if st.button(
+            conversation_starters[1],
+            key="conv_starter_1",
+            use_container_width=True,
+            help="Click to ask this question",
+        ):
+            st.session_state.messages.append(
+                {"role": "user", "content": conversation_starters[1]}
+            )
+            _process_conversation_starter(conversation_starters[1])
+            st.rerun()
+
+    # Button 3
+    with col3:
+        if st.button(
+            conversation_starters[2],
+            key="conv_starter_2",
+            use_container_width=True,
+            help="Click to ask this question",
+        ):
+            st.session_state.messages.append(
+                {"role": "user", "content": conversation_starters[2]}
+            )
+            _process_conversation_starter(conversation_starters[2])
+            st.rerun()
+
+
+def _process_conversation_starter(question):
+    """Process a conversation starter question by sending it to the chat API."""
+    with st.spinner("Processing your request..."):
+        previous_messages = [
+            msg["content"]
+            for msg in st.session_state.messages[-5:]
+            if msg["role"] == "user"
+        ]
+
+        if not st.session_state.current_session_id:
+            st.error("Error: No session ID available. Please upload the file again.")
+            return
+
+        chat_payload = _get_chat_payload(previous_messages)
+        logging.info(f"Sending chat payload for conversation starter: {chat_payload}")
+
+        # Determine endpoint based on custom_gpt_mode and file presence
+        is_custom_gpt = st.session_state.get("custom_gpt_mode", False)
+
+        # For custom GPT, check custom_gpt_document_ids; for regular chat, check file_ids
+        if is_custom_gpt:
+            has_files = bool(st.session_state.get("custom_gpt_document_ids"))
+        else:
+            has_files = bool(st.session_state.get("file_ids"))
+
+        if is_custom_gpt and not has_files:
+            # Custom GPT without files - use Anthropic endpoint
+            endpoint = f"{API_URL}/chat/anthropic"
+            logging.info("Using /chat/anthropic endpoint (Custom GPT without files)")
+        else:
+            # Custom GPT with files OR regular file chat - use file/chat endpoint
+            endpoint = f"{API_URL}/file/chat"
+            logging.info(
+                f"Using /file/chat endpoint (Custom GPT: {is_custom_gpt}, Has files: {has_files})"
+            )
+
+        chat_response = requests.post(endpoint, json=chat_payload)
+        _handle_chat_response(chat_response)
+
+
 def display_chat_interface():
-    # Check if we have files to chat with (either single file or multiple files)
+    # Check if we're in custom GPT mode or regular file chat mode
+    is_custom_gpt = st.session_state.get("custom_gpt_mode", False)
+
+    # In custom GPT mode, we may or may not have files
+    # In regular mode, we need files
     has_files = (st.session_state.file_uploaded and st.session_state.file_id) or (
         st.session_state.multi_file_mode and len(st.session_state.file_ids) > 0
     )
 
-    if has_files:
-        # Display current file info
-        file_name = st.session_state.file_names.get(
-            st.session_state.file_id, st.session_state.file_id
-        )
-        st.markdown(
-            f"<small>File: {file_name}</small>",
-            unsafe_allow_html=True,
-        )
+    # Custom GPT can work without files
+    can_chat = is_custom_gpt or has_files
+
+    if can_chat:
+        # Display custom GPT info if in custom GPT mode
+        if is_custom_gpt:
+            st.markdown(
+                f"<div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); "
+                f"padding: 1rem; border-radius: 10px; margin-bottom: 1rem;'>"
+                f"<h3 style='color: white; margin: 0;'>🤖 {st.session_state.custom_gpt_name}</h3>"
+                f"<small style='color: rgba(255,255,255,0.8);'>Custom GPT Mode Active</small>",
+                unsafe_allow_html=True,
+            )
+
+            # Show document info if documents are attached
+            if st.session_state.custom_gpt_document_names:
+                doc_names = st.session_state.custom_gpt_document_names
+                doc_count = len(doc_names)
+                more_text = f" and {doc_count - 3} more" if doc_count > 3 else ""
+                st.markdown(
+                    f"<div style='color: white;'><small>📚 Reference Documents: "
+                    f"{', '.join(doc_names[:3])}{more_text}"
+                    f"</small></div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    "<div style='color: white;'><small>ℹ️ Using general knowledge "
+                    "(no documents attached)</small></div>",
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            # Display current file info in regular mode
+            file_name = st.session_state.file_names.get(
+                st.session_state.file_id, st.session_state.file_id
+            )
+            st.markdown(
+                f"<small>File: {file_name}</small>",
+                unsafe_allow_html=True,
+            )
 
         # CSS to eliminate any unnecessary gap
         st.markdown(
@@ -1461,6 +1622,20 @@ def display_chat_interface():
         """,
             unsafe_allow_html=True,
         )
+
+        # Display conversation starters for Custom GPT if messages are empty
+        if is_custom_gpt and len(st.session_state.messages) == 0:
+            conversation_starters = st.session_state.get(
+                "custom_gpt_conversation_starters", []
+            )
+            if conversation_starters and len(conversation_starters) >= 3:
+                _display_conversation_starters(conversation_starters)
+            else:
+                # Fall back to default greeting if no conversation starters
+                initial_greeting = _generate_initial_greeting()
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": initial_greeting}
+                )
 
         # Display messages first
         if False and len(st.session_state.messages) > 0:
@@ -1508,7 +1683,30 @@ def display_chat_interface():
 
                 chat_payload = _get_chat_payload(previous_messages)
                 logging.info(f"Sending chat payload: {chat_payload}")
-                chat_response = requests.post(f"{API_URL}/file/chat", json=chat_payload)
+
+                # Determine endpoint based on custom_gpt_mode and file presence
+                is_custom_gpt = st.session_state.get("custom_gpt_mode", False)
+
+                # For custom GPT, check custom_gpt_document_ids; for regular chat, check file_ids
+                if is_custom_gpt:
+                    has_files = bool(st.session_state.get("custom_gpt_document_ids"))
+                else:
+                    has_files = bool(st.session_state.get("file_ids"))
+
+                if is_custom_gpt and not has_files:
+                    # Custom GPT without files - use Anthropic endpoint
+                    endpoint = f"{API_URL}/chat/anthropic"
+                    logging.info(
+                        "Using /chat/anthropic endpoint (Custom GPT without files)"
+                    )
+                else:
+                    # Custom GPT with files OR regular file chat - use file/chat endpoint
+                    endpoint = f"{API_URL}/file/chat"
+                    logging.info(
+                        f"Using /file/chat endpoint (Custom GPT: {is_custom_gpt}, Has files: {has_files})"
+                    )
+
+                chat_response = requests.post(endpoint, json=chat_payload)
                 _handle_chat_response(chat_response)
 
             st.rerun()
@@ -1616,17 +1814,54 @@ def _get_chat_payload(previous_messages):
     if st.session_state.temperature is not None:
         chat_payload["temperature"] = st.session_state.temperature
 
-    if st.session_state.multi_file_mode and st.session_state.file_ids:
-        chat_payload["file_ids"] = st.session_state.file_ids
-        logging.info(
-            f"Multi-file mode. Sending all file_ids: {chat_payload['file_ids']}"
-        )
-    elif st.session_state.file_id:
-        chat_payload["file_id"] = st.session_state.file_id
-        logging.info(f"Single-file mode. Sending file_id: {chat_payload['file_id']}")
+    # Add custom GPT parameters if in custom GPT mode
+    if st.session_state.get("custom_gpt_mode", False):
+        chat_payload["custom_gpt"] = True
+        if st.session_state.custom_gpt_system_prompt:
+            # Append document grounding prompt if documents are attached
+            system_prompt = st.session_state.custom_gpt_system_prompt
+            if st.session_state.custom_gpt_document_ids:
+                system_prompt = f"{system_prompt}\n\n{DOCUMENT_GROUNDING_PROMPT}"
+                logging.info(
+                    "Custom GPT mode with documents: appended document grounding prompt"
+                )
+            # Always append general prompt at the end
+            system_prompt = f"{system_prompt}\n\n{CUSTOM_GPT_GENERAL_PROMPT}"
+            chat_payload["system_prompt"] = system_prompt
+            logging.info("Custom GPT mode enabled with custom system prompt")
+
+        # Use custom GPT document IDs if available
+        if st.session_state.custom_gpt_document_ids:
+            # Handle single vs multi-file: backend expects file_id for single, file_ids for multi
+            if len(st.session_state.custom_gpt_document_ids) == 1:
+                chat_payload["file_id"] = st.session_state.custom_gpt_document_ids[0]
+                logging.info(
+                    f"Custom GPT mode with 1 document (single-file): {chat_payload['file_id']}"
+                )
+            else:
+                chat_payload["file_ids"] = st.session_state.custom_gpt_document_ids
+                logging.info(
+                    f"Custom GPT mode with {len(st.session_state.custom_gpt_document_ids)} documents (multi-file)"
+                )
+        # If no custom documents but custom GPT mode, allow chat without file context
+        # (GPT will use its general knowledge)
     else:
-        st.error("Error: No file context available for chat.")
-        return None
+        # Regular chat mode - backward compatible
+        chat_payload["custom_gpt"] = False
+
+        if st.session_state.multi_file_mode and st.session_state.file_ids:
+            chat_payload["file_ids"] = st.session_state.file_ids
+            logging.info(
+                f"Multi-file mode. Sending all file_ids: {chat_payload['file_ids']}"
+            )
+        elif st.session_state.file_id:
+            chat_payload["file_id"] = st.session_state.file_id
+            logging.info(
+                f"Single-file mode. Sending file_id: {chat_payload['file_id']}"
+            )
+        else:
+            st.error("Error: No file context available for chat.")
+            return None
 
     return chat_payload
 
@@ -1753,6 +1988,18 @@ def initialize_ui_state():
         st.session_state.username = ""
     if "temperature" not in st.session_state:
         st.session_state.temperature = None
+
+    # Initialize custom GPT session state variables
+    if "custom_gpt_mode" not in st.session_state:
+        st.session_state.custom_gpt_mode = False
+    if "custom_gpt_system_prompt" not in st.session_state:
+        st.session_state.custom_gpt_system_prompt = None
+    if "custom_gpt_name" not in st.session_state:
+        st.session_state.custom_gpt_name = ""
+    if "custom_gpt_document_ids" not in st.session_state:
+        st.session_state.custom_gpt_document_ids = []
+    if "custom_gpt_document_names" not in st.session_state:
+        st.session_state.custom_gpt_document_names = []
 
 
 def initialize_session_state():
@@ -1984,7 +2231,7 @@ def render_navigation():
     )
 
     # Create horizontal layout for navigation buttons
-    nav_cols = st.columns([3, 1, 1, 3])  # Center the two buttons horizontally
+    nav_cols = st.columns([2, 1, 1, 1, 2])  # Center the three buttons horizontally
 
     # Place each button in its own column for horizontal layout
     with nav_cols[1]:
@@ -2020,6 +2267,15 @@ def render_navigation():
                     st.session_state.current_model_type = "image"
 
     # Properly close container div
+    with nav_cols[3]:
+        if st.button(
+            "Custom GPT",
+            key="nav_Custom_GPT",
+            help="Go to Custom GPT Creator",
+            use_container_width=True,
+        ):
+            st.session_state.nav_option = "Custom GPT"
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -2238,6 +2494,8 @@ def main():
         display_chat_interface()
     elif st.session_state.nav_option == "Image generation":
         handle_image_generation()
+    elif st.session_state.nav_option == "Custom GPT":
+        display_custom_gpt_creator()
     elif st.session_state.nav_option == "Chart Generation":
         st.title("Chart Generation")
         st.write("Upload CSV/Excel files and generate visualizations.")

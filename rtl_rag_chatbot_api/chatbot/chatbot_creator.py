@@ -22,6 +22,8 @@ class AzureChatbot(BaseRAGHandler):
         collection_name_prefix: str = "rag_collection_",
         user_id: str = None,
         chroma_manager=None,  # Accept an optional ChromaDBManager instance
+        custom_gpt: bool = False,
+        system_prompt: str = None,
     ):
         # Pass the existing chroma_manager to the parent, or let it create one
         super().__init__(configs, gcs_handler, chroma_manager)
@@ -29,6 +31,8 @@ class AzureChatbot(BaseRAGHandler):
         self.model_choice = model_choice
         self.user_id = user_id
         self.all_file_infos = all_file_infos if all_file_infos else {}
+        self.custom_gpt = custom_gpt
+        self.system_prompt = system_prompt
         self._collection_name_prefix = collection_name_prefix  # e.g. "RAG_CHATBOT_"
         self.active_file_ids: List[str] = []
         self.is_multi_file = False
@@ -358,8 +362,14 @@ class AzureChatbot(BaseRAGHandler):
             context_str = "\n".join(all_relevant_docs)
 
             system_message = self.configs.chatbot.system_prompt_rag_llm
+            # GPT 5.1 uses "developer" role instead of "system" role
+            deployment_lower = self.model_config.deployment.lower()
+            is_gpt_5_1 = any(
+                term in deployment_lower for term in ["gpt-5.1", "gpt_5_1"]
+            )
+            system_role = "developer" if is_gpt_5_1 else "system"
             messages = [
-                {"role": "system", "content": system_message},
+                {"role": system_role, "content": system_message},
                 {
                     "role": "user",
                     "content": f"{files_context}Context:\n{context_str}\n\nQuestion: {query}",
@@ -380,7 +390,8 @@ class AzureChatbot(BaseRAGHandler):
             # Check for O3, O4, or GPT-5 models which use max_completion_tokens
             deployment_lower = self.model_config.deployment.lower()
             use_max_completion = any(
-                term in deployment_lower for term in ["o3", "o4", "gpt-5", "gpt_5"]
+                term in deployment_lower
+                for term in ["o3", "o4", "gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
             )
 
             # Resolve optional env-configurable advanced params
@@ -407,7 +418,10 @@ class AzureChatbot(BaseRAGHandler):
                     "presence_penalty"
                 ] = self.configs.llm_hyperparams.presence_penalty
                 # 'reasoning_effort' and 'verbosity' are only supported by GPT-5 family, not by O4/O3
-                if any(term in deployment_lower for term in ["gpt-5", "gpt_5"]):
+                if any(
+                    term in deployment_lower
+                    for term in ["gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
+                ):
                     completion_params["reasoning_effort"] = (
                         configured_reasoning_effort or "minimal"
                     )
@@ -455,7 +469,11 @@ class AzureChatbot(BaseRAGHandler):
 
 
 def get_azure_non_rag_response(
-    configs, query: str, model_choice: str = "gpt_4o_mini", max_tokens: int = None
+    configs,
+    query: str,
+    model_choice: str = "gpt_4o_mini",
+    max_tokens: int = None,
+    temperature: float = None,
 ) -> str:
     """
     Retrieves a response from Azure OpenAI without using Retrieval-Augmented Generation (RAG).
@@ -464,6 +482,8 @@ def get_azure_non_rag_response(
         configs (Config): Configuration object containing necessary settings for the Chatbot.
         query (str): The user's input query or prompt.
         model_choice (str, optional): The specific Azure OpenAI model to use. Defaults to "gpt_4o_mini".
+        max_tokens (int, optional): Maximum tokens for the response. Defaults to config value if None.
+        temperature (float, optional): Sampling temperature. Defaults to config value if None.
 
     Returns:
         str: The generated response from the Azure OpenAI model.
@@ -481,10 +501,16 @@ def get_azure_non_rag_response(
             api_version=configs.azure_llm.models[model_choice].api_version,
         )
 
+        # Get deployment name for model detection
+        deployment_lower = configs.azure_llm.models[model_choice].deployment.lower()
+
         # Create completion with system prompt and user query
+        # GPT 5.1 uses "developer" role instead of "system" role
+        is_gpt_5_1 = any(term in deployment_lower for term in ["gpt-5.1", "gpt_5_1"])
+        system_role = "developer" if is_gpt_5_1 else "system"
         messages = [
             {
-                "role": "system",
+                "role": system_role,
                 "content": (
                     "You are a helpful assistant that provides accurate and relevant "
                     "information based on the given data."
@@ -498,13 +524,15 @@ def get_azure_non_rag_response(
             max_tokens if max_tokens is not None else configs.llm_hyperparams.max_tokens
         )
 
-        # Check if the model is O3, O4, or GPT-5 variant which requires max_completion_tokens
-        logging.info(
-            f"Non-RAG model deployment name: {configs.azure_llm.models[model_choice].deployment}"
+        # Use provided temperature or fall back to config default
+        effective_temperature = (
+            temperature
+            if temperature is not None
+            else configs.llm_hyperparams.temperature
         )
-        deployment_lower = configs.azure_llm.models[model_choice].deployment.lower()
         use_max_completion = any(
-            term in deployment_lower for term in ["o3", "o4", "gpt-5", "gpt_5"]
+            term in deployment_lower
+            for term in ["o3", "o4", "gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
         )
 
         # Resolve optional env-configurable advanced params
@@ -531,7 +559,10 @@ def get_azure_non_rag_response(
                 "presence_penalty"
             ] = configs.llm_hyperparams.presence_penalty
             # 'reasoning_effort' and 'verbosity' are only supported by GPT-5 family, not by O4/O3
-            if any(term in deployment_lower for term in ["gpt-5", "gpt_5"]):
+            if any(
+                term in deployment_lower
+                for term in ["gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
+            ):
                 completion_params["reasoning_effort"] = (
                     configured_reasoning_effort or "minimal"
                 )
@@ -539,7 +570,7 @@ def get_azure_non_rag_response(
             # Do NOT include 'stop' for GPT-5/O-series models
         else:
             # Regular models: Use all standard parameters
-            completion_params["temperature"] = configs.llm_hyperparams.temperature
+            completion_params["temperature"] = effective_temperature
             completion_params["max_tokens"] = effective_max_tokens
             completion_params["top_p"] = configs.llm_hyperparams.top_p
             completion_params[
@@ -550,7 +581,6 @@ def get_azure_non_rag_response(
             ] = configs.llm_hyperparams.presence_penalty
             if configs.llm_hyperparams.stop is not None:
                 completion_params["stop"] = configs.llm_hyperparams.stop
-
         response = llm_client.chat.completions.create(**completion_params)
 
         return response.choices[0].message.content.strip()

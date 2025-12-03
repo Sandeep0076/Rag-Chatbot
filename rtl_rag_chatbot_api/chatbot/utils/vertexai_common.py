@@ -31,6 +31,8 @@ class VertexAIRAGHandler(BaseRAGHandler):
         temperature: float = 0.8,
         vertex_project: str = None,
         vertex_location: str = None,
+        custom_gpt: bool = False,
+        system_prompt: str = None,
     ):
         super().__init__(configs, gcs_handler)
 
@@ -68,6 +70,8 @@ class VertexAIRAGHandler(BaseRAGHandler):
         self.user_id = user_id
         self.all_file_infos = all_file_infos if all_file_infos else {}
         self.temperature = temperature
+        self.custom_gpt = custom_gpt
+        self.system_prompt = system_prompt
         self._collection_name_prefix = collection_name_prefix
         self.active_file_ids: List[str] = []
         self.is_multi_file = False
@@ -330,7 +334,12 @@ class VertexAIRAGHandler(BaseRAGHandler):
         self, files_context: str, context_str: str, question: str
     ) -> str:
         """Build the final RAG prompt."""
-        return f"""{self.configs.chatbot.system_prompt_rag_llm}
+        system_message = (
+            self.system_prompt
+            if self.custom_gpt and self.system_prompt
+            else self.configs.chatbot.system_prompt_rag_llm
+        )
+        return f"""{system_message}
             Elaborate and give detailed answer based on the context provided.
 
             {files_context}Context:
