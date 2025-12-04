@@ -13,6 +13,9 @@ from streamlit_components.custom_gpt_prompts import (
 )
 from streamlit_image_generation import handle_image_generation
 
+# Define API URL as it's used across functions
+API_URL = "http://localhost:8080"
+
 # Suppress warnings from google-cloud-aiplatform and vertexai
 warnings.filterwarnings(
     "ignore", category=FutureWarning, module="google.cloud.aiplatform"

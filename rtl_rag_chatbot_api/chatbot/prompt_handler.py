@@ -100,6 +100,12 @@ Before generating any response, analyze:
 3. What type of query structure would this naturally produce?
 4. **CRITICAL**: Extract and use the actual table names from database_info -
    NEVER use generic placeholders like "your_table_name"
+5. **MULTI-FILE UNIFIED SCHEMA**: In multi-file chat, tables are unified and renamed
+   to avoid conflicts using the pattern `{filename}_{tablename}`. Two extra columns
+   exist in every unified table for attribution and filtering:
+   - `_source_file_id` (original file identifier)
+   - `_source_filename` (original filename)
+   Use these columns when the user asks to filter by source file or to attribute results.
 
 Database Info: {database_info}
 User Question: {user_question}
@@ -129,6 +135,8 @@ User Question: {user_question}
    - "orders from customer Y" → Complete results for specific filters
    - "top n records", "first 3 rows" → Complete results for specific filters with headers
    - Use case-insensitive comparisons
+   - **In multi-file mode**: Support filters by `_source_file_id` or `_source_filename` when user
+     specifies file-based constraints (e.g., "from Sales.xlsx only").
 
 5. **SIMPLE_AGGREGATION Questions** (No optimization needed):
    - Single values: count, sum, average, max, min
@@ -141,6 +149,8 @@ User Question: {user_question}
 - **CRITICAL**: Identify the actual table names from database_info.tables or database_info.table_names
 - **CRITICAL**: Extract ALL column names from database_info.tables[].columns[] and verify they exist
   before using them in SELECT, WHERE, GROUP BY, ORDER BY, or any SQL clause
+- In multi-file mode, prefer the unified table names in the `{filename}_{tablename}` format
+  and remember `_source_file_id` and `_source_filename` are always available in unified tables
 - Make decisions based on REAL data characteristics, not assumptions
 
 **RESPONSE RULES:**
@@ -173,6 +183,7 @@ User Question: {user_question}
 - Look for "table_names" array in database_info
 - Look for "tables" array with "name" fields in database_info
 - Use the actual table name(s) in your response
+- In multi-file mode, table names follow `{filename}_{tablename}`; use these unified names
 - If unsure which table to use, default to the first table in the list
 
 Examples:
@@ -183,7 +194,7 @@ Examples:
 - If SQL needed: Return ONLY the SQL statement, starting with SELECT
 - No explanations, no multiple options, no markdown formatting
 - Just the clean SQL statement
-- **MUST use actual table names from database_info**
+- **MUST use actual table names from database_info** (prefer unified names if multi-file)
 - **MUST follow the intelligent LIMIT rules (respecting the hard cap rule above)**
 """
 
@@ -203,18 +214,17 @@ def analyze_database_context(database_info: dict) -> dict:
         "categorical_context": {},
         "numerical_context": {},
         "table_summaries": [],
+        "has_unified_tables": False,
     }
 
     try:
         if not isinstance(database_info, dict):
             return context
 
-        # Handle both direct tables list and nested structure
         tables = []
         if "tables" in database_info:
             tables = database_info["tables"]
         elif isinstance(database_info, dict) and "table_names" in database_info:
-            # Create basic table structure from table names
             tables = [
                 {"name": name, "columns": [], "row_count": 0}
                 for name in database_info["table_names"]
@@ -228,61 +238,31 @@ def analyze_database_context(database_info: dict) -> dict:
             columns = table.get("columns", [])
             row_count = table.get("row_count", 0)
 
-            # Analyze temporal characteristics
-            date_columns = []
-            for col in columns:
-                if isinstance(col, dict):
-                    col_name = col.get("name", "")
-                    col_type = str(col.get("type", "")).lower()
-                    date_indicators = ["date", "time", "timestamp"]
-                    if any(
-                        date_indicator in col_type for date_indicator in date_indicators
-                    ):
-                        date_columns.append(col_name)
+            # Detect unified naming convention {filename}_{tablename}
+            if "_" in table_name:
+                context["has_unified_tables"] = True
 
-            if date_columns:
-                # Try to estimate date span from sample data if available
-                sample_data = table.get("top_rows", [])
-                if sample_data and len(sample_data) > 1:
-                    # Basic date span estimation (could be enhanced)
-                    context["temporal_context"][table_name] = {
-                        "date_columns": date_columns,
-                        "estimated_span_days": max(
-                            30, row_count // 10
-                        ),  # Rough estimate
-                        "granularity": "daily",
-                    }
+            col_names = [c.get("name", "") for c in columns if isinstance(c, dict)]
+            has_source_cols = (
+                "_source_file_id" in col_names or "_source_filename" in col_names
+            )
 
-            # Analyze categorical characteristics
-            text_columns = []
-            for col in columns:
-                if isinstance(col, dict):
-                    col_name = col.get("name", "")
-                    col_type = str(col.get("type", "")).lower()
-                    text_types = ["text", "varchar", "char"]
-                    if any(text_type in col_type for text_type in text_types):
-                        text_columns.append(col_name)
-
-            if text_columns:
-                # Estimate category cardinality (rough approximation)
-                for col_name in text_columns:
-                    estimated_unique = min(
-                        row_count, max(10, row_count // 20)
-                    )  # Rough estimate
-                    context["categorical_context"][
-                        f"{table_name}.{col_name}"
-                    ] = estimated_unique
-
-            # Store table summary
+            # Summarize table
             context["table_summaries"].append(
                 {
                     "name": table_name,
                     "row_count": row_count,
-                    "columns": len(columns),
-                    "has_dates": bool(date_columns),
-                    "has_categories": bool(text_columns),
+                    "columns": col_names,
+                    "has_source_columns": has_source_cols,
                 }
             )
+
+            # Analyze temporal characteristics
+            date_columns = [
+                c for c in col_names if any(k in c.lower() for k in ["date", "time"])
+            ]
+            if date_columns:
+                context["temporal_context"][table_name] = {"date_columns": date_columns}
 
     except Exception as e:
         logging.error(f"Error analyzing database context: {str(e)}")
@@ -517,15 +497,20 @@ def enhance_query_with_context(
         tables = database_info.get("tables", [])
         schema_parts = []
         for table in tables:
-            table_name = table.get("name", "")
-            columns = table.get("columns", [])
-            if table_name and columns:
-                col_names = [col.get("name", "") for col in columns if col.get("name")]
-                schema_parts.append(
-                    f"Table '{table_name}' columns: {', '.join(col_names)}"
-                )
+            # Include unified table naming hint and source columns if present
+            tname = table.get("name", "")
+            cols = table.get("columns", [])
+            col_names = [c.get("name", "") for c in cols if isinstance(c, dict)]
+            has_source_id = "_source_file_id" in col_names
+            has_source_name = "_source_filename" in col_names
+            suffix = ""
+            if has_source_id or has_source_name:
+                suffix = " (unified table; has _source_file_id, _source_filename)"
+            schema_parts.append(
+                f"Table: {tname}{suffix}\nColumns: {', '.join(col_names)}"
+            )
         if schema_parts:
-            schema_info = "\n".join(schema_parts)
+            schema_info = "\n\nSchema:\n" + "\n".join(schema_parts)
 
     # Extract table information from database context
     table_summaries = database_context.get("table_summaries", [])
@@ -538,7 +523,7 @@ def enhance_query_with_context(
         else "No table information available"
     )
     if schema_info:
-        table_info_str = f"{table_info_str}\n\n{schema_info}"
+        table_info_str = f"{table_info_str}\n\n{schema_info}\n\n"
 
     if category == "TIME_SERIES" and optimization == "temporal_aggregation":
         # Check actual temporal context
@@ -564,7 +549,7 @@ def enhance_query_with_context(
         - For specific row requests (e.g., "second row", "row 5", "first 3 rows"): Use the exact LIMIT requested
         - For general queries: Add LIMIT 25 if not present
         - If there is an existing LIMIT larger than 25, reduce it to 25
-        - If using LIMIT offset,count, cap the count to 25 and preserve the offset
+        - If using LIMIT offset,count, cap count to 25 and preserve the offset
         - Preserve OFFSET if present
         """
 
@@ -621,13 +606,14 @@ def enhance_query_with_context(
         prompt = (
             enhancement_prompt
             + "\nSQL OUTPUT RULES:\n"
-            + "- Use the accurate table name from context.\n"
-            + "- **CRITICAL**: Use ONLY column names from database_context that actually exist in the schema.\n"
+            + "- Use the accurate table name from context (prefer `{filename}_{tablename}` in unified mode).\n"
+            + "- **CRITICAL**: Use ONLY column names from database_context that exist in the schema.\n"
             + "- Map user terms to actual column names (e.g., 'job' → 'job_type').\n"
             + "- NEVER invent or guess column names.\n"
+            + "- **SOURCE FILTERS**: When user references a specific file, filter using `_source_filename`\n"
+            + "  or `_source_file_id` as appropriate.\n"
             + "- **CRITICAL NAME MATCHING**: For name/text searches, use LIKE with wildcards:\n"
             + "  Example: LOWER(customer_name) LIKE '%aaron%' NOT = 'aaron'\n"
-            + "  This ensures partial matches (e.g., 'Aaron' matches 'Aaron Riggs').\n"
             + "- Return only raw SQL (no markdown or comments).\n"
             + "- Apply LIMIT intelligently: preserve specific row requests, add LIMIT 25 for general queries;\n"
             + "  when OFFSET is present, preserve it.\n"
@@ -643,7 +629,7 @@ def enhance_query_with_context(
         return result
     except Exception as e:
         logging.error(f"Error enhancing query: {str(e)}")
-        return user_question  # Fallback to original question
+        return user_question
 
 
 def resolve_question_with_history(
