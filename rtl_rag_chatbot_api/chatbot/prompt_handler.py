@@ -101,7 +101,7 @@ Before generating any response, analyze:
 4. **CRITICAL**: Extract and use the actual table names from database_info -
    NEVER use generic placeholders like "your_table_name"
 5. **MULTI-FILE UNIFIED SCHEMA**: In multi-file chat, tables are unified and renamed
-   to avoid conflicts using the pattern `{filename}_{tablename}`. Two extra columns
+   to avoid conflicts using the pattern `{{filename}}_{{tablename}}`. Two extra columns
    exist in every unified table for attribution and filtering:
    - `_source_file_id` (original file identifier)
    - `_source_filename` (original filename)
@@ -149,8 +149,8 @@ User Question: {user_question}
 - **CRITICAL**: Identify the actual table names from database_info.tables or database_info.table_names
 - **CRITICAL**: Extract ALL column names from database_info.tables[].columns[] and verify they exist
   before using them in SELECT, WHERE, GROUP BY, ORDER BY, or any SQL clause
-- In multi-file mode, prefer the unified table names in the `{filename}_{tablename}` format
-  and remember `_source_file_id` and `_source_filename` are always available in unified tables
+- In multi-file mode, prefer the unified table names in the `{{filename}}_{{tablename}}` format
+   and remember `_source_file_id` and `_source_filename` are always available in unified tables
 - Make decisions based on REAL data characteristics, not assumptions
 
 **RESPONSE RULES:**
@@ -183,7 +183,7 @@ User Question: {user_question}
 - Look for "table_names" array in database_info
 - Look for "tables" array with "name" fields in database_info
 - Use the actual table name(s) in your response
-- In multi-file mode, table names follow `{filename}_{tablename}`; use these unified names
+- In multi-file mode, table names follow `{{filename}}_{{tablename}}`; use these unified names
 - If unsure which table to use, default to the first table in the list
 
 Examples:
@@ -347,6 +347,14 @@ def classify_question_intent(
             response = get_gemini_non_rag_response(
                 configs, classification_prompt, model_choice
             )
+        elif model_choice.startswith("claude"):
+            from rtl_rag_chatbot_api.chatbot.anthropic_handler import (
+                get_anthropic_non_rag_response,
+            )
+
+            response = get_anthropic_non_rag_response(
+                configs, classification_prompt, model_choice
+            )
         else:
             response = get_azure_non_rag_response(configs, classification_prompt)
 
@@ -456,6 +464,12 @@ def answer_from_database_summary(
             )
 
             return get_gemini_non_rag_response(configs, summary_prompt, model_choice)
+        elif model_choice.startswith("claude"):
+            from rtl_rag_chatbot_api.chatbot.anthropic_handler import (
+                get_anthropic_non_rag_response,
+            )
+
+            return get_anthropic_non_rag_response(configs, summary_prompt, model_choice)
         else:
             return get_azure_non_rag_response(configs, summary_prompt)
     except Exception as e:
@@ -606,7 +620,7 @@ def enhance_query_with_context(
         prompt = (
             enhancement_prompt
             + "\nSQL OUTPUT RULES:\n"
-            + "- Use the accurate table name from context (prefer `{filename}_{tablename}` in unified mode).\n"
+            + "- Use the accurate table name from context (prefer `{{filename}}_{{tablename}}` in unified mode).\n"
             + "- **CRITICAL**: Use ONLY column names from database_context that exist in the schema.\n"
             + "- Map user terms to actual column names (e.g., 'job' → 'job_type').\n"
             + "- NEVER invent or guess column names.\n"
@@ -624,6 +638,12 @@ def enhance_query_with_context(
             )
 
             result = get_gemini_non_rag_response(configs, prompt, model_choice)
+        elif model_choice.startswith("claude"):
+            from rtl_rag_chatbot_api.chatbot.anthropic_handler import (
+                get_anthropic_non_rag_response,
+            )
+
+            result = get_anthropic_non_rag_response(configs, prompt, model_choice)
         else:
             result = get_azure_non_rag_response(configs, prompt)
         return result
@@ -928,6 +948,14 @@ def format_question(
                     formatted_question = get_gemini_non_rag_response(
                         configs, formatted_prompt, model_choice
                     )
+                elif model_choice.startswith("claude"):
+                    from rtl_rag_chatbot_api.chatbot.anthropic_handler import (
+                        get_anthropic_non_rag_response,
+                    )
+
+                    formatted_question = get_anthropic_non_rag_response(
+                        configs, formatted_prompt, model_choice
+                    )
                 else:
                     formatted_question = get_azure_non_rag_response(
                         configs=configs, query=formatted_prompt
@@ -953,6 +981,14 @@ def format_question(
             )
 
             formatted_question = get_gemini_non_rag_response(
+                configs, formatted_prompt, model_choice
+            )
+        elif model_choice.startswith("claude"):
+            from rtl_rag_chatbot_api.chatbot.anthropic_handler import (
+                get_anthropic_non_rag_response,
+            )
+
+            formatted_question = get_anthropic_non_rag_response(
                 configs, formatted_prompt, model_choice
             )
         else:
