@@ -25,6 +25,7 @@ from rtl_rag_chatbot_api.chatbot.prompt_handler import (
     format_question,
     resolve_question_with_history,
 )
+from rtl_rag_chatbot_api.chatbot.utils.language_detector import detect_lang
 from rtl_rag_chatbot_api.chatbot.utils.prompt_builder import PromptBuilder
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
@@ -1142,7 +1143,23 @@ class TabularDataHandler:
                 return result  # Dict with 'answer' and 'intermediate_steps'
 
             logging.info("TABULAR FLOW: No direct answer, using forced answer fallback")
-            forced_result = self.get_forced_answer(actual_question_text, "")
+            # Use lingua-based detector here as well so forced answers match
+            # the user's original question language.
+            try:
+                detected_lang_name = detect_lang(str(actual_question_text))
+                lang_name_lower = (detected_lang_name or "").lower()
+                if "english" in lang_name_lower:
+                    user_language = "en"
+                elif "german" in lang_name_lower:
+                    user_language = "de"
+                else:
+                    user_language = "en"
+            except Exception:
+                user_language = "en"
+
+            forced_result = self.get_forced_answer(
+                actual_question_text, "", language=user_language
+            )
             return forced_result  # Dict from get_forced_answer
         except Exception as e:
             logging.error(f"TABULAR FLOW: Error in get_answer: {str(e)}")
@@ -1250,78 +1267,23 @@ class TabularDataHandler:
             self._initialize_agent()
 
         try:
-            logging.info("TABULAR FLOW: Preparing database info for formatting...")
-            # Prepare database_info for formatting and context usage
-            database_info = {}
+            database_info = self._prepare_database_info()
+            (
+                question_to_process,
+                resolved_question,
+            ) = self._resolve_question_with_history_if_needed(question)
 
-            # Try to get database_info from all_file_infos first
-            if (
-                self.all_file_infos
-                and self.file_id
-                and self.file_id in self.all_file_infos
-            ):
-                file_info = self.all_file_infos.get(self.file_id, {})
-                database_info = file_info.get("database_summary", {})
-            else:
-                # Fallback: check database_summaries for unified sessions
-                # This handles cases where file_id is a unified_session_id
-                if self.file_id in self.database_summaries:
-                    database_info = self.database_summaries[self.file_id]
-                    logging.info(
-                        f"Using database summary from cache for {self.file_id}"
-                    )
+            # Step 2: Detect user language once from the raw/resolved question
+            # using lingua-based detector (not influenced by schema/DB context).
+            user_language = self._detect_user_language(question_to_process)
 
-            # Step 1: Handle conversation history if provided
-            if isinstance(question, list) and len(question) > 1:
-                # Extract conversation history and current question
-                conversation_history = question[:-1]
-                current_question = question[-1]
-
-                logging.info(
-                    f"TABULAR FLOW: Processing question with "
-                    f"{len(conversation_history)} history messages"
-                )
-
-                # Retrieve cached previous formatted question for holistic context if available
-                previous_formatted_question = self.previous_formatted_by_file.get(
-                    self.file_id, ""
-                )
-                if previous_formatted_question:
-                    logging.info(
-                        f"TABULAR FLOW: Previous formatted question (cached): "
-                        f"{previous_formatted_question[:100]}"
-                    )
-
-                # Resolve contextual references in the current question (with holistic context)
-                logging.info("TABULAR FLOW: Resolving question with history...")
-                resolved_question = resolve_question_with_history(
-                    conversation_history,
-                    current_question,
-                    previous_formatted_question,
-                    self.previous_resolved_by_file.get(self.file_id, ""),
-                )
-                logging.info(
-                    f"TABULAR FLOW: Resolved question: {resolved_question[:100]}"
-                )
-
-                # Use the resolved question for further processing
-                question_to_process = resolved_question
-            elif isinstance(question, list) and len(question) == 1:
-                # Single item in list, extract it
-                question_to_process = question[0]
-            else:
-                # String question, use as-is (backward compatibility)
-                question_to_process = question
-
-            # TODO: In future we can insert an llm agent here to verify if it needs answer from database or
-            # using the last answer can further explain. example question : I want to know more specifically
-            # how to implement and connect this database to my application.
-            # User here Wants answer in detail based on History and non sql answer.
-
-            # Step 2: Use enhanced format_question with intelligent context analysis
+            # Step 3: Use enhanced format_question with intelligent context analysis
             logging.info("TABULAR FLOW: Formatting question for SQL processing...")
             format_result = format_question(
-                database_info, question_to_process, self.model_choice
+                database_info,
+                question_to_process,
+                self.model_choice,
+                user_language=user_language,
             )
             formatted_question = format_result["formatted_question"]
             needs_sql = format_result["needs_sql"]
@@ -1342,7 +1304,8 @@ class TabularDataHandler:
                     pass
                 return {"answer": formatted_question, "intermediate_steps": None}
 
-            # Get query classification for appropriate response formatting
+            # Get query classification for appropriate response formatting.
+            # Language is sourced from detect_lang via user_language override above.
             query_type = classification.get("category", "unknown")
             language = classification.get("language", "en")
             logging.info(
@@ -1392,6 +1355,115 @@ class TabularDataHandler:
                 f"TABULAR FLOW: Error in ask_question: {str(e)}", exc_info=True
             )
             raise
+
+    def _prepare_database_info(self) -> dict:
+        """
+        Prepare database_info for formatting and context usage.
+        """
+        logging.info("TABULAR FLOW: Preparing database info for formatting...")
+        database_info: Dict[str, Any] = {}
+
+        try:
+            # Try to get database_info from all_file_infos first
+            if (
+                self.all_file_infos
+                and self.file_id
+                and self.file_id in self.all_file_infos
+            ):
+                file_info = self.all_file_infos.get(self.file_id, {})
+                database_info = file_info.get("database_summary", {})
+            else:
+                # Fallback: check database_summaries for unified sessions
+                # This handles cases where file_id is a unified_session_id
+                if self.file_id in self.database_summaries:
+                    database_info = self.database_summaries[self.file_id]
+                    logging.info(
+                        f"Using database summary from cache for {self.file_id}"
+                    )
+        except Exception as e:
+            logging.error(
+                f"TABULAR FLOW: Error preparing database info: {str(e)}", exc_info=True
+            )
+        return database_info
+
+    def _resolve_question_with_history_if_needed(
+        self, question: Union[str, List[str]]
+    ) -> tuple[str, str]:
+        """
+        Resolve contextual references using conversation history when needed.
+
+        Returns:
+            (question_to_process, resolved_question)
+        """
+        resolved_question = ""
+
+        # Step 1: Handle conversation history if provided
+        if isinstance(question, list) and len(question) > 1:
+            # Extract conversation history and current question
+            conversation_history = question[:-1]
+            current_question = question[-1]
+
+            logging.info(
+                f"TABULAR FLOW: Processing question with "
+                f"{len(conversation_history)} history messages"
+            )
+
+            # Retrieve cached previous formatted question for holistic context if available
+            previous_formatted_question = self.previous_formatted_by_file.get(
+                self.file_id, ""
+            )
+            if previous_formatted_question:
+                logging.info(
+                    f"TABULAR FLOW: Previous formatted question (cached): "
+                    f"{previous_formatted_question[:100]}"
+                )
+
+            # Resolve contextual references in the current question (with holistic context)
+            logging.info("TABULAR FLOW: Resolving question with history...")
+            resolved_question = resolve_question_with_history(
+                conversation_history,
+                current_question,
+                previous_formatted_question,
+                self.previous_resolved_by_file.get(self.file_id, ""),
+            )
+            logging.info(f"TABULAR FLOW: Resolved question: {resolved_question[:100]}")
+
+            # Use the resolved question for further processing
+            question_to_process = resolved_question
+        elif isinstance(question, list) and len(question) == 1:
+            # Single item in list, extract it
+            question_to_process = question[0]
+        else:
+            # String question, use as-is (backward compatibility)
+            question_to_process = question
+
+        return str(question_to_process), str(resolved_question)
+
+    def _detect_user_language(self, question_text: str) -> str:
+        """
+        Detect the user's language from the raw question using lingua
+        (independent of schema/DB context).
+        """
+        try:
+            detected_lang_name = detect_lang(str(question_text))
+            lang_name_lower = (detected_lang_name or "").lower()
+            if "english" in lang_name_lower:
+                user_language = "en"
+            elif "german" in lang_name_lower:
+                user_language = "de"
+            else:
+                user_language = "en"
+            logging.info(
+                f"TABULAR FLOW: Detected user language from question: "
+                f"{detected_lang_name} -> code={user_language}"
+            )
+            return user_language
+        except Exception as lang_err:
+            logging.warning(
+                f"TABULAR FLOW: Language detection failed, "
+                f"defaulting to 'en': {str(lang_err)}"
+            )
+            return "en"
 
     def _process_agent_response(
         self,

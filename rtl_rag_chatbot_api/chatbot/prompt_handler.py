@@ -875,7 +875,10 @@ Now resolve the current question based on the conversation history provided abov
 
 
 def format_question(
-    database_info: dict, user_question: str, model_choice: str = "gpt_5_mini"
+    database_info: dict,
+    user_question: str,
+    model_choice: str = "gpt_5_mini",
+    user_language: str | None = None,
 ) -> dict:
     """
     Enhanced question formatting with intelligent context awareness and optimization.
@@ -902,6 +905,10 @@ def format_question(
 
         # Step 3: Route based on classification
         needs_sql = classification.get("needs_sql", True)
+        # If caller provided an explicit user language (e.g., via lingua),
+        # override any language guess coming from the LLM classification.
+        if user_language:
+            classification["language"] = user_language
 
         if not needs_sql:
             # Answer directly from database summary (includes DIRECT_SUMMARY category)
