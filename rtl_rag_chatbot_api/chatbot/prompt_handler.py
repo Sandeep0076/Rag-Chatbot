@@ -116,7 +116,8 @@ User Question: {user_question}
    - "What's this file about?" → Summarize database structure and content
    - "Key insights" → Extract key statistics from database_info
    - "How many records/tables?" → Use counts from database_info
-   - "What columns are available?" → List columns from database_info
+   - "What columns/tables/files are available?" → List structure from database_info
+   - "How many [records/columns/tables/files]?" → Use counts from database_info
 
 2. **TIME_SERIES Questions** (Check actual date spans):
    - Analyze actual date ranges in database_info

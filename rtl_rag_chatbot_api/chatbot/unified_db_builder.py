@@ -243,19 +243,24 @@ class UnifiedDatabaseBuilder:
         Create a unique table name for the unified database.
 
         Args:
-            safe_prefix: Sanitized filename prefix
-            table_name: Original table name
+            safe_prefix: Sanitized filename prefix (not used, kept for compatibility)
+            table_name: Original table name (already contains sanitized filename + _table suffix)
             existing_mapping: Current source mapping to check for conflicts
 
         Returns:
             Unique table name
         """
-        unified_table = f"{safe_prefix}_{table_name}"
+        # Table names from individual databases already include the sanitized filename
+        # and are unique per file. Since we have _source_file_id and _source_filename
+        # columns for tracking, we can use the table_name directly.
+        # This avoids duplication like: filename_filename_table
+        unified_table = table_name
 
-        # Handle name collisions
+        # Handle name collisions (in case multiple files somehow have identical table names)
         suffix = 1
+        original_unified = unified_table
         while unified_table in existing_mapping:
-            unified_table = f"{safe_prefix}_{table_name}_{suffix}"
+            unified_table = f"{original_unified}_{suffix}"
             suffix += 1
 
         return unified_table
