@@ -15,6 +15,8 @@ from streamlit_image_generation import handle_image_generation
 
 # Define API URL as it's used across functions
 API_URL = "http://localhost:8080"
+# Preferred default text model (non-image)
+DEFAULT_TEXT_MODEL = "claude-sonnet-4-5"
 
 # Suppress warnings from google-cloud-aiplatform and vertexai
 warnings.filterwarnings(
@@ -1929,7 +1931,17 @@ def initialize_models_state():
             setup_fallback_models()
 
     if "model_choice" not in st.session_state:
-        st.session_state.model_choice = "gpt_4o_mini"
+        available_text_models = st.session_state.model_types.get(
+            "text", st.session_state.available_models
+        )
+        default_text_model = (
+            DEFAULT_TEXT_MODEL
+            if DEFAULT_TEXT_MODEL in available_text_models
+            else (available_text_models[0] if available_text_models else None)
+        )
+        st.session_state.model_choice = (
+            default_text_model or st.session_state.available_models[0]
+        )
 
     # Always ensure temp_model_choice is properly initialized
     if "temp_model_choice" not in st.session_state:
@@ -1961,13 +1973,19 @@ def setup_default_model_types():
 def setup_fallback_models():
     """Set up fallback models if API call fails."""
     st.session_state.available_models = [
+        DEFAULT_TEXT_MODEL,
         "gpt_4o_mini",
         "gemini-2.5-flash",
         "gemini-2.5-pro",
     ]
     # Fallback model types if API call fails
     st.session_state.model_types = {
-        "text": ["gpt_4o_mini", "gemini-2.5-flash", "gemini-2.5-pro"],
+        "text": [
+            DEFAULT_TEXT_MODEL,
+            "gpt_4o_mini",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+        ],
         "image": [
             "dall-e-3",
             "imagen-3.0-generate-002",
