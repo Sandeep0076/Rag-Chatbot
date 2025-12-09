@@ -1,3 +1,4 @@
+import csv
 import logging
 import os
 import shutil
@@ -146,6 +147,39 @@ class PrepareSQLFromTabularData:
             logging.error(f"Error getting table info: {str(e)}")
             return None
 
+    def _sniff_csv_dialect(self, encoding: str):
+        """
+        Use Python's csv.Sniffer to detect delimiter and header presence.
+
+        This makes CSV ingestion robust for different delimiters like ',', ';', tab, '|'.
+        """
+        try:
+            with open(
+                self.file_path, "r", encoding=encoding, errors="ignore"
+            ) as file_obj:
+                sample = file_obj.read(4096)
+                if not sample:
+                    return None, None
+
+                sniffer = csv.Sniffer()
+                dialect = sniffer.sniff(sample, delimiters=[",", ";", "\t", "|"])
+                has_header = sniffer.has_header(sample)
+                logging.info(
+                    "Detected CSV dialect: delimiter=%r, has_header=%s "
+                    "for encoding=%s",
+                    dialect.delimiter,
+                    has_header,
+                    encoding,
+                )
+                return dialect, has_header
+        except Exception as e:
+            logging.debug(
+                "Failed to sniff CSV dialect for encoding %s: %s",
+                encoding,
+                str(e),
+            )
+            return None, None
+
     def _read_csv_with_encoding(self, encodings: List[str]):
         """
         Try reading CSV file with different encodings.
@@ -158,16 +192,53 @@ class PrepareSQLFromTabularData:
         """
         for encoding in encodings:
             try:
-                logging.info(f"Attempting to read CSV with {encoding} encoding")
-                df = pd.read_csv(self.file_path, encoding=encoding, on_bad_lines="skip")
+                logging.info(
+                    "Attempting to read CSV with encoding=%s using robust "
+                    "delimiter detection",
+                    encoding,
+                )
+
+                # First try to sniff dialect (delimiter + header)
+                dialect, has_header = self._sniff_csv_dialect(encoding)
+
+                read_kwargs = {
+                    "filepath_or_buffer": self.file_path,
+                    "encoding": encoding,
+                    "on_bad_lines": "skip",
+                    "engine": "python",
+                }
+
+                # If we detected a delimiter, use it. Otherwise, let pandas infer (sep=None).
+                if dialect is not None:
+                    read_kwargs["sep"] = dialect.delimiter
+                else:
+                    read_kwargs["sep"] = None
+
+                # Respect detected header if available
+                if has_header is not None and not has_header:
+                    read_kwargs["header"] = None
+
+                df = pd.read_csv(**read_kwargs)
+
                 if df is not None and not df.empty:
-                    logging.info(f"Successfully read {len(df)} rows from CSV")
+                    logging.info(
+                        "Successfully read %d rows and %d columns from CSV "
+                        "with encoding=%s",
+                        len(df),
+                        len(df.columns),
+                        encoding,
+                    )
                     return df, encoding
-                logging.warning("DataFrame is empty after reading")
+                logging.warning(
+                    "DataFrame is empty after reading CSV with encoding=%s",
+                    encoding,
+                )
             except UnicodeDecodeError:
-                logging.debug(f"Failed to read with {encoding} encoding")
+                logging.debug("Failed to read CSV with encoding=%s", encoding)
             except Exception as e:
-                logging.error(f"Error reading CSV with {encoding} encoding: {str(e)}")
+                logging.error(
+                    "Error reading CSV with encoding=%s: %s", encoding, str(e)
+                )
         return None, None
 
     def _handle_csv_file(self):
