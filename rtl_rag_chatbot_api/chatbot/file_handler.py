@@ -653,7 +653,15 @@ class FileHandler:
         return is_tabular, is_database, is_text
 
     async def _prepare_file_directories(self, file_id, existing_file_id):
-        """Create necessary directories for file processing."""
+        """Create necessary directories for file processing.
+
+        Notes:
+            - For new uploads (no existing_file_id), we create a fresh chroma
+              directory for this file_id.
+            - For deduplicated uploads (existing_file_id is set), we avoid
+              creating a redundant chroma directory for the temporary file_id.
+              All persistent artifacts should live under existing_file_id.
+        """
         os.makedirs("local_data", exist_ok=True)
         if not existing_file_id:
             chroma_dir = f"./chroma_db/{file_id}"
@@ -1181,10 +1189,12 @@ class FileHandler:
                     custom_gpt,
                 )
 
-            # Only create directories and save file if we don't have existing embeddings
-            # Create directories and save file
+            # Only create directories and save file if we don't have an early
+            # embeddings short-circuit. For deduplicated files (existing_file_id
+            # set), we still create a temp file under local_data but avoid
+            # creating an unused chroma_db/<file_id> directory.
             temp_file_path = await self._save_file_locally(
-                file_id, original_filename, file_content
+                file_id, original_filename, file_content, existing_file_id
             )
             del file_content  # Free memory
 
@@ -1346,10 +1356,20 @@ class FileHandler:
         return existing_file_id, azure_result, embedding_type
 
     async def _save_file_locally(
-        self, file_id: str, original_filename: str, file_content: bytes
+        self,
+        file_id: str,
+        original_filename: str,
+        file_content: bytes,
+        existing_file_id: str | None,
     ):
-        """Save file content to local storage"""
-        await self._prepare_file_directories(file_id, None)
+        """Save file content to local storage.
+
+        For deduplicated files (existing_file_id is not None), this will only
+        create the shared `local_data` directory and skip creating a new,
+        unused `chroma_db/<file_id>` directory. Persistent artifacts for such
+        files are stored under `chroma_db/<existing_file_id>`.
+        """
+        await self._prepare_file_directories(file_id, existing_file_id)
         temp_file_path = f"local_data/{file_id}_{original_filename}"
         async with aiofiles.open(temp_file_path, "wb") as buffer:
             await buffer.write(file_content)
