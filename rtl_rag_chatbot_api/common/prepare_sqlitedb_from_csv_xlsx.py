@@ -180,6 +180,65 @@ class PrepareSQLFromTabularData:
             )
             return None, None
 
+    def _infer_header_from_sample(
+        self, delimiter: Optional[str], encoding: str
+    ) -> Optional[bool]:
+        """
+        Heuristic header detection when csv.Sniffer is inconclusive or wrong.
+
+        If the first row is all non-numeric tokens and the second row has at least
+        one numeric-looking token, we treat the first row as header.
+        """
+        try:
+            if not delimiter:
+                delimiter = ","
+
+            with open(self.file_path, "r", encoding=encoding, errors="ignore") as f:
+                reader = csv.reader(f, delimiter=delimiter)
+                rows = []
+                for _ in range(2):  # first two rows are enough
+                    try:
+                        rows.append(next(reader))
+                    except StopIteration:
+                        break
+
+            if len(rows) < 2:
+                return None
+
+            def is_numeric_like(token: str) -> bool:
+                t = token.strip()
+                if not t:
+                    return False
+                # remove common thousands/decimal separators
+                t = t.replace(".", "").replace(",", "")
+                return t.replace("-", "", 1).isdigit()
+
+            first_row = rows[0]
+            second_row = rows[1]
+
+            # All tokens non-numeric in first row?
+            first_non_numeric = all(not is_numeric_like(tok) for tok in first_row)
+            # Any numeric tokens in second row?
+            second_has_numeric = any(is_numeric_like(tok) for tok in second_row)
+
+            if first_non_numeric and second_has_numeric:
+                logging.info(
+                    "Header heuristic: treating first row as header "
+                    "(delimiter=%r, encoding=%s)",
+                    delimiter,
+                    encoding,
+                )
+                return True
+            return None
+        except Exception as e:
+            logging.debug(
+                "Header heuristic failed for delimiter %r, encoding %s: %s",
+                delimiter,
+                encoding,
+                str(e),
+            )
+            return None
+
     def _read_csv_with_encoding(self, encodings: List[str]):
         """
         Try reading CSV file with different encodings.
@@ -214,8 +273,17 @@ class PrepareSQLFromTabularData:
                 else:
                     read_kwargs["sep"] = None
 
-                # Respect detected header if available
-                if has_header is not None and not has_header:
+                # Respect detected header if available; otherwise, apply heuristic
+                header_inferred = has_header
+                if header_inferred is None or header_inferred is False:
+                    heuristic_header = self._infer_header_from_sample(
+                        dialect.delimiter if dialect else None, encoding
+                    )
+                    if heuristic_header is True:
+                        header_inferred = True
+
+                if header_inferred is not None and not header_inferred:
+                    # Explicitly no header
                     read_kwargs["header"] = None
 
                 df = pd.read_csv(**read_kwargs)

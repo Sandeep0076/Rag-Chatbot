@@ -14,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 
 from configs.app_config import Config
+from rtl_rag_chatbot_api.chatbot.anthropic_handler import get_anthropic_non_rag_response
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.chatbot.gemini_handler import (
@@ -1481,7 +1482,17 @@ class TabularDataHandler:
                 logging.warning(
                     f"Safety filter blocked response in CSV handler: {str(e)}"
                 )
-                formatted_answer = f"I apologize, but I cannot provide a response to this question. {str(e)}"
+                formatted_answer = (
+                    "I apologize, but I cannot provide a response to this question. "
+                    f"{str(e)}"
+                )
+        elif self.model_choice in [
+            "claude-sonnet-4@20250514",
+            "claude-sonnet-4-5",
+        ]:
+            formatted_answer = get_anthropic_non_rag_response(
+                self.config, base_prompt, self.model_choice
+            )
         else:
             formatted_answer = get_azure_non_rag_response(self.config, base_prompt)
 
