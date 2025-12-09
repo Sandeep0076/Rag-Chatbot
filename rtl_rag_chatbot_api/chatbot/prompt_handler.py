@@ -326,16 +326,13 @@ def classify_question_intent(
     CRITICAL: For DIRECT_SUMMARY, always set needs_sql to false since these can be
     answered from database metadata alone.
 
-    IMPORTANT: Also detect the language of the user's question and include it in the response.
-    Common languages: English (en) and German (de).  also use accurate table name
-    from database_info to make sql query
+    Also use accurate table names from database_info to make the SQL query.
     Based on the ACTUAL database characteristics, return ONLY this JSON:
 
         "category": "DIRECT_SUMMARY|TIME_SERIES|CATEGORICAL_LISTING|FILTERED_SEARCH|SIMPLE_AGGREGATION",
         "needs_sql": true/false,
         "optimization_strategy": "none|temporal_aggregation|top_n_summary|preserve_detail",
-        "reasoning": "brief explanation based on actual data characteristics",
-        "language": "language_code (e.g., en, de)"
+        "reasoning": "brief explanation based on actual data characteristics"
     }}
     """
 
@@ -1004,5 +1001,9 @@ def format_question(
         return {
             "formatted_question": formatted_question,
             "needs_sql": True,
-            "classification": {"category": "FALLBACK", "language": "en"},
+            "classification": {
+                "category": "FALLBACK",
+                # Respect caller-provided user_language if available; otherwise default to 'en'
+                "language": user_language or "en",
+            },
         }
