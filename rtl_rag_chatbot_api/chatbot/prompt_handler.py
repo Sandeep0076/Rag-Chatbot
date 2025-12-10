@@ -150,8 +150,14 @@ User Question: {user_question}
 - **CRITICAL**: Identify the actual table names from database_info.tables or database_info.table_names
 - **CRITICAL**: Extract ALL column names from database_info.tables[].columns[] and verify they exist
   before using them in SELECT, WHERE, GROUP BY, ORDER BY, or any SQL clause
+- **CRITICAL - SAMPLE DATA USAGE**: database_info contains top_rows[] with ACTUAL sample data from the first 2 rows
+  - ALWAYS examine top_rows[] to understand actual data formats and values
+  - When filtering by categorical values (e.g., asset names, symbols), check what values exist in top_rows
+- Use EXACT values from samples, not assumptions (e.g., use the value shown, not an abbreviation)
+  - For timestamp columns, observe the actual format in samples (e.g., "2025-12-03 00:01:00")
+  - Match user terms to actual sample values before constructing WHERE clauses
 - In multi-file mode, prefer the unified table names in the `{{filename}}_{{tablename}}` format
-   and remember `_source_file_id` and `_source_filename` are always available in unified tables
+  and remember `_source_file_id` and `_source_filename` are always available in unified tables
 - Make decisions based on REAL data characteristics, not assumptions
 
 **RESPONSE RULES:**
@@ -163,6 +169,19 @@ User Question: {user_question}
   - Example: For "Smith" use `LOWER(employee_name) LIKE '%smith%'` NOT `= 'smith'`
   - This ensures partial matches work (e.g., "Aaron" matches "Aaron Riggs")
   - Only use exact equality (=) for categorical fields like status codes, IDs, or exact enums
+- **CRITICAL VALUE MATCHING FROM SAMPLES**:
+  - FIRST, examine top_rows[] in database_info to see actual data values
+  - When user asks about an entity/value, check what the samples actually show (full name, code, abbreviation)
+  - Use the EXACT value format from samples (case-sensitive where appropriate)
+  - Example: If samples show `asset = 'X'`, use that exact value and column
+    (not a guessed abbreviation or another column)
+  - For ambiguous terms, check BOTH possible columns in samples to determine correct mapping
+- **TEMPORAL MATCHING FROM SAMPLES**:
+  - Inspect sample timestamps to capture exact formatting (e.g., timezone offsets like "+00:00")
+  - Use the exact string format seen in samples for equality filters (e.g., `timestamp = '2025-12-03 00:02:00+00:00'`)
+  - If exact-time parsing is ambiguous, add a fallback day-level filter (e.g., BETWEEN day_start and day_end)
+  - For precise times, try exact first; if that may fail, also include a narrow window (e.g., same minute or same day)
+  - Avoid stripping timezone information; include it if present in samples
 - Include aggregation strategy in the query when needed
 - Never include disclaimers or technical explanations
 - **CRITICAL**: Use the actual table names from database_info - NEVER use "your_table_name" or similar placeholders
@@ -295,6 +314,9 @@ def classify_question_intent(
     - Tables: {database_context.get('table_summaries', [])}
     - Temporal columns: {database_context.get('temporal_context', {})}
     - Categorical estimates: {database_context.get('categorical_context', {})}
+
+    IMPORTANT: The database_info provided contains actual sample data (top_rows) showing real values.
+    Always reference these samples to understand data formats and categorical values.
 
     Classify into ONE category:
 
@@ -622,6 +644,16 @@ def enhance_query_with_context(
             + "- **CRITICAL**: Use ONLY column names from database_context that exist in the schema.\n"
             + "- Map user terms to actual column names (e.g., 'job' → 'job_type').\n"
             + "- NEVER invent or guess column names.\n"
+            + "- **CRITICAL SAMPLE DATA**: Examine top_rows[] in schema to see actual values before filtering:\n"
+            + "  - Match user terms (e.g., 'Bitcoin') to actual sample values\n"
+            + "  - Use exact column names and value formats shown in samples\n"
+            + "  - Don't assume value formats; verify against top_rows[]\n"
+            + "- **TEMPORAL VALUES**: Observe sample timestamp formats (including timezone offsets)\n"
+            + "  and use exact strings for equality filters.\n"
+            + "  - Example: if sample shows '2025-12-03 00:02:00+00:00', use that exact format in WHERE.\n"
+            + "  - If time format is ambiguous or too granular, add a safe fallback:\n"
+            + "    * Also filter by the same day (BETWEEN day_start and day_end), or\n"
+            + "    * Use a narrow window around the requested time (e.g., same minute) when precision is uncertain.\n"
             + "- **SOURCE FILTERS**: When user references a specific file, filter using `_source_filename`\n"
             + "  or `_source_file_id` as appropriate.\n"
             + "- **CRITICAL NAME MATCHING**: For name/text searches, use LIKE with wildcards:\n"

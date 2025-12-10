@@ -878,9 +878,32 @@ class TabularDataHandler:
             raise ValueError(f"No database initialized for file_id: {file_id}")
 
         toolkit = SQLDatabaseToolkit(db=self.dbs[file_id], llm=self.llm)
-        agent_prefix = None
+
+        # Build enhanced agent prefix that emphasizes sample data usage
+        base_prefix = """You are an agent designed to interact with a SQL database.
+Given an input question, create a syntactically correct SQLite query to run, then look at the results
+and return the answer to the input question.
+Unless instructed otherwise, return only the final answer.
+
+CRITICAL INSTRUCTIONS FOR ACCURATE SQL GENERATION:
+1. ALWAYS use the sql_db_schema tool FIRST to see table structures and sample rows
+2. The sample rows in sql_db_schema show ACTUAL data values from the database
+3. When filtering by categorical values (e.g., asset names, symbols, product types):
+   - EXAMINE the sample rows to see what values actually exist
+   - Use the EXACT value format shown in samples (case-sensitive where needed)
+   - Example: If samples show asset="Bitcoin", use WHERE asset = 'Bitcoin', NOT WHERE symbol = 'btc'
+4. For timestamp/date filters:
+   - Check the exact format in sample rows (e.g., "2025-12-03 00:01:00+00:00")
+   - Match the format exactly in your WHERE clauses (include timezone offsets if present)
+5. Match user terms to actual column values by checking samples BEFORE writing SQL
+
+You have access to the following tools for interacting with the database:"""
+
+        # Use custom prefix if provided, otherwise use enhanced base prefix
         if self.custom_gpt and self.system_prompt:
             agent_prefix = self.system_prompt
+        else:
+            agent_prefix = base_prefix
 
         self.agents[file_id] = create_sql_agent(
             llm=self.llm,
@@ -929,6 +952,26 @@ class TabularDataHandler:
                 "Primary self.db not found or not initialized. Cannot patch db.run."
             )
 
+        # Build enhanced agent prefix that emphasizes sample data usage
+        base_prefix = """You are an agent designed to interact with a SQL database.
+Given an input question, create a syntactically correct SQLite query to run, then look at the results
+and return the answer to the input question.
+Unless instructed otherwise, return only the final answer.
+
+CRITICAL INSTRUCTIONS FOR ACCURATE SQL GENERATION:
+1. ALWAYS use the sql_db_schema tool FIRST to see table structures and sample rows
+2. The sample rows in sql_db_schema show ACTUAL data values from the database
+3. When filtering by categorical values (e.g., asset names, symbols, product types):
+   - EXAMINE the sample rows to see what values actually exist
+   - Use the EXACT value format shown in samples (case-sensitive where needed)
+   - Example: If samples show asset="Bitcoin", use WHERE asset = 'Bitcoin', NOT WHERE symbol = 'btc'
+4. For timestamp/date filters:
+   - Check the exact format in sample rows (e.g., "2025-12-03 00:01:00+00:00")
+   - Match the format exactly in your WHERE clauses (include timezone offsets if present)
+5. Match user terms to actual column values by checking samples BEFORE writing SQL
+
+You have access to the following tools for interacting with the database:"""
+
         toolkit = SQLDatabaseToolkit(
             db=self.db, llm=self.llm, handle_parsing_errors=True
         )
@@ -937,6 +980,7 @@ class TabularDataHandler:
             toolkit=toolkit,
             verbose=True,
             handle_parsing_errors=True,
+            prefix=base_prefix,
             agent_executor_kwargs={
                 "handle_parsing_errors": True,
                 "return_intermediate_steps": True,
