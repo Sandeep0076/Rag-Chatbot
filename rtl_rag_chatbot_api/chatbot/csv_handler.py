@@ -82,19 +82,6 @@ class TabularDataHandler:
             all_file_infos (Optional[Dict[str, Any]], optional): Complete file information
                 including metadata for context. Defaults to None.
         """
-        logging.info("TABULAR FLOW: === Initializing TabularDataHandler ===")
-        logging.info(f"TABULAR FLOW: Model choice: {model_choice}")
-        logging.info(f"TABULAR FLOW: File ID: {file_id}")
-        logging.info(f"TABULAR FLOW: File IDs: {file_ids}")
-        logging.info(
-            f"TABULAR FLOW: Database summaries provided: "
-            f"{len(database_summaries_param) if database_summaries_param else 0}"
-        )
-        logging.info(
-            f"TABULAR FLOW: All file infos provided: "
-            f"{len(all_file_infos) if all_file_infos else 0}"
-        )
-
         self.config = config
         self.model_choice = model_choice
         self.custom_gpt = custom_gpt
@@ -124,20 +111,12 @@ class TabularDataHandler:
         else:
             self.temperature = 0.4  # Lower temperature for OpenAI models
 
-        logging.info(f"TABULAR FLOW: Temperature set to: {self.temperature}")
-
         # Initialize LLM for all database operations before initializing databases
-        logging.info("TABULAR FLOW: Initializing LLM...")
         self.llm = self._initialize_llm()
-        logging.info("TABULAR FLOW: LLM initialized successfully")
 
         # Initialize database_summaries with pre-loaded data if provided
         self.database_summaries = {}
         if database_summaries_param:
-            logging.info(
-                f"TABULAR FLOW: Using pre-loaded database summaries for "
-                f"{len(database_summaries_param)} files"
-            )
             self.database_summaries = database_summaries_param
 
         # Store all_file_infos for context in responses
@@ -145,7 +124,6 @@ class TabularDataHandler:
 
         # Determine if we're in multi-file mode
         self.is_multi_file = bool(file_ids and len(file_ids) > 0)
-        logging.info(f"TABULAR FLOW: Multi-file mode: {self.is_multi_file}")
 
         # Track unified-session specific identifiers for multi-file mode
         self.unified_session_id = None
@@ -154,42 +132,22 @@ class TabularDataHandler:
         if self.is_multi_file:
             # Multi-file mode
             self.file_ids = sorted(list(set(file_ids)))  # Ensure unique and sorted
-            logging.info(
-                f"TABULAR FLOW: TabularDataHandler initialized in multi-file mode "
-                f"with {len(self.file_ids)} files"
-            )
 
             if len(self.file_ids) == 1:
                 # Treat a single file in multi-file request as standard single-file mode
                 self.file_id = self.file_ids[0]
-                logging.info(
-                    f"TABULAR FLOW: Multi-file requested with single file_id; falling "
-                    f"back to single-file initialization for file_id: {self.file_id}"
-                )
                 self._initialize_file_database(self.file_id)
             else:
                 # Initialize unified SQLite database for all file_ids
-                logging.info(
-                    "TABULAR FLOW: Initializing unified SQLite database for "
-                    "multi-file session"
-                )
                 self._initialize_unified_database_session()
         else:
             # Single file mode (backward compatible)
             self.file_id = file_id
             self.file_ids = [file_id] if file_id else []
             if file_id:
-                logging.info(
-                    f"TABULAR FLOW: Initializing single file database for "
-                    f"file_id: {file_id}"
-                )
                 self._initialize_file_database(file_id)
             else:
                 # Legacy path for tests or default initialization
-                logging.info(
-                    "TABULAR FLOW: Using legacy path for tests or default "
-                    "initialization"
-                )
                 self.data_dir = "rtl_rag_chatbot_api/tabularData/csv_dir"
                 self.db_path = os.path.join(self.data_dir, self.db_name)
                 self.db_url = f"sqlite:///{self.db_path}"
@@ -208,10 +166,6 @@ class TabularDataHandler:
 
         # For backward compatibility, set these attributes for the primary file
         if self.file_id:
-            logging.info(
-                f"TABULAR FLOW: Setting up backward compatibility attributes for "
-                f"file_id: {self.file_id}"
-            )
             self.engine = self.engines.get(self.file_id)
             self.Session = self.sessions.get(self.file_id)
             self.db = self.dbs.get(self.file_id)
@@ -220,16 +174,8 @@ class TabularDataHandler:
             if self.file_id in self.database_summaries:
                 # Set primary DB info and table_info from pre-loaded summaries
                 self.primary_db_info = self.database_summaries[self.file_id]
-                logging.info(
-                    f"TABULAR FLOW: Primary DB info set from database summaries for "
-                    f"file_id: {self.file_id}"
-                )
             else:
                 # Generate and cache database summary when not pre-loaded
-                logging.info(
-                    f"TABULAR FLOW: No pre-loaded database summary found for "
-                    f"file_id: {self.file_id}. Generating summary from database."
-                )
                 self.primary_db_info = self._get_table_info_for_file(self.file_id)
                 self.database_summaries[self.file_id] = self.primary_db_info
 
@@ -244,15 +190,10 @@ class TabularDataHandler:
             # Set table_name from table_info
             if self.table_info and len(self.table_info) > 0:
                 self.table_name = self.table_info[0]["name"]
-                logging.info(f"TABULAR FLOW: Table name set to: {self.table_name}")
             else:
                 error_msg = f"No tables found in the primary database for file_id: {self.file_id}"
                 logging.error(error_msg)
                 raise ValueError(error_msg)
-
-        logging.info(
-            "TABULAR FLOW: === TabularDataHandler initialization completed ==="
-        )
 
     def _ensure_local_database(self, file_id: str) -> str:
         """
@@ -268,13 +209,8 @@ class TabularDataHandler:
         Returns:
             str: Absolute path to the local SQLite database file.
         """
-        logging.info(f"Ensuring local database exists for file_id: {file_id}")
-
         data_dir = f"./chroma_db/{file_id}"
         db_path = os.path.join(data_dir, self.db_name)
-
-        logging.info(f"Expected data directory: {data_dir}")
-        logging.info(f"Expected database path: {db_path}")
 
         # If the data directory doesn't exist, download the artifacts from GCS
         if not os.path.exists(data_dir):
@@ -285,9 +221,6 @@ class TabularDataHandler:
             try:
                 gcs_handler = GCSHandler(_configs=self.config)
                 gcs_handler.download_files_from_folder_by_id(file_id)
-                logging.info(
-                    f"Successfully downloaded files from GCS for file_id: {file_id}"
-                )
             except Exception as e:
                 logging.error(
                     f"Failed to download files from GCS for file_id {file_id}: {e}"
@@ -399,8 +332,6 @@ class TabularDataHandler:
             FileNotFoundError: If directory or file doesn't exist
             PermissionError: If directory or file is not readable
         """
-        logging.info(f"Validating database file for file_id: {file_id}")
-
         # Check if directory exists
         if not os.path.exists(data_dir):
             logging.error(f"Data directory does not exist: {data_dir}")
@@ -424,20 +355,10 @@ class TabularDataHandler:
         # Check file size
         try:
             file_size = os.path.getsize(db_path)
-            logging.info(f"Database file size: {file_size} bytes")
             if file_size == 0:
                 logging.warning(f"Database file is empty: {db_path}")
         except OSError as e:
             logging.error(f"Error getting file size: {str(e)}")
-
-        # Check file permissions
-        try:
-            stat_info = os.stat(db_path)
-            logging.info(f"Database file permissions: {oct(stat_info.st_mode)}")
-        except OSError as e:
-            logging.error(f"Error getting file permissions: {str(e)}")
-
-        logging.info(f"Database file validation successful for file_id: {file_id}")
 
     def _validate_sqlite_database(self, db_path: str, file_id: str):
         """
@@ -450,14 +371,11 @@ class TabularDataHandler:
         Raises:
             sqlite3.Error: If the file is not a valid SQLite database
         """
-        logging.info(f"Validating SQLite database for file_id: {file_id}")
-
         try:
             import sqlite3
 
             test_conn = sqlite3.connect(db_path, timeout=10)
             test_conn.close()
-            logging.info(f"SQLite database validation successful for: {db_path}")
         except sqlite3.Error as e:
             logging.error(f"SQLite database validation failed: {str(e)}")
             raise
@@ -476,8 +394,6 @@ class TabularDataHandler:
         Raises:
             Exception: If any component creation fails
         """
-        logging.info(f"Creating database components for file_id: {file_id}")
-
         # Create SQLAlchemy engine
         try:
             self.engines[file_id] = create_engine(
@@ -488,9 +404,6 @@ class TabularDataHandler:
                 pool_timeout=30,
                 pool_recycle=1800,
             )
-            logging.info(
-                f"SQLAlchemy engine created successfully for file_id: {file_id}"
-            )
         except Exception as e:
             logging.error(f"Failed to create SQLAlchemy engine: {str(e)}")
             raise
@@ -498,7 +411,6 @@ class TabularDataHandler:
         # Create session maker
         try:
             self.sessions[file_id] = sessionmaker(bind=self.engines[file_id])
-            logging.info(f"Session maker created successfully for file_id: {file_id}")
         except Exception as e:
             logging.error(f"Failed to create session maker: {str(e)}")
             raise
@@ -506,9 +418,6 @@ class TabularDataHandler:
         # Create SQLDatabase instance
         try:
             self.dbs[file_id] = SQLDatabase(engine=self.engines[file_id])
-            logging.info(
-                f"SQLDatabase instance created successfully for file_id: {file_id}"
-            )
         except Exception as e:
             logging.error(f"Failed to create SQLDatabase instance: {str(e)}")
             raise
@@ -516,9 +425,6 @@ class TabularDataHandler:
         # Patch database run method
         try:
             self._patch_db_run_for_file(file_id)
-            logging.info(
-                f"Database run method patched successfully for file_id: {file_id}"
-            )
         except Exception as e:
             logging.error(f"Failed to patch database run method: {str(e)}")
             raise
@@ -530,15 +436,9 @@ class TabularDataHandler:
         Args:
             file_id (str): The file ID to initialize
         """
-        logging.info(f"=== Starting database initialization for file_id: {file_id} ===")
-
         data_dir = f"./chroma_db/{file_id}"
         db_path = self._ensure_local_database(file_id)
         db_url = f"sqlite:///{db_path}"
-
-        logging.info(f"Data directory: {data_dir}")
-        logging.info(f"Database path: {db_path}")
-        logging.info(f"Database URL: {db_url}")
 
         # Track primary paths for this file
         self.data_dir = data_dir
@@ -550,27 +450,12 @@ class TabularDataHandler:
             self._create_database_components(db_url, file_id)
 
             # Get database info - check if we already have a pre-loaded summary first
-            if file_id in self.database_summaries:
-                logging.info(
-                    f"Using pre-loaded database summary for file_id: {file_id}"
-                )
-                # No need to re-extract summary as it's already loaded
-            else:
-                logging.info(f"Generating database summary for file_id: {file_id}")
+            if file_id not in self.database_summaries:
                 db_info = self._get_table_info_for_file(file_id)
                 self.database_summaries[file_id] = db_info
-                logging.info(
-                    f"Database summary generated successfully for file_id: {file_id}"
-                )
 
             # Initialize SQL agent after database is prepared
-            logging.info(f"Initializing SQL agent for file_id: {file_id}")
             self._initialize_agent_for_file(file_id)
-            logging.info(f"SQL agent initialized successfully for file_id: {file_id}")
-
-            logging.info(
-                f"=== Database initialization completed successfully for file_id: {file_id} ==="
-            )
 
         except Exception as e:
             logging.error(
@@ -593,8 +478,6 @@ class TabularDataHandler:
         Raises:
             ValueError: If the configuration for the specified model is not found.
         """
-        logging.info(f"Initializing LLM with model choice: {self.model_choice}")
-
         # Handle Gemini models
         if self.model_choice.startswith("gemini"):
             model_config = self.config.gemini
@@ -610,10 +493,10 @@ class TabularDataHandler:
             model_name = model_mapping.get(self.model_choice)
             if not model_name:
                 raise ValueError(
-                    f"Invalid Gemini model choice: {self.model_choice}. Available choices: {list(model_mapping.keys())}"
+                    f"Invalid Gemini model choice: {self.model_choice}. "
+                    f"Available choices: {list(model_mapping.keys())}"
                 )
 
-            logging.info(f"Using Gemini model: {model_name}")
             return ChatVertexAI(
                 model_name=model_name,
                 project=model_config.project,
@@ -637,7 +520,6 @@ class TabularDataHandler:
             }
             model_name = model_mapping[self.model_choice]
 
-            logging.info(f"Using Anthropic Vertex model: {model_name}")
             return ChatAnthropicVertex(
                 model=model_name,
                 project=model_config.project,
@@ -651,10 +533,10 @@ class TabularDataHandler:
         if not model_config:
             available_models = list(self.config.azure_llm.models.keys())
             raise ValueError(
-                f"Configuration for model {self.model_choice} not found. Available models: {available_models}"
+                f"Configuration for model {self.model_choice} not found. "
+                f"Available models: {available_models}"
             )
 
-        logging.info(f"Using Azure OpenAI model: {self.model_choice}")
         return AzureChatOpenAI(
             azure_endpoint=model_config.endpoint,
             azure_deployment=model_config.deployment,
@@ -1014,7 +896,6 @@ You have access to the following tools for interacting with the database:"""
 
         db.run = wrapped_run
         setattr(db, "_run_is_patched", True)
-        logging.info(f"Patched db.run for file_id: {file_id}")
 
     def debug_database(self):
         """
@@ -1160,33 +1041,18 @@ You have access to the following tools for interacting with the database:"""
             Union[str, dict]: For tabular data, returns dict with 'answer' and 'intermediate_steps'.
                              Returns error message string if processing fails.
         """
-        logging.info("TABULAR FLOW: === get_answer called ===")
-        logging.info(
-            f"TABULAR FLOW: Question type: {type(question)}, "
-            f"is_list: {isinstance(question, list)}"
-        )
         try:
             # Extract the actual question text for forced-answer fallback
             if isinstance(question, list):
                 actual_question_text = question[-1]
-                logging.info(
-                    f"TABULAR FLOW: Extracted question from list: "
-                    f"{actual_question_text[:100]}"
-                )
             else:
                 actual_question_text = question
-                logging.info(
-                    f"TABULAR FLOW: Direct question: {actual_question_text[:100]}"
-                )
 
             # Single-agent approach for both single-file and multi-file (unified DB)
-            logging.info("TABULAR FLOW: Calling ask_question...")
             result = self.ask_question(question)
             if result:
-                logging.info("TABULAR FLOW: Direct answer from ask_question")
                 return result  # Dict with 'answer' and 'intermediate_steps'
 
-            logging.info("TABULAR FLOW: No direct answer, using forced answer fallback")
             # Use lingua-based detector here as well so forced answers match
             # the user's original question language.
             try:
@@ -1206,7 +1072,7 @@ You have access to the following tools for interacting with the database:"""
             )
             return forced_result  # Dict from get_forced_answer
         except Exception as e:
-            logging.error(f"TABULAR FLOW: Error in get_answer: {str(e)}")
+            logging.error(f"Error in get_answer: {str(e)}")
             return f"An error occurred while processing your question: {str(e)}"
 
     def _get_file_context_string(self, file_id: str = None) -> str:
@@ -1305,9 +1171,7 @@ You have access to the following tools for interacting with the database:"""
         Returns:
             Optional[dict]: Dictionary with 'answer' and 'intermediate_steps' keys, or None if processing fails.
         """
-        logging.info("TABULAR FLOW: === ask_question called ===")
         if not self.agent:
-            logging.info("TABULAR FLOW: No agent found, initializing...")
             self._initialize_agent()
 
         try:
@@ -1322,7 +1186,6 @@ You have access to the following tools for interacting with the database:"""
             user_language = self._detect_user_language(question_to_process)
 
             # Step 3: Use enhanced format_question with intelligent context analysis
-            logging.info("TABULAR FLOW: Formatting question for SQL processing...")
             format_result = format_question(
                 database_info,
                 question_to_process,
@@ -1332,16 +1195,9 @@ You have access to the following tools for interacting with the database:"""
             formatted_question = format_result["formatted_question"]
             needs_sql = format_result["needs_sql"]
             classification = format_result.get("classification", {})
-            logging.info(
-                f"TABULAR FLOW: Formatted question: {formatted_question[:100]}"
-            )
-            logging.info(f"TABULAR FLOW: Needs SQL: {needs_sql}")
+
             if not needs_sql:
                 # Cache formatted for next turn and return direct summary
-                logging.info(
-                    "TABULAR FLOW: Direct answer provided from database summary "
-                    "(no SQL needed)"
-                )
                 try:
                     self.previous_formatted_by_file[self.file_id] = formatted_question
                 except Exception:
@@ -1352,9 +1208,6 @@ You have access to the following tools for interacting with the database:"""
             # Language is sourced from detect_lang via user_language override above.
             query_type = classification.get("category", "unknown")
             language = classification.get("language", "en")
-            logging.info(
-                f"TABULAR FLOW: Query type: {query_type}, Language: {language}"
-            )
 
             # Cache formatted question for next turn
             try:
@@ -1365,14 +1218,8 @@ You have access to the following tools for interacting with the database:"""
                 pass
 
             # Execute SQL query through agent
-            logging.info("TABULAR FLOW: Executing query through SQL agent...")
             try:
-                logging.info(
-                    f"TABULAR FLOW: Invoking agent with formatted question: "
-                    f"{formatted_question[:100]}"
-                )
                 response = self.agent.invoke({"input": formatted_question})
-                logging.info("TABULAR FLOW: Agent invocation completed successfully")
                 return self._process_agent_response(
                     response,
                     question_to_process,
@@ -1385,7 +1232,7 @@ You have access to the following tools for interacting with the database:"""
                 )
 
             except Exception as agent_error:
-                logging.error(f"TABULAR FLOW: Agent error: {str(agent_error)}")
+                logging.error(f"Agent error: {str(agent_error)}")
                 return self._handle_agent_error(
                     agent_error,
                     formatted_question,
@@ -1395,16 +1242,13 @@ You have access to the following tools for interacting with the database:"""
                 )
 
         except Exception as e:
-            logging.error(
-                f"TABULAR FLOW: Error in ask_question: {str(e)}", exc_info=True
-            )
+            logging.error(f"Error in ask_question: {str(e)}", exc_info=True)
             raise
 
     def _prepare_database_info(self) -> dict:
         """
         Prepare database_info for formatting and context usage.
         """
-        logging.info("TABULAR FLOW: Preparing database info for formatting...")
         database_info: Dict[str, Any] = {}
 
         try:
@@ -1421,13 +1265,8 @@ You have access to the following tools for interacting with the database:"""
                 # This handles cases where file_id is a unified_session_id
                 if self.file_id in self.database_summaries:
                     database_info = self.database_summaries[self.file_id]
-                    logging.info(
-                        f"Using database summary from cache for {self.file_id}"
-                    )
         except Exception as e:
-            logging.error(
-                f"TABULAR FLOW: Error preparing database info: {str(e)}", exc_info=True
-            )
+            logging.error(f"Error preparing database info: {str(e)}", exc_info=True)
         return database_info
 
     def _resolve_question_with_history_if_needed(
@@ -1447,30 +1286,18 @@ You have access to the following tools for interacting with the database:"""
             conversation_history = question[:-1]
             current_question = question[-1]
 
-            logging.info(
-                f"TABULAR FLOW: Processing question with "
-                f"{len(conversation_history)} history messages"
-            )
-
             # Retrieve cached previous formatted question for holistic context if available
             previous_formatted_question = self.previous_formatted_by_file.get(
                 self.file_id, ""
             )
-            if previous_formatted_question:
-                logging.info(
-                    f"TABULAR FLOW: Previous formatted question (cached): "
-                    f"{previous_formatted_question[:100]}"
-                )
 
             # Resolve contextual references in the current question (with holistic context)
-            logging.info("TABULAR FLOW: Resolving question with history...")
             resolved_question = resolve_question_with_history(
                 conversation_history,
                 current_question,
                 previous_formatted_question,
                 self.previous_resolved_by_file.get(self.file_id, ""),
             )
-            logging.info(f"TABULAR FLOW: Resolved question: {resolved_question[:100]}")
 
             # Use the resolved question for further processing
             question_to_process = resolved_question
@@ -1497,15 +1324,10 @@ You have access to the following tools for interacting with the database:"""
                 user_language = "de"
             else:
                 user_language = "en"
-            logging.info(
-                f"TABULAR FLOW: Detected user language from question: "
-                f"{detected_lang_name} -> code={user_language}"
-            )
             return user_language
         except Exception as lang_err:
             logging.warning(
-                f"TABULAR FLOW: Language detection failed, "
-                f"defaulting to 'en': {str(lang_err)}"
+                f"Language detection failed, defaulting to 'en': {str(lang_err)}"
             )
             return "en"
 
@@ -1626,7 +1448,6 @@ You have access to the following tools for interacting with the database:"""
             else None
         )
 
-        logging.info("TABULAR FLOW: === Response processing completed ===")
         return {"answer": formatted_answer, "intermediate_steps": formatted_steps}
 
     def _handle_agent_error(

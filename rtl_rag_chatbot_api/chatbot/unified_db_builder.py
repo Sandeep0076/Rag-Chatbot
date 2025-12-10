@@ -54,17 +54,11 @@ class UnifiedDatabaseBuilder:
             ValueError: If less than 2 file_ids provided
             FileNotFoundError: If any individual database file doesn't exist
         """
-        logger.info(
-            f"TABULAR FLOW: build_unified_database called with {len(file_ids)} files"
-        )
-        logger.info(f"TABULAR FLOW: file_ids={file_ids}")
-
         if not file_ids or len(file_ids) < 2:
             raise ValueError("Unified database requires at least two file_ids")
 
         # Sort file_ids for consistent hashing
         sorted_file_ids = sorted(file_ids)
-        logger.info(f"TABULAR FLOW: Sorted file_ids={sorted_file_ids}")
 
         # Generate unique session identifier
         file_ids_str = ",".join(sorted_file_ids)
@@ -72,7 +66,6 @@ class UnifiedDatabaseBuilder:
         timestamp_ms = int(time.time() * 1000)
         session_id = f"{timestamp_ms}_{session_hash}"
         unified_session_id = f"unified_session_{session_id}"
-        logger.info(f"TABULAR FLOW: Generated unified_session_id={unified_session_id}")
 
         # Create session directory
         session_dir_name = f"unified_{session_id}"
@@ -80,34 +73,20 @@ class UnifiedDatabaseBuilder:
         os.makedirs(session_dir, exist_ok=True)
         unified_db_path = os.path.join(session_dir, "unified_tabular.db")
 
-        logger.info(
-            f"TABULAR FLOW: Creating unified SQLite database at: {unified_db_path}"
-        )
-
         # Build the unified database
-        logger.info("TABULAR FLOW: Starting database merge operation")
         source_mapping = self._merge_databases(
             sorted_file_ids,
             all_file_infos,
             unified_db_path,
         )
-        logger.info(
-            f"TABULAR FLOW: Database merge completed with {len(source_mapping)} tables"
-        )
 
         # Persist metadata
-        logger.info("TABULAR FLOW: Saving session metadata")
         self._save_session_metadata(
             session_dir,
             sorted_file_ids,
             timestamp_ms,
             unified_db_path,
             source_mapping,
-        )
-
-        logger.info(
-            f"TABULAR FLOW: Unified database created with {len(source_mapping)} tables "
-            f"from {len(sorted_file_ids)} files"
         )
 
         return {
@@ -139,9 +118,6 @@ class UnifiedDatabaseBuilder:
         Returns:
             Dictionary mapping unified table names to source information
         """
-        logger.info(
-            f"TABULAR FLOW: Connecting to unified database at {unified_db_path}"
-        )
         conn = sqlite3.connect(unified_db_path, timeout=30)
         source_mapping = {}
 
@@ -150,23 +126,14 @@ class UnifiedDatabaseBuilder:
                 # Get individual database path
                 db_path = os.path.join(self.base_dir, file_id, self.db_name)
 
-                logger.info(
-                    f"TABULAR FLOW: Processing file {idx+1}/{len(file_ids)}: {file_id}"
-                )
-                logger.info(f"TABULAR FLOW: Looking for database at {db_path}")
-
                 if not os.path.exists(db_path):
                     error_msg = (
                         f"Database not found for file_id: {file_id} at {db_path}"
                     )
-                    logger.error(f"TABULAR FLOW: {error_msg}")
+                    logger.error(error_msg)
                     raise FileNotFoundError(error_msg)
 
                 alias = f"db_{idx}"
-                logger.info(
-                    f"TABULAR FLOW: Attaching source database for file_id={file_id} "
-                    f"at path={db_path} as alias={alias}"
-                )
                 conn.execute(f'ATTACH DATABASE ? AS "{alias}"', (db_path,))
 
                 # Discover all user tables
@@ -178,9 +145,6 @@ class UnifiedDatabaseBuilder:
                     """
                 )
                 tables = [row[0] for row in cursor.fetchall()]
-                logger.info(
-                    f"TABULAR FLOW: Found {len(tables)} tables in {file_id}: {tables}"
-                )
 
                 # Get file metadata
                 file_info = all_file_infos.get(file_id, {})
@@ -194,11 +158,6 @@ class UnifiedDatabaseBuilder:
                 for table_name in tables:
                     unified_table = self._create_unified_table_name(
                         safe_prefix, table_name, source_mapping
-                    )
-
-                    logger.info(
-                        f"TABULAR FLOW: Copying table '{table_name}' from file_id={file_id} "
-                        f"as unified table '{unified_table}'"
                     )
 
                     # Copy table with source tracking columns
@@ -219,17 +178,12 @@ class UnifiedDatabaseBuilder:
                         "filename": original_filename,
                         "original_table": table_name,
                     }
-                    logger.info(f"TABULAR FLOW: Successfully copied {unified_table}")
 
-                logger.info(f"TABULAR FLOW: Detaching database {alias}")
                 conn.execute(f'DETACH DATABASE "{alias}"')
 
-            logger.info("TABULAR FLOW: Committing all changes to unified database")
             conn.commit()
-            logger.info("TABULAR FLOW: Commit successful")
         finally:
             conn.close()
-            logger.info("TABULAR FLOW: Database connection closed")
 
         return source_mapping
 
@@ -353,10 +307,6 @@ class UnifiedDatabaseBuilder:
 
                             # Verify file_ids match exactly
                             if sorted(metadata.get("file_ids", [])) == sorted_file_ids:
-                                logger.info(
-                                    f"Found existing unified database: "
-                                    f"{unified_db_path}"
-                                )
                                 return {
                                     "unified_session_id": f"unified_session_{entry.name.replace('unified_', '')}",
                                     "unified_db_path": unified_db_path,
