@@ -30,6 +30,7 @@ This document outlines the logical steps involved in a system that allows users 
 ### 2. User Interaction & Context
 *   **Input:** User asks a question (e.g., "Show me the sales trend over the last year").
 *   **Context:** The system retrieves **Conversation History** to understand if this is a follow-up question (e.g., "Now break it down by region").
+*   **Language Handling (tabular chat):** Language is detected once from the raw question via `detect_lang` (lingua). This detected language is passed through all prompts (direct answers and SQL-result formatting). The LLM is **not** asked to detect language; it only uses the provided language directive.
 
 ### 3. Intent Detection & Semantic Analysis
 *   **Action:** An AI model (LLM) analyzes the user's query alongside the active Data Schema:
