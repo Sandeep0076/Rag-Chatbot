@@ -327,11 +327,17 @@ CRITICAL INPUT CONTEXT:
 
 
 TITLE GENERATION RULES:
-1. Length: 3 to 5 words (Max 40 chars)
-2. Style: Visual, descriptive, aesthetic. Avoid generic words like "Image", "Picture", "Photo"
-   unless necessary
-3. Language: Match the user's input language EXACTLY
-4. Format: Return strictly the JSON object found in the "OUTPUT FORMAT" section
+1. Length: 2 to 7 words (Max 40 chars). If the prompt is a single noun or very short phrase,
+   keep it 1-3 words using that noun directly (single-word title is acceptable).
+2. Faithfulness: Use the most specific subject and modifiers already in the prompt. Do NOT invent
+   new attributes (speed, location, style) or generalize specific subjects (e.g., keep "Pinguin",
+   not "Vogel"). Avoid adding extra adjectives or settings not mentioned.
+3. Key details: Combine the main subject with one key action, setting, or notable modifier that is
+   explicitly present in the prompt (e.g., "sunset drive", "with sunglasses and cocktail").
+4. Style: Visual, descriptive, aesthetic. Avoid generic words like "Image", "Picture", "Photo"
+   unless necessary, and avoid filler adjectives that are not in the prompt.
+5. Language: Match the user's input language EXACTLY
+6. Format: Return strictly the JSON object found in the "OUTPUT FORMAT" section
 
 EXAMPLES (ENGLISH):
 1. Input: ["A cyberpunk city with neon lights"]
@@ -352,6 +358,16 @@ EXAMPLES (ENGLISH):
 6. Input: ["Porsche 911"]
    Output: {"title": "Porsche 911 Design"}
 
+7. Input: ["A red sports car driving fast on a mountain road at sunset"]
+   Output: {"title": "Sunset Drive with Red Sports Car"}
+
+8. Input: ["A cute cartoon penguin wearing sunglasses and drinking a cocktail on the beach"]
+   Output: {"title": "Penguin with Cocktail and Sunglasses"}
+
+9. Input: ["Portrait of an elderly wizard with long white beard, glowing blue eyes,
+   holding a wooden staff, detailed fantasy style, dramatic lighting"]
+   Output: {"title": "Elderly Fantasy Wizard Portrait"}
+
 EXAMPLES (GERMAN):
 1. Input: ["Eine Katze im Weltraum, digital art"]
    Output: {"title": "Katze im Weltraum Kunst"}
@@ -364,6 +380,9 @@ EXAMPLES (GERMAN):
 
 4. Input: ["Ein Handy auf dem Tisch"]
    Output: {"title": "Mobiltelefon Design"}
+
+5. Input: ["Schildkröte"]
+   Output: {"title": "Schildkröte"}
 
 OUTPUT FORMAT (JSON ONLY):
 {"title": "YOUR_CALCULATED_TITLE"}
