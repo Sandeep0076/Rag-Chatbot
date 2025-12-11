@@ -2914,6 +2914,7 @@ def handle_visualization(
     configs: dict,
     temperature: float,
     intermediate_steps: Any | None = None,
+    fallback_summary: Optional[str] = None,
 ) -> JSONResponse:
     """
     Generate visualization configuration based on the response.
@@ -2967,11 +2968,22 @@ def handle_visualization(
             chart_config = json.loads(response)
         else:
             chart_config = response
+
+        # Extract optional textual summary from the chart config
+        summary = None
+        if isinstance(chart_config, dict):
+            summary = chart_config.pop("summary", None)
+        # If the model did not include a summary, fall back to a provided textual answer
+        if summary is None and fallback_summary:
+            summary = fallback_summary
+
         logging.info(f"Generated chart config: {chart_config}")
         content = {
             "chart_config": chart_config,
             "is_table": False,
         }
+        if summary:
+            content["summary"] = summary
         if intermediate_steps is not None:
             content["intermediate_steps"] = intermediate_steps
         return JSONResponse(content=content)
@@ -3447,6 +3459,9 @@ async def _format_chat_response(
             pass
 
     if generate_visualization:
+        # Use the formatted textual answer as a fallback summary in case the chart JSON
+        # does not include an explicit "summary" field.
+        fallback_summary = str(response) if response is not None else None
         return handle_visualization(
             response=response,
             query=query,
@@ -3454,6 +3469,7 @@ async def _format_chat_response(
             configs=configs,
             temperature=temperature,
             intermediate_steps=intermediate_steps,
+            fallback_summary=fallback_summary,
         )
 
     final_response_data = {
