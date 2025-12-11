@@ -2913,6 +2913,7 @@ def handle_visualization(
     is_tabular: bool,
     configs: dict,
     temperature: float,
+    intermediate_steps: Any | None = None,
 ) -> JSONResponse:
     """
     Generate visualization configuration based on the response.
@@ -2922,6 +2923,7 @@ def handle_visualization(
         query: The original query object
         is_tabular: Whether the data is tabular
         configs: Application configuration dictionary
+        intermediate_steps: Optional execution trace to include with the chart
 
     Returns:
         JSONResponse containing the chart configuration
@@ -2966,12 +2968,13 @@ def handle_visualization(
         else:
             chart_config = response
         logging.info(f"Generated chart config: {chart_config}")
-        return JSONResponse(
-            content={
-                "chart_config": chart_config,
-                "is_table": False,
-            }
-        )
+        content = {
+            "chart_config": chart_config,
+            "is_table": False,
+        }
+        if intermediate_steps is not None:
+            content["intermediate_steps"] = intermediate_steps
+        return JSONResponse(content=content)
     except json.JSONDecodeError as je:
         logging.error(
             f"Invalid chart configuration JSON at position {je.pos}: {je.msg}"
@@ -3444,13 +3447,14 @@ async def _format_chat_response(
             pass
 
     if generate_visualization:
-        viz_response = handle_visualization(
-            response, query, is_tabular, configs, temperature
+        return handle_visualization(
+            response=response,
+            query=query,
+            is_tabular=is_tabular,
+            configs=configs,
+            temperature=temperature,
+            intermediate_steps=intermediate_steps,
         )
-        # Add intermediate steps if available
-        if intermediate_steps:
-            viz_response["intermediate_steps"] = intermediate_steps
-        return viz_response
 
     final_response_data = {
         "response": str(response),
