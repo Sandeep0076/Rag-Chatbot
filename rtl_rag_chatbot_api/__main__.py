@@ -1,7 +1,9 @@
+# Disable ChromaDB telemetry before any imports
 import warnings
 
 import uvicorn
 
+import configs.chromadb_telemetry_fix  # noqa: F401
 from rtl_rag_chatbot_api.app import app
 
 # Suppress warnings from google-cloud-aiplatform and vertexai

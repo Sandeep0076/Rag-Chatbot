@@ -26,6 +26,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
+# Disable ChromaDB telemetry before any imports
+from configs import chromadb_telemetry_fix  # noqa: F401
 from configs.app_config import Config, GenerateSystemPromptRequest
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot as Chatbot
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
