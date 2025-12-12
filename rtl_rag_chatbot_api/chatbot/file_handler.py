@@ -232,11 +232,6 @@ class FileHandler:
         username: str,
     ):
         """Handle processing of new tabular data files"""
-        logging.info(
-            f"TABULAR FLOW: _handle_new_tabular_data called for {original_filename}"
-        )
-        logging.info(f"TABULAR FLOW: file_id={file_id}, file_hash={file_hash[:16]}...")
-
         metadata = {
             "file_id": file_id,
             "file_hash": file_hash,
@@ -252,17 +247,10 @@ class FileHandler:
         data_dir = f"./chroma_db/{file_id}"
         db_path = os.path.join(data_dir, "tabular_data.db")
         os.makedirs(data_dir, exist_ok=True)
-        logging.info(f"TABULAR FLOW: Created data directory: {data_dir}")
 
         # Prepare SQLite database
-        logging.info(
-            f"TABULAR FLOW: Starting SQLite DB preparation from {original_filename}"
-        )
         data_preparer = PrepareSQLFromTabularData(temp_file_path, data_dir)
         pipeline_success = data_preparer.run_pipeline()
-        logging.info(
-            f"TABULAR FLOW: SQLite DB preparation {'succeeded' if pipeline_success else 'failed'}"
-        )
 
         # Check if pipeline failed
         if not pipeline_success:
@@ -274,7 +262,6 @@ class FileHandler:
             )
 
         # Extract database_summary directly without using TabularDataHandler
-        logging.info(f"TABULAR FLOW: Extracting database summary from {db_path}")
         try:
             # Import necessary modules for direct database access
             from sqlalchemy import create_engine, inspect, text
@@ -283,11 +270,6 @@ class FileHandler:
             db_url = f"sqlite:///{db_path}"
             engine = create_engine(db_url)
             inspector = inspect(engine)
-
-            table_names = inspector.get_table_names()
-            logging.info(
-                f"TABULAR FLOW: Found {len(table_names)} tables: {table_names}"
-            )
 
             # Extract table info directly
             table_info = []
@@ -376,10 +358,6 @@ class FileHandler:
                 )
 
             metadata["database_summary"] = database_summary
-            logging.info(
-                f"TABULAR FLOW: Successfully extracted database_summary with "
-                f"{len(table_info)} tables and {total_rows} total rows"
-            )
 
         except Exception as e:
             logging.error(
@@ -400,11 +378,9 @@ class FileHandler:
                 )
 
         # Upload metadata and encrypted database
-        logging.info(f"TABULAR FLOW: Starting encryption and upload for {file_id}")
         try:
             # Run encryption in a thread to avoid blocking
             encrypted_db_path = await asyncio.to_thread(encrypt_file, db_path)
-            logging.info("TABULAR FLOW: Database encrypted successfully")
             try:
                 files_to_upload = {
                     "metadata": (
@@ -416,13 +392,11 @@ class FileHandler:
                         f"{self.configs.gcp_resource.gcp_embeddings_folder}/{file_id}/tabular_data.db.encrypted",
                     ),
                 }
-                logging.info("TABULAR FLOW: Uploading metadata and encrypted DB to GCS")
                 await asyncio.to_thread(
                     self.gcs_handler.upload_to_gcs,
                     self.configs.gcp_resource.bucket_name,
                     files_to_upload,
                 )
-                logging.info("TABULAR FLOW: Upload to GCS completed successfully")
             finally:
                 if os.path.exists(encrypted_db_path):
                     os.remove(encrypted_db_path)
@@ -431,14 +405,10 @@ class FileHandler:
             raise
 
         # Store file hash and filename in database if enabled for tabular files
-        logging.info(f"TABULAR FLOW: Storing file hash in database for {file_id}")
         await self.store_file_hash_in_db(
             file_id, file_hash, original_filename, None  # Use configurable default
         )
 
-        logging.info(
-            f"TABULAR FLOW: Completed _handle_new_tabular_data for {original_filename}"
-        )
         return {
             "file_id": file_id,
             "is_image": False,
@@ -453,11 +423,6 @@ class FileHandler:
         self, existing_file_id: str, original_filename: str, temp_file_path: str
     ):
         """Handle processing of existing tabular data files"""
-        logging.info(
-            f"TABULAR FLOW: _handle_existing_tabular_data for {original_filename}"
-        )
-        logging.info(f"TABULAR FLOW: existing_file_id={existing_file_id}")
-
         data_dir = f"./chroma_db/{existing_file_id}"
         os.makedirs(data_dir, exist_ok=True)
 
@@ -467,9 +432,7 @@ class FileHandler:
 
         try:
             # Download the encrypted database
-            logging.info(f"TABULAR FLOW: Downloading database for {existing_file_id}")
             self.gcs_handler.download_files_from_folder_by_id(existing_file_id)
-            logging.info(f"TABULAR FLOW: Download completed for {existing_file_id}")
 
             # download_files_from_folder_by_id already decrypts the database
             # # Decrypt the database if it exists
@@ -486,9 +449,6 @@ class FileHandler:
 
             # Extract database_summary if it doesn't exist
             if "database_summary" not in file_info:
-                logging.info(
-                    f"TABULAR FLOW: No database_summary found, extracting for {existing_file_id}"
-                )
                 try:
                     # Import necessary modules for direct database access
                     from sqlalchemy import create_engine, inspect, text
@@ -589,10 +549,6 @@ class FileHandler:
                     update_data = {"database_summary": database_summary}
 
                     self.gcs_handler.update_file_info(existing_file_id, update_data)
-                    logging.info(
-                        f"TABULAR FLOW: Added database_summary to existing file_info.json "
-                        f"with {len(table_info)} tables and {total_rows} total rows"
-                    )
 
                 except Exception as e:
                     logging.error(
@@ -612,9 +568,6 @@ class FileHandler:
 
             # Return success directly - we've already extracted the database summary if needed
             # No need to initialize TabularDataHandler which might fail
-            logging.info(
-                f"TABULAR FLOW: Existing tabular file ready: {existing_file_id}"
-            )
             return {
                 "file_id": existing_file_id,
                 "is_image": False,
@@ -2107,12 +2060,6 @@ class FileHandler:
         Returns:
             Dict with unified_session_id if created, empty dict otherwise
         """
-        logging.info("TABULAR FLOW: create_unified_database_if_needed called")
-        logging.info(f"TABULAR FLOW: processed_file_ids={processed_file_ids}")
-        logging.info(
-            f"TABULAR FLOW: results count={len(results)}, type={type(results)}"
-        )
-
         # Filter tabular files that were successfully processed
         tabular_file_ids = []
         all_file_infos = {}
@@ -2122,37 +2069,26 @@ class FileHandler:
                 continue
 
             result = results[i]
-            logging.info(f"TABULAR FLOW: Processing result {i} for file_id={file_id}")
-            logging.info(f"TABULAR FLOW: Result type={type(result)}")
 
             # Handle both tuple and dict formats for backward compatibility
             if isinstance(result, tuple):
-                logging.info(f"TABULAR FLOW: Result is tuple format: {result}")
                 # Format: (file_id, filename, is_tabular)
                 if len(result) >= 3:
                     is_tabular = result[2]
                     status = "success"  # Tuples indicate successful processing
                 else:
-                    logging.warning(
-                        f"TABULAR FLOW: Unexpected tuple format for result {i}: {result}"
-                    )
+                    logging.warning(f"Unexpected tuple format for result {i}: {result}")
                     continue
             elif isinstance(result, dict):
                 # Dictionary format
                 is_tabular = result.get("is_tabular", False)
                 status = result.get("status", "")
-                logging.info(
-                    f"TABULAR FLOW: Result is dict - is_tabular={is_tabular}, status={status}"
-                )
             else:
-                logging.error(
-                    f"TABULAR FLOW: Unexpected result type for result {i}: {type(result)}"
-                )
+                logging.error(f"Unexpected result type for result {i}: {type(result)}")
                 continue
 
             # Only include successfully processed tabular files
             if is_tabular and status in ["success", "existing"]:
-                logging.info(f"TABULAR FLOW: Adding {file_id} to tabular files list")
                 tabular_file_ids.append(file_id)
 
                 # Get file metadata
@@ -2171,16 +2107,7 @@ class FileHandler:
 
         # Create unified DB only if 2+ tabular files
         if len(tabular_file_ids) < 2:
-            logging.info(
-                f"TABULAR FLOW: Skipping unified DB creation: only {len(tabular_file_ids)} "
-                f"tabular file(s)"
-            )
             return {}
-
-        logging.info(
-            f"TABULAR FLOW: Creating unified database for {len(tabular_file_ids)} "
-            f"tabular files: {tabular_file_ids}"
-        )
 
         try:
             from rtl_rag_chatbot_api.chatbot.unified_db_builder import (
@@ -2190,27 +2117,16 @@ class FileHandler:
             builder = UnifiedDatabaseBuilder()
 
             # Check if unified DB already exists for these files
-            logging.info("TABULAR FLOW: Checking if unified DB already exists")
             existing_unified = builder.check_unified_database_exists(tabular_file_ids)
             if existing_unified:
-                logging.info(
-                    f"TABULAR FLOW: Using existing unified database: "
-                    f"{existing_unified['unified_session_id']}"
-                )
                 return {
                     "unified_session_id": existing_unified["unified_session_id"],
                     "unified_db_path": existing_unified["unified_db_path"],
                 }
 
             # Build new unified database
-            logging.info("TABULAR FLOW: Building new unified database")
             unified_result = builder.build_unified_database(
                 tabular_file_ids, all_file_infos
-            )
-
-            logging.info(
-                f"TABULAR FLOW: Successfully created unified database: "
-                f"{unified_result['unified_session_id']}"
             )
 
             return {

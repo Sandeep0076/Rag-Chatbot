@@ -553,18 +553,12 @@ async def process_files_in_parallel(
         if result.get("status") == "error":
             # For error cases, use the original file_id to maintain tracking
             processed_file_ids.append(file_ids[i])
-            logging.warning(f"Skipping invalid file: {all_files[i].filename}")
         else:
             # For successful cases, use the returned file_id which might be from existing embeddings
             processed_file_ids.append(result["file_id"])
 
         original_filenames.append(all_files[i].filename)
-        # DIAGNOSTIC: Log is_tabular extraction
         is_tab = result.get("is_tabular", False)
-        logging.info(
-            f"TABULAR FLOW: File {i} ({all_files[i].filename}) - "
-            f"is_tabular from result: {is_tab}, status: {result.get('status')}"
-        )
         is_tabular_flags.append(is_tab)
         statuses.append(result.get("status", "success"))
 
@@ -601,15 +595,11 @@ def process_tabular_file(
     Returns:
         bool: True if processed as tabular, False otherwise
     """
-    logging.info(f"TABULAR FLOW: Starting tabular file processing for {filename}")
-    logging.info(f"TABULAR FLOW: file_id={file_id}, temp_path={temp_file_path}")
-
     if not file_id or not temp_file_path or not os.path.exists(temp_file_path):
         logging.warning(f"Invalid file or path for tabular processing: {filename}")
         return False
 
     # Prepare database in background based on the file type
-    logging.info(f"TABULAR FLOW: Scheduling DB preparation for {file_id}")
     background_tasks.add_task(
         file_handler.prepare_db_from_file,
         file_path=temp_file_path,
@@ -627,7 +617,6 @@ def process_tabular_file(
         "file_id": file_id,
     }
 
-    logging.info(f"TABULAR FLOW: Scheduling metadata upload for {file_id}")
     background_tasks.add_task(
         gcs_handler.upload_to_gcs,
         configs.gcp_resource.bucket_name,
@@ -639,7 +628,6 @@ def process_tabular_file(
         },
     )
 
-    logging.info(f"TABULAR FLOW: Completed scheduling for {filename} with ID {file_id}")
     return True
 
 
@@ -755,10 +743,6 @@ def format_upload_response(
                 is_tabular_flags[0] if is_tabular_flags else False
             )
 
-    logging.info(
-        f"Returning file upload response: file_ids={response_data['file_ids']}, "
-        f"multi_file_mode={response_data.get('multi_file_mode', False)}"
-    )
     return JSONResponse(content=response_data)
 
 
@@ -778,9 +762,6 @@ def _split_processed_files_by_type(
         temp_file_path = result.get("temp_file_path")
 
         if not file_id or not temp_file_path:
-            logging.warning(
-                f"Skipping invalid file: {original_filenames[i] if i < len(original_filenames) else 'unknown'}"
-            )
             continue
 
         file_bucket = (
@@ -1439,12 +1420,6 @@ async def _process_normal_upload_flow(
             f"Migration fallback embedding processing failed: {str(mig_err)}",
             exc_info=True,
         )
-
-    # DEBUG: Log the structure of results before passing to combine_upload_results
-    logging.info(f"DEBUG: new_file_results type: {type(new_file_results)}")
-    if new_file_results:
-        logging.info(f"DEBUG: new_file_results[0] type: {type(new_file_results[0])}")
-        logging.info(f"DEBUG: new_file_results[0] value: {new_file_results[0]}")
 
     return await combine_upload_results(existing_results, new_file_results)
 
@@ -2123,11 +2098,6 @@ async def combine_upload_results(
     Returns:
         JSONResponse with combined results
     """
-    logging.info(
-        f"TABULAR FLOW: Combining upload results - existing={len(existing_results)}, "
-        f"new={len(new_file_results)}"
-    )
-
     # Combine all results (existing first to preserve expected ordering)
     all_results = existing_results + new_file_results
 
@@ -2150,21 +2120,9 @@ async def combine_upload_results(
     all_is_tabular_flags = [unique_map[fid][1] for fid in all_file_ids]
 
     # Create unified database if multiple tabular files
-    logging.info(
-        f"TABULAR FLOW: Checking if unified DB needed for {len(all_file_ids)} files"
-    )
-    logging.info(f"TABULAR FLOW: all_file_ids={all_file_ids}")
     unified_db_info = await file_handler.create_unified_database_if_needed(
         all_file_ids, all_results
     )
-
-    if unified_db_info:
-        logging.info(
-            f"TABULAR FLOW: Unified DB created: "
-            f"session_id={unified_db_info.get('unified_session_id')}"
-        )
-    else:
-        logging.info("TABULAR FLOW: No unified DB needed")
 
     # Use existing format_upload_response function with unified DB info
     return format_upload_response(
@@ -3700,16 +3658,10 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
     Returns:
         dict: Response containing the model's answer and source file information.
     """
-    logging.info("TABULAR FLOW: === Chat endpoint called ===")
     file_id_logging = ""
     try:
         if not query.text:
             raise HTTPException(status_code=400, detail="Text array cannot be empty")
-
-        logging.info(
-            f"TABULAR FLOW: Chat query - file_id={query.file_id}, "
-            f"file_ids={query.file_ids}, model={query.model_choice}"
-        )
 
         current_actual_question = query.text[-1]
 
@@ -3731,7 +3683,6 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
             )
 
         # Process file information and build the model key
-        logging.info("TABULAR FLOW: Processing file information...")
         file_data = await _process_file_info(query, gcs_handler, generate_visualization)
 
         is_multi_file = file_data["is_multi_file"]
@@ -3741,10 +3692,6 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
         is_tabular = file_data["is_tabular"]
         generate_visualization = file_data["generate_visualization"]
 
-        logging.info(
-            f"TABULAR FLOW: File data processed - is_tabular={is_tabular}, "
-            f"is_multi_file={is_multi_file}, {file_id_logging}"
-        )
         logging.info(f"Graphic generation flag: {generate_visualization}")
         logging.info(f"For {file_id_logging}")
 
@@ -3755,7 +3702,6 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
         try:
             if not model:
-                logging.info("TABULAR FLOW: No cached model, initializing new model...")
                 if query.custom_gpt and query.system_prompt:
                     logging.info(
                         f"Custom GPT mode active for session {query.session_id} with prompt: "
@@ -3764,10 +3710,6 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
                 # Call the helper function to initialize the model
                 # Pass the is_tabular flag from _process_file_info
-                logging.info(
-                    f"TABULAR FLOW: Calling _initialize_chat_model with "
-                    f"is_tabular={file_data['is_tabular']}"
-                )
                 model, is_tabular = await _initialize_chat_model(
                     query=query,
                     configs=configs,
@@ -3784,14 +3726,8 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                     custom_gpt=query.custom_gpt,
                     system_prompt=query.system_prompt,
                 )
-                logging.info(
-                    f"TABULAR FLOW: Model initialized - type={type(model).__name__}, "
-                    f"is_tabular={is_tabular}"
-                )
             else:
-                logging.info(
-                    f"TABULAR FLOW: Using cached model - type={type(model).__name__}"
-                )
+                pass
 
             if generate_visualization and not is_tabular:
                 question_to_model = (
@@ -3802,30 +3738,15 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
             # Different history handling for tabular vs non-tabular data
             if is_tabular:
-                logging.info(
-                    "TABULAR FLOW: Executing tabular query with TabularDataHandler"
-                )
-                logging.info(
-                    f"TABULAR FLOW: Query text array length: {len(query.text)}"
-                )
                 # For tabular data, pass the full conversation array
                 # The TabularDataHandler will resolve contextual references internally
                 if len(query.text) > 1:
                     # Pass full array including history
-                    logging.info(
-                        "TABULAR FLOW: Passing full conversation history to handler"
-                    )
                     response = model.get_answer(query.text)
                 else:
                     # Single question, pass as-is
-                    logging.info("TABULAR FLOW: Passing single question to handler")
                     response = model.get_answer(question_to_model)
-                logging.info(
-                    f"TABULAR FLOW: TabularDataHandler response type: "
-                    f"{type(response).__name__}"
-                )
             else:
-                logging.info("TABULAR FLOW: Executing non-tabular query with RAG model")
                 # For PDF/document chat, use traditional string concatenation
                 if len(query.text) > 1:
                     previous_messages = "\n".join(
@@ -3853,7 +3774,6 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
 
         finally:
             if isinstance(model, TabularDataHandler):
-                logging.info("TABULAR FLOW: Cleaning up TabularDataHandler")
                 model.cleanup()
 
     except HTTPException:
@@ -5156,8 +5076,6 @@ def _create_tabular_data_handler(
                 logging.error(f"  Error getting file info: {str(e)}")
 
     try:
-        logging.info("TABULAR FLOW: Creating TabularDataHandler instance...")
-        logging.info(f"TABULAR FLOW: file_ids={file_ids}, model_choice={model_choice}")
         handler = TabularDataHandler(
             configs,
             file_id=file_ids[0],  # For backward compatibility
@@ -5167,7 +5085,6 @@ def _create_tabular_data_handler(
             all_file_infos=all_file_infos,
             temperature=temperature,
         )
-        logging.info("TABULAR FLOW: TabularDataHandler instance created successfully")
         return handler
     except Exception as e:
         logging.error(f"Failed to create TabularDataHandler: {str(e)}")
