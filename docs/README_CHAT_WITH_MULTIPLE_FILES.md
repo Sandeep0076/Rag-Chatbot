@@ -51,7 +51,7 @@ The multi-file chat feature extends the RAG (Retrieval Augmented Generation) sys
      - Verifies file existence and retrieves file metadata
      - Checks if the file is tabular (has a SQLite database) or non-tabular
      - Builds the `all_file_infos` dictionary mapping each file_id to its metadata
-   - Determines if visualization is possible (currently not supported for multi-file)
+  - Determines if visualization is requested (supported for multi-file via `chart_config` response format)
    - Creates a unique model cache key using all file IDs
 
 3. **File Type Classification**
@@ -154,8 +154,8 @@ This critical data structure maps file IDs to their metadata, containing:
 ## Current Limitations
 
 1. **Visualization Support**
-   - Visualization generation is not currently supported for multi-file chat
-   - Visualization features will be disabled when multiple files are selected
+   - Visualization generation is supported for multi-file chat via the same `chart_config` response payload
+   - Note: For mixed file types (tabular + non-tabular), the system currently defaults to non-tabular mode
 
 2. **Mixed File Type Handling**
    - When mixing tabular and non-tabular files, the system defaults to non-tabular mode

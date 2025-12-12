@@ -206,7 +206,7 @@ Here are some examples to guide your understanding:
 
 1. "Can you show me a bar chart of the sales data?" → `True`
 2. "What are the sales figures for last quarter?" → `False`
-3. "Please plot the"Please plot die temperaturtrends over the past year." → `True`
+3. "Please plot the temperature trends over the past year." → `True`
 4. "Explain the process of data normalization." → `False`
 5. "Visualize the relationship between age and income." → `True`
 6. "What is the average income in New York?" → `False`

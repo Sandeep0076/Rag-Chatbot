@@ -2934,7 +2934,10 @@ def handle_visualization(
     """
     try:
         if is_tabular:
-            current_question = query.text[-1] + response + VISUALISATION_PROMPT
+            # Keep clear delimiters to avoid the model merging content and instructions.
+            current_question = (
+                f"{query.text[-1]}\n\n{response}\n\n{VISUALISATION_PROMPT}"
+            )
             try:
                 if query.model_choice.startswith("gemini"):
                     response = get_gemini_non_rag_response(
@@ -2965,7 +2968,17 @@ def handle_visualization(
             response = response.replace("True", "true").replace("False", "false")
             response = response.strip()
             response = response.replace("```json", "").replace("```", "").strip()
-            chart_config = json.loads(response)
+            try:
+                chart_config = json.loads(response)
+            except json.JSONDecodeError:
+                # Be tolerant to models that include leading/trailing text around JSON.
+                # We extract the largest JSON object-looking substring and retry once.
+                start = response.find("{")
+                end = response.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    chart_config = json.loads(response[start : end + 1])
+                else:
+                    raise
         else:
             chart_config = response
 
@@ -3564,12 +3577,8 @@ async def _process_file_info(
         file_id_logging = multi_file_info["file_id_logging"]
         is_tabular = multi_file_info["is_tabular"]
 
-        # Adjust visualization settings for multi-file
-        if generate_visualization:
-            logging.info(
-                "Visualization for multi-file chat is not currently supported. Proceeding without visualization."
-            )
-            generate_visualization = False
+        # Multi-file visualization is supported via the same chart_config response format
+        # (frontend renders chart_config). Keep the flag as-is.
 
     elif query.file_id:
         # Process single-file request
@@ -3643,7 +3652,7 @@ async def _detect_visualization_need(
     should_visualize_filter = detect_visualization_need(question)
 
     if should_visualize_filter:
-        question_for_detection = CHART_DETECTION_PROMPT + question
+        question_for_detection = f"{CHART_DETECTION_PROMPT}{question.strip()}\n\nReturn only `True` or `False`."
         try:
             logging.info("Detecting if visualization is needed..")
             # vis_detection_response = get_gemini_non_rag_response(
@@ -3652,11 +3661,16 @@ async def _detect_visualization_need(
             vis_detection_response = get_azure_non_rag_response(
                 configs, question_for_detection, model_choice="gpt_4_1_nano"
             )
-            if (
-                vis_detection_response.lower() == "true"
-                or "true" in vis_detection_response.lower()
-            ):
+            resp = (vis_detection_response or "").strip().lower()
+            # Avoid false positives like "not true" / "untrue".
+            if resp == "true" or resp.startswith("true\n") or resp.startswith("true "):
                 generate_visualization = True
+            elif (
+                resp == "false"
+                or resp.startswith("false\n")
+                or resp.startswith("false ")
+            ):
+                generate_visualization = False
         except Exception as e:
             # For any errors with Azure OpenAI, default to False
             logging.error(f"Error in visualization detection: {str(e)}")
@@ -3780,7 +3794,9 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                 )
 
             if generate_visualization and not is_tabular:
-                question_to_model = current_actual_question + VISUALISATION_PROMPT
+                question_to_model = (
+                    f"{current_actual_question}\n\n{VISUALISATION_PROMPT}"
+                )
             else:
                 question_to_model = current_actual_question
 
