@@ -251,8 +251,11 @@ class AzureChatbot(BaseRAGHandler):
                 user_id=self.user_id,
                 is_embedding=False,
             )
+            # Get collection count to avoid requesting more results than available
+            collection_count = chroma_collection.count()
+            n_results = min(3, max(1, collection_count)) if collection_count > 0 else 1
             results = chroma_collection.query(
-                query_embeddings=[query_embedding], n_results=3
+                query_embeddings=[query_embedding], n_results=n_results
             )
             docs_from_file = results["documents"][0] if results["documents"] else []
             if self.is_multi_file:

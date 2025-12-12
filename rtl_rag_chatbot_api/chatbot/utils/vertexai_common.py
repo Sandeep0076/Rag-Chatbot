@@ -270,9 +270,16 @@ class VertexAIRAGHandler(BaseRAGHandler):
                         user_id=self.user_id,
                         is_embedding=False,
                     )
+                    # Get collection count to avoid requesting more results than available
+                    collection_count = chroma_collection.count()
+                    n_results = (
+                        min(n_results_per_file, max(1, collection_count))
+                        if collection_count > 0
+                        else 1
+                    )
                     results = chroma_collection.query(
                         query_embeddings=[query_embedding],
-                        n_results=n_results_per_file,
+                        n_results=n_results,
                     )
                     docs_from_file = (
                         results["documents"][0] if results["documents"] else []

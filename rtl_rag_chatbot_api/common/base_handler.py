@@ -131,6 +131,12 @@ class BaseRAGHandler:
             query_embedding = self.get_embeddings([query])[0]
             collection = self._get_chroma_collection()
 
+            # Get collection count to avoid requesting more results than available
+            collection_count = collection.count()
+            n_results = (
+                min(n_results, max(1, collection_count)) if collection_count > 0 else 1
+            )
+
             # Don't filter by user_id when querying - embeddings are shared
             results = collection.query(
                 query_embeddings=[query_embedding], n_results=n_results
@@ -167,8 +173,16 @@ class BaseRAGHandler:
                 is_embedding=False,
             )
 
+            # Get collection count to avoid requesting more results than available
+            collection_count = collection.count()
+            n_results = (
+                min(n_neighbours, max(1, collection_count))
+                if collection_count > 0
+                else 1
+            )
+
             results = collection.query(
-                query_embeddings=[query_embedding], n_results=n_neighbours
+                query_embeddings=[query_embedding], n_results=n_results
             )
             return results["documents"][0] if results["documents"] else []
         except Exception as e:
