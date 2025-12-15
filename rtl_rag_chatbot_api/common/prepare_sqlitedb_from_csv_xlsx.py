@@ -1,3 +1,4 @@
+import csv
 import logging
 import os
 import shutil
@@ -146,6 +147,85 @@ class PrepareSQLFromTabularData:
             logging.error(f"Error getting table info: {str(e)}")
             return None
 
+    def _sniff_csv_dialect(self, encoding: str):
+        """
+        Use Python's csv.Sniffer to detect delimiter and header presence.
+
+        This makes CSV ingestion robust for different delimiters like ',', ';', tab, '|'.
+        """
+        try:
+            with open(
+                self.file_path, "r", encoding=encoding, errors="ignore"
+            ) as file_obj:
+                sample = file_obj.read(4096)
+                if not sample:
+                    return None, None
+
+                sniffer = csv.Sniffer()
+                dialect = sniffer.sniff(sample, delimiters=[",", ";", "\t", "|"])
+                has_header = sniffer.has_header(sample)
+                return dialect, has_header
+        except Exception as e:
+            logging.debug(
+                "Failed to sniff CSV dialect for encoding %s: %s",
+                encoding,
+                str(e),
+            )
+            return None, None
+
+    def _infer_header_from_sample(
+        self, delimiter: Optional[str], encoding: str
+    ) -> Optional[bool]:
+        """
+        Heuristic header detection when csv.Sniffer is inconclusive or wrong.
+
+        If the first row is all non-numeric tokens and the second row has at least
+        one numeric-looking token, we treat the first row as header.
+        """
+        try:
+            if not delimiter:
+                delimiter = ","
+
+            with open(self.file_path, "r", encoding=encoding, errors="ignore") as f:
+                reader = csv.reader(f, delimiter=delimiter)
+                rows = []
+                for _ in range(2):  # first two rows are enough
+                    try:
+                        rows.append(next(reader))
+                    except StopIteration:
+                        break
+
+            if len(rows) < 2:
+                return None
+
+            def is_numeric_like(token: str) -> bool:
+                t = token.strip()
+                if not t:
+                    return False
+                # remove common thousands/decimal separators
+                t = t.replace(".", "").replace(",", "")
+                return t.replace("-", "", 1).isdigit()
+
+            first_row = rows[0]
+            second_row = rows[1]
+
+            # All tokens non-numeric in first row?
+            first_non_numeric = all(not is_numeric_like(tok) for tok in first_row)
+            # Any numeric tokens in second row?
+            second_has_numeric = any(is_numeric_like(tok) for tok in second_row)
+
+            if first_non_numeric and second_has_numeric:
+                return True
+            return None
+        except Exception as e:
+            logging.debug(
+                "Header heuristic failed for delimiter %r, encoding %s: %s",
+                delimiter,
+                encoding,
+                str(e),
+            )
+            return None
+
     def _read_csv_with_encoding(self, encodings: List[str]):
         """
         Try reading CSV file with different encodings.
@@ -158,16 +238,45 @@ class PrepareSQLFromTabularData:
         """
         for encoding in encodings:
             try:
-                logging.info(f"Attempting to read CSV with {encoding} encoding")
-                df = pd.read_csv(self.file_path, encoding=encoding, on_bad_lines="skip")
+                # First try to sniff dialect (delimiter + header)
+                dialect, has_header = self._sniff_csv_dialect(encoding)
+
+                read_kwargs = {
+                    "filepath_or_buffer": self.file_path,
+                    "encoding": encoding,
+                    "on_bad_lines": "skip",
+                    "engine": "python",
+                }
+
+                # If we detected a delimiter, use it. Otherwise, let pandas infer (sep=None).
+                if dialect is not None:
+                    read_kwargs["sep"] = dialect.delimiter
+                else:
+                    read_kwargs["sep"] = None
+
+                # Respect detected header if available; otherwise, apply heuristic
+                header_inferred = has_header
+                if header_inferred is None or header_inferred is False:
+                    heuristic_header = self._infer_header_from_sample(
+                        dialect.delimiter if dialect else None, encoding
+                    )
+                    if heuristic_header is True:
+                        header_inferred = True
+
+                if header_inferred is not None and not header_inferred:
+                    # Explicitly no header
+                    read_kwargs["header"] = None
+
+                df = pd.read_csv(**read_kwargs)
+
                 if df is not None and not df.empty:
-                    logging.info(f"Successfully read {len(df)} rows from CSV")
                     return df, encoding
-                logging.warning("DataFrame is empty after reading")
             except UnicodeDecodeError:
-                logging.debug(f"Failed to read with {encoding} encoding")
+                logging.debug("Failed to read CSV with encoding=%s", encoding)
             except Exception as e:
-                logging.error(f"Error reading CSV with {encoding} encoding: {str(e)}")
+                logging.error(
+                    "Error reading CSV with encoding=%s: %s", encoding, str(e)
+                )
         return None, None
 
     def _handle_csv_file(self):
@@ -206,12 +315,7 @@ class PrepareSQLFromTabularData:
             table_name = base_name.split("_", 1)[-1] if "_" in base_name else base_name
 
             # Save to database
-            logging.info(
-                f"Successfully read CSV file with {successful_encoding} encoding"
-            )
-            logging.info(f"Processing {len(df)} rows with {len(df.columns)} columns")
             self._save_dataframe_to_sql(df, table_name)
-            logging.info(f"Successfully processed CSV file into table: {table_name}")
 
         except Exception as e:
             logging.error(f"Error processing CSV file: {str(e)}")
@@ -233,7 +337,6 @@ class PrepareSQLFromTabularData:
             processed_sheets = 0
             for sheet_name in excel_file.sheet_names:
                 try:
-                    logging.info(f"Processing sheet: {sheet_name}")
                     df = pd.read_excel(self.file_path, sheet_name=sheet_name)
 
                     # Skip empty sheets
@@ -260,7 +363,6 @@ class PrepareSQLFromTabularData:
                     # Save to database
                     self._save_dataframe_to_sql(df, sheet_name)
                     processed_sheets += 1
-                    logging.info(f"Successfully processed sheet: {sheet_name}")
 
                 except Exception as sheet_error:
                     logging.error(
@@ -273,8 +375,6 @@ class PrepareSQLFromTabularData:
                     "No valid data found in any sheet of the Excel file",
                     details={"file_path": self.file_path},
                 )
-
-            logging.info(f"Successfully processed {processed_sheets} sheets")
 
         except Exception as e:
             logging.error(f"Error processing Excel file: {str(e)}")
@@ -295,7 +395,6 @@ class PrepareSQLFromTabularData:
                 f"Failed to copy database file to {self.db_path}",
                 details={"file_path": self.file_path, "target": self.db_path},
             )
-        logging.info(f"SQLite database copied successfully to {self.db_path}")
 
     def _validate_tables(self):
         """Validate that tables were created successfully."""
@@ -306,16 +405,12 @@ class PrepareSQLFromTabularData:
                 "No tables were created in the database",
                 details={"file_path": self.file_path},
             )
-        logging.info(
-            f"File processed successfully. Created tables: {', '.join(tables)}"
-        )
 
     def _cleanup_on_error(self):
         """Clean up database file on error."""
         if os.path.exists(self.db_path):
             try:
                 os.remove(self.db_path)
-                logging.info(f"Cleaned up partial database file: {self.db_path}")
             except Exception as cleanup_error:
                 logging.error(f"Error cleaning up database file: {str(cleanup_error)}")
 
@@ -328,7 +423,6 @@ class PrepareSQLFromTabularData:
         """
         try:
             os.makedirs(self.output_dir, exist_ok=True)
-            logging.info(f"Ensuring output directory exists: {self.output_dir}")
 
             if self.file_extension in [".csv"]:
                 self._handle_csv_file()
@@ -392,11 +486,7 @@ class PrepareSQLFromTabularData:
 
             inspector = inspect(self.engine)
             if not inspector.has_table(table_name):
-                logging.info(f"Creating table '{table_name}' with {len(df)} rows")
                 df.to_sql(table_name, self.engine, index=False)
-                logging.info(
-                    f"Successfully created table '{table_name}' and inserted {len(df)} rows"
-                )
             else:
                 logging.info(f"Table '{table_name}' already exists. Skipping.")
 
@@ -437,42 +527,24 @@ class PrepareSQLFromTabularData:
                     "Please check the logs above for specific warnings or errors."
                 )
 
-            logging.info("\nDatabase Inspection Results:")
-            logging.info("-" * 50)
-            logging.info(f"Database Location: {self.db_path}")
-            logging.info(f"Number of Tables: {len(table_names)}")
-            logging.info("\nTable Details:")
-
             # Use SQLite connection directly for better compatibility
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
             total_rows = 0
             for table_name in table_names:
-                logging.info(f"\nTable: {table_name}")
                 # Escape table name by wrapping in quotes
                 escaped_table_name = f'"{table_name}"'
                 try:
                     cursor.execute(f"PRAGMA table_info({escaped_table_name})")
                     columns = cursor.fetchall()
                     if not columns:
-                        logging.warning(
-                            f"Warning: No columns found in table {table_name}"
-                        )
                         continue
-
-                    logging.info("Columns:")
-                    for col in columns:
-                        # col format: (cid, name, type, notnull, dflt_value, pk)
-                        logging.info(f"  - {col[1]} ({col[2]})")
-                        if col[5]:  # is primary key
-                            logging.info("    Primary Key: Yes")
 
                     # Get row count using escaped table name
                     cursor.execute(f"SELECT COUNT(*) FROM {escaped_table_name}")
                     row_count = cursor.fetchone()[0]
                     total_rows += row_count
-                    logging.info(f"Row Count: {row_count}")
 
                     if row_count == 0:
                         logging.warning(f"Warning: Table {table_name} is empty")
@@ -490,9 +562,6 @@ class PrepareSQLFromTabularData:
                     "3. There was an error during data import\n"
                     "Please check the logs above for specific warnings or errors."
                 )
-
-            logging.info(f"\nTotal Rows Across All Tables: {total_rows}")
-            logging.info("\nValidation complete.")
 
         except Exception as e:
             logging.error(f"Error during database validation: {str(e)}")
