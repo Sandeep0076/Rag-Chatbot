@@ -107,7 +107,8 @@ class CleanupConfig(BaseModel):
 
 
 class GenerateSystemPromptRequest(BaseModel):
-    """Request model for generating custom GPT system prompts.
+    """
+    Request model for generating custom GPT system prompts.
 
     Moved from `rtl_rag_chatbot_api/app.py` into central config to ensure single source
     of truth for request models and easier reuse across modules.

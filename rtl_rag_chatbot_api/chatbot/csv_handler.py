@@ -14,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 
 from configs.app_config import Config
+from rtl_rag_chatbot_api.chatbot.anthropic_handler import get_anthropic_non_rag_response
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
 from rtl_rag_chatbot_api.chatbot.gcs_handler import GCSHandler
 from rtl_rag_chatbot_api.chatbot.gemini_handler import (
@@ -24,6 +25,7 @@ from rtl_rag_chatbot_api.chatbot.prompt_handler import (
     format_question,
     resolve_question_with_history,
 )
+from rtl_rag_chatbot_api.chatbot.utils.language_detector import detect_lang
 from rtl_rag_chatbot_api.chatbot.utils.prompt_builder import PromptBuilder
 from rtl_rag_chatbot_api.common.prepare_sqlitedb_from_csv_xlsx import (
     PrepareSQLFromTabularData,
@@ -80,17 +82,6 @@ class TabularDataHandler:
             all_file_infos (Optional[Dict[str, Any]], optional): Complete file information
                 including metadata for context. Defaults to None.
         """
-        logging.info("=== Initializing TabularDataHandler ===")
-        logging.info(f"Model choice: {model_choice}")
-        logging.info(f"File ID: {file_id}")
-        logging.info(f"File IDs: {file_ids}")
-        logging.info(
-            f"Database summaries provided: {len(database_summaries_param) if database_summaries_param else 0}"
-        )
-        logging.info(
-            f"All file infos provided: {len(all_file_infos) if all_file_infos else 0}"
-        )
-
         self.config = config
         self.model_choice = model_choice
         self.custom_gpt = custom_gpt
@@ -100,6 +91,13 @@ class TabularDataHandler:
         self.sessions = {}
         self.dbs = {}
         self.agents = {}
+        # Initialize primary file attributes early so they always exist.
+        # This prevents AttributeError when helper methods (like
+        # _initialize_unified_database_session or _initialize_agent_for_file)
+        # access self.file_id during multi-file initialization before it is
+        # reassigned to the unified session ID.
+        self.file_id = file_id
+        self.file_ids = file_ids or []
         # Cache previous formatted question per file for history-aware resolution
         self.previous_formatted_by_file = {}
         # Cache previous resolved question per file for stronger anchoring
@@ -113,20 +111,12 @@ class TabularDataHandler:
         else:
             self.temperature = 0.4  # Lower temperature for OpenAI models
 
-        logging.info(f"Temperature set to: {self.temperature}")
-
         # Initialize LLM for all database operations before initializing databases
-        logging.info("Initializing LLM...")
         self.llm = self._initialize_llm()
-        logging.info("LLM initialized successfully")
 
         # Initialize database_summaries with pre-loaded data if provided
         self.database_summaries = {}
         if database_summaries_param:
-            logging.info(
-                f"Using pre-loaded database summaries for "
-                f"{len(database_summaries_param)} files"
-            )
             self.database_summaries = database_summaries_param
 
         # Store all_file_infos for context in responses
@@ -134,34 +124,30 @@ class TabularDataHandler:
 
         # Determine if we're in multi-file mode
         self.is_multi_file = bool(file_ids and len(file_ids) > 0)
-        logging.info(f"Multi-file mode: {self.is_multi_file}")
+
+        # Track unified-session specific identifiers for multi-file mode
+        self.unified_session_id = None
+        self.unified_session_dir = None
 
         if self.is_multi_file:
             # Multi-file mode
             self.file_ids = sorted(list(set(file_ids)))  # Ensure unique and sorted
-            # For backward compatibility, set file_id to the first one
-            self.file_id = self.file_ids[0] if self.file_ids else None
-            logging.info(
-                f"TabularDataHandler initialized in multi-file mode with "
-                f"{len(self.file_ids)} files"
-            )
 
-            # Initialize databases for all files
-            for f_id in self.file_ids:
-                logging.info(f"Initializing database for file_id: {f_id}")
-                self._initialize_file_database(f_id)
+            if len(self.file_ids) == 1:
+                # Treat a single file in multi-file request as standard single-file mode
+                self.file_id = self.file_ids[0]
+                self._initialize_file_database(self.file_id)
+            else:
+                # Initialize unified SQLite database for all file_ids
+                self._initialize_unified_database_session()
         else:
             # Single file mode (backward compatible)
             self.file_id = file_id
             self.file_ids = [file_id] if file_id else []
             if file_id:
-                logging.info(
-                    f"Initializing single file database for file_id: {file_id}"
-                )
                 self._initialize_file_database(file_id)
             else:
                 # Legacy path for tests or default initialization
-                logging.info("Using legacy path for tests or default initialization")
                 self.data_dir = "rtl_rag_chatbot_api/tabularData/csv_dir"
                 self.db_path = os.path.join(self.data_dir, self.db_name)
                 self.db_url = f"sqlite:///{self.db_path}"
@@ -180,43 +166,158 @@ class TabularDataHandler:
 
         # For backward compatibility, set these attributes for the primary file
         if self.file_id:
-            logging.info(
-                f"Setting up backward compatibility attributes for file_id: {self.file_id}"
-            )
             self.engine = self.engines.get(self.file_id)
             self.Session = self.sessions.get(self.file_id)
             self.db = self.dbs.get(self.file_id)
             self.agent = self.agents.get(self.file_id)
 
             if self.file_id in self.database_summaries:
-                # Set primary DB info and table_info
+                # Set primary DB info and table_info from pre-loaded summaries
                 self.primary_db_info = self.database_summaries[self.file_id]
-                logging.info(
-                    f"Primary DB info set from database summaries for file_id: {self.file_id}"
-                )
-
-                if (
-                    isinstance(self.primary_db_info, dict)
-                    and "tables" in self.primary_db_info
-                ):
-                    self.table_info = self.primary_db_info["tables"]
-                else:
-                    self.table_info = self.primary_db_info
-
-                # Set table_name from table_info
-                if self.table_info and len(self.table_info) > 0:
-                    self.table_name = self.table_info[0]["name"]
-                    logging.info(f"Table name set to: {self.table_name}")
-                else:
-                    error_msg = f"No tables found in the primary database for file_id: {self.file_id}"
-                    logging.error(error_msg)
-                    raise ValueError(error_msg)
             else:
-                error_msg = f"No database summary found for file_id: {self.file_id}"
+                # Generate and cache database summary when not pre-loaded
+                self.primary_db_info = self._get_table_info_for_file(self.file_id)
+                self.database_summaries[self.file_id] = self.primary_db_info
+
+            if (
+                isinstance(self.primary_db_info, dict)
+                and "tables" in self.primary_db_info
+            ):
+                self.table_info = self.primary_db_info["tables"]
+            else:
+                self.table_info = self.primary_db_info
+
+            # Set table_name from table_info
+            if self.table_info and len(self.table_info) > 0:
+                self.table_name = self.table_info[0]["name"]
+            else:
+                error_msg = f"No tables found in the primary database for file_id: {self.file_id}"
                 logging.error(error_msg)
                 raise ValueError(error_msg)
 
-        logging.info("=== TabularDataHandler initialization completed ===")
+    def _ensure_local_database(self, file_id: str) -> str:
+        """
+        Ensure that the SQLite database for the given file_id exists locally and is valid.
+
+        This method is used by both single-file initialization and unified multi-file
+        initialization to guarantee that the underlying tabular_data.db is present
+        (downloading it from GCS if necessary) and passes basic validation.
+
+        Args:
+            file_id (str): The file ID whose database should be available locally.
+
+        Returns:
+            str: Absolute path to the local SQLite database file.
+        """
+        data_dir = f"./chroma_db/{file_id}"
+        db_path = os.path.join(data_dir, self.db_name)
+
+        # If the data directory doesn't exist, download the artifacts from GCS
+        if not os.path.exists(data_dir):
+            logging.warning(
+                f"Data directory {data_dir} not found locally. "
+                f"Attempting to download from GCS for file_id: {file_id}"
+            )
+            try:
+                gcs_handler = GCSHandler(_configs=self.config)
+                gcs_handler.download_files_from_folder_by_id(file_id)
+            except Exception as e:
+                logging.error(
+                    f"Failed to download files from GCS for file_id {file_id}: {e}"
+                )
+                raise FileNotFoundError(
+                    f"Data directory {data_dir} not found and could not be "
+                    f"downloaded from GCS."
+                ) from e
+
+        # Validate database file and SQLite integrity
+        self._validate_database_file(data_dir, db_path, file_id)
+        self._validate_sqlite_database(db_path, file_id)
+
+        return db_path
+
+    def _initialize_unified_database_session(self):
+        """
+        Initialize a unified SQLite database for multi-file tabular chat.
+
+        First checks if a pre-built unified database exists (created during upload).
+        If found, uses it directly. Otherwise, creates one on-demand (fallback).
+
+        The unified database contains all tables from individual file databases with:
+            - Renamed tables to avoid conflicts: {filename}_{tablename}
+            - Source tracking columns: _source_file_id, _source_filename
+        """
+        if not self.file_ids or len(self.file_ids) < 2:
+            raise ValueError(
+                "Unified database session requires at least two file_ids in multi-file mode"
+            )
+
+        try:
+            from rtl_rag_chatbot_api.chatbot.unified_db_builder import (
+                UnifiedDatabaseBuilder,
+            )
+
+            builder = UnifiedDatabaseBuilder()
+
+            # Check for pre-built unified database first
+            existing_unified = builder.check_unified_database_exists(self.file_ids)
+
+            if existing_unified:
+                # Use pre-built unified database (FAST PATH)
+                logging.info(
+                    f"Using pre-built unified database: "
+                    f"{existing_unified['unified_session_id']}"
+                )
+
+                unified_file_id = existing_unified["unified_session_id"]
+                unified_db_path = existing_unified["unified_db_path"]
+                session_dir = existing_unified["session_dir"]
+
+            else:
+                # Fallback: Create unified database on-demand (SLOW PATH)
+                logging.warning(
+                    "No pre-built unified database found, creating on-demand. "
+                    "This should only happen for legacy uploads."
+                )
+
+                unified_result = builder.build_unified_database(
+                    self.file_ids, self.all_file_infos
+                )
+
+                unified_file_id = unified_result["unified_session_id"]
+                unified_db_path = unified_result["unified_db_path"]
+                session_dir = unified_result["session_dir"]
+
+            # Create SQLAlchemy components for the unified database
+            unified_db_url = f"sqlite:///{unified_db_path}"
+
+            logging.info(
+                f"Creating SQLAlchemy components for unified session_id: "
+                f"{unified_file_id}"
+            )
+            self._create_database_components(unified_db_url, unified_file_id)
+
+            # Initialize SQL agent for the unified database
+            self._initialize_agent_for_file(unified_file_id)
+
+            # Update primary identifiers to point to the unified database
+            self.file_id = unified_file_id
+            self.unified_session_id = unified_file_id
+            self.unified_session_dir = session_dir
+            self.data_dir = session_dir
+            self.db_path = unified_db_path
+            self.db_url = unified_db_url
+
+            logging.info(
+                f"Unified database session initialized with file_id: {self.file_id}"
+            )
+
+        except Exception as e:
+            logging.error(
+                f"Failed to initialize unified database session: {str(e)}",
+                exc_info=True,
+            )
+            raise
 
     def _validate_database_file(self, data_dir: str, db_path: str, file_id: str):
         """
@@ -231,8 +332,6 @@ class TabularDataHandler:
             FileNotFoundError: If directory or file doesn't exist
             PermissionError: If directory or file is not readable
         """
-        logging.info(f"Validating database file for file_id: {file_id}")
-
         # Check if directory exists
         if not os.path.exists(data_dir):
             logging.error(f"Data directory does not exist: {data_dir}")
@@ -256,20 +355,10 @@ class TabularDataHandler:
         # Check file size
         try:
             file_size = os.path.getsize(db_path)
-            logging.info(f"Database file size: {file_size} bytes")
             if file_size == 0:
                 logging.warning(f"Database file is empty: {db_path}")
         except OSError as e:
             logging.error(f"Error getting file size: {str(e)}")
-
-        # Check file permissions
-        try:
-            stat_info = os.stat(db_path)
-            logging.info(f"Database file permissions: {oct(stat_info.st_mode)}")
-        except OSError as e:
-            logging.error(f"Error getting file permissions: {str(e)}")
-
-        logging.info(f"Database file validation successful for file_id: {file_id}")
 
     def _validate_sqlite_database(self, db_path: str, file_id: str):
         """
@@ -282,14 +371,11 @@ class TabularDataHandler:
         Raises:
             sqlite3.Error: If the file is not a valid SQLite database
         """
-        logging.info(f"Validating SQLite database for file_id: {file_id}")
-
         try:
             import sqlite3
 
             test_conn = sqlite3.connect(db_path, timeout=10)
             test_conn.close()
-            logging.info(f"SQLite database validation successful for: {db_path}")
         except sqlite3.Error as e:
             logging.error(f"SQLite database validation failed: {str(e)}")
             raise
@@ -308,8 +394,6 @@ class TabularDataHandler:
         Raises:
             Exception: If any component creation fails
         """
-        logging.info(f"Creating database components for file_id: {file_id}")
-
         # Create SQLAlchemy engine
         try:
             self.engines[file_id] = create_engine(
@@ -320,9 +404,6 @@ class TabularDataHandler:
                 pool_timeout=30,
                 pool_recycle=1800,
             )
-            logging.info(
-                f"SQLAlchemy engine created successfully for file_id: {file_id}"
-            )
         except Exception as e:
             logging.error(f"Failed to create SQLAlchemy engine: {str(e)}")
             raise
@@ -330,7 +411,6 @@ class TabularDataHandler:
         # Create session maker
         try:
             self.sessions[file_id] = sessionmaker(bind=self.engines[file_id])
-            logging.info(f"Session maker created successfully for file_id: {file_id}")
         except Exception as e:
             logging.error(f"Failed to create session maker: {str(e)}")
             raise
@@ -338,9 +418,6 @@ class TabularDataHandler:
         # Create SQLDatabase instance
         try:
             self.dbs[file_id] = SQLDatabase(engine=self.engines[file_id])
-            logging.info(
-                f"SQLDatabase instance created successfully for file_id: {file_id}"
-            )
         except Exception as e:
             logging.error(f"Failed to create SQLDatabase instance: {str(e)}")
             raise
@@ -348,9 +425,6 @@ class TabularDataHandler:
         # Patch database run method
         try:
             self._patch_db_run_for_file(file_id)
-            logging.info(
-                f"Database run method patched successfully for file_id: {file_id}"
-            )
         except Exception as e:
             logging.error(f"Failed to patch database run method: {str(e)}")
             raise
@@ -362,70 +436,26 @@ class TabularDataHandler:
         Args:
             file_id (str): The file ID to initialize
         """
-        logging.info(f"=== Starting database initialization for file_id: {file_id} ===")
-
         data_dir = f"./chroma_db/{file_id}"
-        db_path = os.path.join(data_dir, self.db_name)
+        db_path = self._ensure_local_database(file_id)
         db_url = f"sqlite:///{db_path}"
 
-        logging.info(f"Data directory: {data_dir}")
-        logging.info(f"Database path: {db_path}")
-        logging.info(f"Database URL: {db_url}")
-
-        # If the data directory doesn't exist, it means this pod hasn't processed
-        # or downloaded the files yet. We need to fetch them from GCS.
-        if not os.path.exists(data_dir):
-            logging.warning(
-                f"Data directory {data_dir} not found locally. Attempting to download from GCS."
-            )
-            try:
-                gcs_handler = GCSHandler(_configs=self.config)
-                gcs_handler.download_files_from_folder_by_id(file_id)
-                logging.info(
-                    f"Successfully downloaded files from GCS for file_id: {file_id}"
-                )
-            except Exception as e:
-                logging.error(
-                    f"Failed to download files from GCS for file_id {file_id}: {e}"
-                )
-                # Re-raise or handle the error appropriately. If files can't be downloaded,
-                # the handler cannot proceed.
-                raise FileNotFoundError(
-                    f"Data directory {data_dir} not found and could not be downloaded from GCS."
-                ) from e
+        # Track primary paths for this file
+        self.data_dir = data_dir
+        self.db_path = db_path
+        self.db_url = db_url
 
         try:
-            # Validate database file
-            self._validate_database_file(data_dir, db_path, file_id)
-
-            # Validate SQLite database
-            self._validate_sqlite_database(db_path, file_id)
-
             # Create database components
             self._create_database_components(db_url, file_id)
 
             # Get database info - check if we already have a pre-loaded summary first
-            if file_id in self.database_summaries:
-                logging.info(
-                    f"Using pre-loaded database summary for file_id: {file_id}"
-                )
-                # No need to re-extract summary as it's already loaded
-            else:
-                logging.info(f"Generating database summary for file_id: {file_id}")
+            if file_id not in self.database_summaries:
                 db_info = self._get_table_info_for_file(file_id)
                 self.database_summaries[file_id] = db_info
-                logging.info(
-                    f"Database summary generated successfully for file_id: {file_id}"
-                )
 
             # Initialize SQL agent after database is prepared
-            logging.info(f"Initializing SQL agent for file_id: {file_id}")
             self._initialize_agent_for_file(file_id)
-            logging.info(f"SQL agent initialized successfully for file_id: {file_id}")
-
-            logging.info(
-                f"=== Database initialization completed successfully for file_id: {file_id} ==="
-            )
 
         except Exception as e:
             logging.error(
@@ -448,8 +478,6 @@ class TabularDataHandler:
         Raises:
             ValueError: If the configuration for the specified model is not found.
         """
-        logging.info(f"Initializing LLM with model choice: {self.model_choice}")
-
         # Handle Gemini models
         if self.model_choice.startswith("gemini"):
             model_config = self.config.gemini
@@ -465,10 +493,10 @@ class TabularDataHandler:
             model_name = model_mapping.get(self.model_choice)
             if not model_name:
                 raise ValueError(
-                    f"Invalid Gemini model choice: {self.model_choice}. Available choices: {list(model_mapping.keys())}"
+                    f"Invalid Gemini model choice: {self.model_choice}. "
+                    f"Available choices: {list(model_mapping.keys())}"
                 )
 
-            logging.info(f"Using Gemini model: {model_name}")
             return ChatVertexAI(
                 model_name=model_name,
                 project=model_config.project,
@@ -492,7 +520,6 @@ class TabularDataHandler:
             }
             model_name = model_mapping[self.model_choice]
 
-            logging.info(f"Using Anthropic Vertex model: {model_name}")
             return ChatAnthropicVertex(
                 model=model_name,
                 project=model_config.project,
@@ -506,10 +533,10 @@ class TabularDataHandler:
         if not model_config:
             available_models = list(self.config.azure_llm.models.keys())
             raise ValueError(
-                f"Configuration for model {self.model_choice} not found. Available models: {available_models}"
+                f"Configuration for model {self.model_choice} not found. "
+                f"Available models: {available_models}"
             )
 
-        logging.info(f"Using Azure OpenAI model: {self.model_choice}")
         return AzureChatOpenAI(
             azure_endpoint=model_config.endpoint,
             azure_deployment=model_config.deployment,
@@ -551,12 +578,42 @@ class TabularDataHandler:
         return True
 
     def cleanup(self):
-        """Cleanup database connections"""
-        if hasattr(self, "engine"):
-            self.engine.dispose()
+        """
+        Cleanup database connections without deleting unified databases.
+
+        Unified databases are persisted and reused across sessions,
+        cleaned up later by scheduled tasks (similar to PDF chat flow).
+        """
+        # Dispose all SQLAlchemy engines to release connections
+        try:
+            for file_id, engine in getattr(self, "engines", {}).items():
+                if engine:
+                    try:
+                        engine.dispose()
+                        logging.info(f"Disposed engine for file_id: {file_id}")
+                    except Exception as e:
+                        logging.warning(
+                            f"Error disposing engine for file_id {file_id}: {str(e)}"
+                        )
+        except Exception:
+            # Best-effort cleanup; do not raise from destructor paths
+            logging.warning(
+                "Error while disposing engines during cleanup", exc_info=True
+            )
+
+        # NOTE: Unified session directories are NOT deleted here.
+        # They persist for reuse when users chat again with the same file combination.
+        # Cleanup is handled by scheduled tasks (similar to PDF embeddings).
+        unified_dir = getattr(self, "unified_session_dir", None)
+        if unified_dir:
+            logging.info(f"Keeping unified session directory for reuse: {unified_dir}")
 
     def __del__(self):
-        """Ensure cleanup on object destruction"""
+        """
+        Ensure cleanup on object destruction.
+
+        Only disposes SQL connections; unified databases persist for reuse.
+        """
         self.cleanup()
 
     def prepare_database(self):
@@ -703,9 +760,32 @@ class TabularDataHandler:
             raise ValueError(f"No database initialized for file_id: {file_id}")
 
         toolkit = SQLDatabaseToolkit(db=self.dbs[file_id], llm=self.llm)
-        agent_prefix = None
+
+        # Build enhanced agent prefix that emphasizes sample data usage
+        base_prefix = """You are an agent designed to interact with a SQL database.
+Given an input question, create a syntactically correct SQLite query to run, then look at the results
+and return the answer to the input question.
+Unless instructed otherwise, return only the final answer.
+
+CRITICAL INSTRUCTIONS FOR ACCURATE SQL GENERATION:
+1. ALWAYS use the sql_db_schema tool FIRST to see table structures and sample rows
+2. The sample rows in sql_db_schema show ACTUAL data values from the database
+3. When filtering by categorical values (e.g., asset names, symbols, product types):
+   - EXAMINE the sample rows to see what values actually exist
+   - Use the EXACT value format shown in samples (case-sensitive where needed)
+   - Example: If samples show asset="Bitcoin", use WHERE asset = 'Bitcoin', NOT WHERE symbol = 'btc'
+4. For timestamp/date filters:
+   - Check the exact format in sample rows (e.g., "2025-12-03 00:01:00+00:00")
+   - Match the format exactly in your WHERE clauses (include timezone offsets if present)
+5. Match user terms to actual column values by checking samples BEFORE writing SQL
+
+You have access to the following tools for interacting with the database:"""
+
+        # Use custom prefix if provided, otherwise use enhanced base prefix
         if self.custom_gpt and self.system_prompt:
             agent_prefix = self.system_prompt
+        else:
+            agent_prefix = base_prefix
 
         self.agents[file_id] = create_sql_agent(
             llm=self.llm,
@@ -754,6 +834,26 @@ class TabularDataHandler:
                 "Primary self.db not found or not initialized. Cannot patch db.run."
             )
 
+        # Build enhanced agent prefix that emphasizes sample data usage
+        base_prefix = """You are an agent designed to interact with a SQL database.
+Given an input question, create a syntactically correct SQLite query to run, then look at the results
+and return the answer to the input question.
+Unless instructed otherwise, return only the final answer.
+
+CRITICAL INSTRUCTIONS FOR ACCURATE SQL GENERATION:
+1. ALWAYS use the sql_db_schema tool FIRST to see table structures and sample rows
+2. The sample rows in sql_db_schema show ACTUAL data values from the database
+3. When filtering by categorical values (e.g., asset names, symbols, product types):
+   - EXAMINE the sample rows to see what values actually exist
+   - Use the EXACT value format shown in samples (case-sensitive where needed)
+   - Example: If samples show asset="Bitcoin", use WHERE asset = 'Bitcoin', NOT WHERE symbol = 'btc'
+4. For timestamp/date filters:
+   - Check the exact format in sample rows (e.g., "2025-12-03 00:01:00+00:00")
+   - Match the format exactly in your WHERE clauses (include timezone offsets if present)
+5. Match user terms to actual column values by checking samples BEFORE writing SQL
+
+You have access to the following tools for interacting with the database:"""
+
         toolkit = SQLDatabaseToolkit(
             db=self.db, llm=self.llm, handle_parsing_errors=True
         )
@@ -762,6 +862,7 @@ class TabularDataHandler:
             toolkit=toolkit,
             verbose=True,
             handle_parsing_errors=True,
+            prefix=base_prefix,
             agent_executor_kwargs={
                 "handle_parsing_errors": True,
                 "return_intermediate_steps": True,
@@ -795,7 +896,6 @@ class TabularDataHandler:
 
         db.run = wrapped_run
         setattr(db, "_run_is_patched", True)
-        logging.info(f"Patched db.run for file_id: {file_id}")
 
     def debug_database(self):
         """
@@ -845,20 +945,31 @@ class TabularDataHandler:
 
                 column_stats = {}
                 for column in columns:
-                    if hasattr(column["type"], "python_type") and column[
-                        "type"
-                    ].python_type in (int, float):
-                        stats = session.execute(
-                            text(
-                                f'SELECT MIN("{column["name"]}"), MAX("{column["name"]}"), '
-                                f'AVG("{column["name"]}") FROM "{table_name}"'
-                            )
-                        ).fetchone()
-                        column_stats[column["name"]] = {
-                            "min": stats[0],
-                            "max": stats[1],
-                            "avg": stats[2],
-                        }
+                    try:
+                        # Safe check: only compute stats for numeric types
+                        if hasattr(column["type"], "python_type"):
+                            py_type = column["type"].python_type
+                            if py_type in (int, float):
+                                stats = session.execute(
+                                    text(
+                                        f'SELECT MIN("{column["name"]}"), '
+                                        f'MAX("{column["name"]}"), '
+                                        f'AVG("{column["name"]}") '
+                                        f'FROM "{table_name}"'
+                                    )
+                                ).fetchone()
+                                column_stats[column["name"]] = {
+                                    "min": stats[0],
+                                    "max": stats[1],
+                                    "avg": stats[2],
+                                }
+                    except (NotImplementedError, AttributeError) as e:
+                        # Some column types don't implement python_type
+                        logging.debug(
+                            f"Skipping stats for column {column['name']} "
+                            f"(type: {column['type']}): {str(e)}"
+                        )
+                        continue
 
                 table_info.append(
                     {
@@ -917,8 +1028,9 @@ class TabularDataHandler:
     def get_answer(self, question: Union[str, List[str]]) -> Union[str, dict]:
         """
         Processes a user's question and returns an answer based on the database content.
-        For multi-file mode, it attempts to determine which database to query or uses a combined approach.
-        Now supports conversation history for contextual understanding.
+        In both single-file and multi-file modes, a single SQL agent is used. In
+        multi-file mode, this agent operates on a unified SQLite database that
+        contains all tables from the selected files (with source-tracking columns).
 
         Args:
             question: Either a single question string or a list of conversation messages.
@@ -927,239 +1039,41 @@ class TabularDataHandler:
 
         Returns:
             Union[str, dict]: For tabular data, returns dict with 'answer' and 'intermediate_steps'.
-                             For multi-file, returns string (to maintain compatibility).
                              Returns error message string if processing fails.
         """
         try:
-            # Extract the actual question text for multi-file routing and forced answers
+            # Extract the actual question text for forced-answer fallback
             if isinstance(question, list):
                 actual_question_text = question[-1]
             else:
                 actual_question_text = question
 
-            if self.is_multi_file and len(self.file_ids) > 1:
-                return self._get_multi_file_answer(actual_question_text)
-            else:
-                # Standard single-file approach (also works when only one file in multi-file mode)
-                # Pass the full question (which could be a list with history) to ask_question
-                result = self.ask_question(question)
-                if result:
-                    logging.info("Direct answer")
-                    return result  # Return the dict with answer and intermediate_steps
+            # Single-agent approach for both single-file and multi-file (unified DB)
+            result = self.ask_question(question)
+            if result:
+                return result  # Dict with 'answer' and 'intermediate_steps'
+
+            # Use lingua-based detector here as well so forced answers match
+            # the user's original question language.
+            try:
+                detected_lang_name = detect_lang(str(actual_question_text))
+                lang_name_lower = (detected_lang_name or "").lower()
+                if "english" in lang_name_lower:
+                    user_language = "en"
+                elif "german" in lang_name_lower:
+                    user_language = "de"
                 else:
-                    logging.info("Forced answer")
-                    forced_result = self.get_forced_answer(actual_question_text, "")
-                    return forced_result  # Return the dict from get_forced_answer
+                    user_language = "en"
+            except Exception:
+                user_language = "en"
+
+            forced_result = self.get_forced_answer(
+                actual_question_text, "", language=user_language
+            )
+            return forced_result  # Dict from get_forced_answer
         except Exception as e:
-            logging.error(f"Error in TabularDataHandler get_answer: {str(e)}")
+            logging.error(f"Error in get_answer: {str(e)}")
             return f"An error occurred while processing your question: {str(e)}"
-
-    def _get_multi_file_answer(self, question: str) -> str:
-        """
-        Process a question in multi-file mode by querying across all available databases.
-        This method handles queries when multiple tabular files are in use.
-
-        Args:
-            question (str): The user's input question
-
-        Returns:
-            str: The answer combining information from all databases
-        """
-        try:
-            # First check if the question specifically mentions file IDs or table names to
-            # determine which database to use for the query
-            target_file_id = None
-
-            # 1. First check if question contains table names that match specific databases
-            for file_id, summary in self.database_summaries.items():
-                if "table_names" in summary:
-                    for table_name in summary["table_names"]:
-                        if table_name.lower() in question.lower():
-                            logging.info(
-                                f"Found table '{table_name}' mentioned in question, using file {file_id}"
-                            )
-                            target_file_id = file_id
-                            break
-                if target_file_id:  # Break outer loop too if we found a match
-                    break
-
-            # 2. If no specific table identified, create a comprehensive database summary
-            if not target_file_id:
-                # Create a combined database summary for context
-                all_tables_summary = self._generate_all_tables_summary()
-                logging.info(
-                    "No specific table identified in question. Using combined database approach."
-                )
-
-                # Try to route the question to the most relevant database based on content
-                suggested_file_id = self._suggest_database_for_question(
-                    question, all_tables_summary
-                )
-                if suggested_file_id:
-                    target_file_id = suggested_file_id
-                    logging.info(
-                        f"Selected database {target_file_id} as most relevant for question"
-                    )
-                else:
-                    # Default to the first file when we can't determine which is more relevant
-                    target_file_id = self.file_ids[0]
-                    logging.info(
-                        f"Using default database {target_file_id} for question"
-                    )
-
-            # We've determined which database to use, set up the agent for that database
-            if target_file_id not in self.agents:
-                self._initialize_agent_for_file(target_file_id)
-
-            # Format the question with additional context if needed
-            enhanced_question = self._enhance_question_with_context(
-                question, target_file_id
-            )
-
-            # Run the question on the selected agent
-            agent = self.agents[target_file_id]
-            if not agent:
-                self._initialize_agent_for_file(target_file_id)
-                agent = self.agents[target_file_id]
-
-            logging.info(f"Querying database for file_id: {target_file_id}")
-            result = agent.run(enhanced_question)
-
-            # Add source information to the response (without file context)
-            # Get just the filename for source attribution
-            file_info = (
-                self.all_file_infos.get(target_file_id, {})
-                if self.all_file_infos
-                else {}
-            )
-            original_filename = file_info.get(
-                "original_filename", f"File {target_file_id}"
-            )
-
-            enhanced_result = f"[Source: {original_filename}] {result}"
-            return enhanced_result
-
-        except Exception as e:
-            logging.error(f"Error in _get_multi_file_answer: {str(e)}")
-            return f"An error occurred while processing your question across multiple databases: {str(e)}"
-
-    def _generate_all_tables_summary(self) -> str:
-        """
-        Generate a concise summary of all tables across all databases.
-
-        Returns:
-            str: Text summary of all available tables and their columns
-        """
-        summary_parts = []
-
-        for file_id, db_summary in self.database_summaries.items():
-            if "tables" in db_summary:
-                summary_parts.append(f"Database {file_id}:")
-                for table in db_summary["tables"]:
-                    columns_info = ", ".join(
-                        [f"{col['name']} ({col['type']})" for col in table["columns"]]
-                    )
-                    summary_parts.append(
-                        f"  Table '{table['name']}' ({table['row_count']} rows): {columns_info}"
-                    )
-
-        return "\n".join(summary_parts)
-
-    def _suggest_database_for_question(
-        self, question: str, all_tables_summary: str
-    ) -> Optional[str]:
-        """
-        Suggest which database is most relevant to the question based on content.
-        Uses LLM to make the determination.
-
-        Args:
-            question: The user's question
-            all_tables_summary: Summary of all tables across all databases
-
-        Returns:
-            Optional[str]: The file_id of the most relevant database, or None if undetermined
-        """
-        try:
-            if self.model_choice.startswith("gemini"):
-                from rtl_rag_chatbot_api.chatbot.gemini_handler import (
-                    get_gemini_non_rag_response,
-                )
-
-                prompt = (
-                    f"Based on the following database structure:\n\n{all_tables_summary}\n\n"
-                    f"Which database would be most appropriate to answer this question: '{question}'?\n"
-                    "Respond with just the database ID (like '1fddcdde-c24e-4fef-b656-dc454f701418')."
-                )
-                try:
-                    response = get_gemini_non_rag_response(
-                        self.config, prompt, self.model_choice
-                    )
-                except GeminiSafetyFilterError as e:
-                    logging.warning(
-                        f"Safety filter blocked database suggestion: {str(e)}"
-                    )
-                    return None  # Return None if safety filter blocks
-            else:
-                from rtl_rag_chatbot_api.chatbot.chatbot_creator import (
-                    get_azure_non_rag_response,
-                )
-
-                prompt = (
-                    f"Based on the following database structure:\n\n{all_tables_summary}\n\n"
-                    f"Which database would be most appropriate to answer this question: '{question}'?\n"
-                    "Respond with just the database ID (like '1fddcdde-c24e-4fef-b656-dc454f701418')."
-                )
-                response = get_azure_non_rag_response(
-                    self.config, prompt, self.model_choice
-                )
-
-            # Extract file_id from response
-            for file_id in self.file_ids:
-                if file_id in response:
-                    return file_id
-            return None
-        except Exception as e:
-            logging.error(f"Error in _suggest_database_for_question: {str(e)}")
-            return None
-
-    def _enhance_question_with_context(self, question: str, file_id: str) -> str:
-        """
-        Enhance the user's question with context about the selected database.
-
-        Args:
-            question: The user's original question
-            file_id: The selected file_id to query against
-
-        Returns:
-            str: An enhanced question with context
-        """
-        if file_id in self.database_summaries:
-            db_summary = self.database_summaries[file_id]
-            table_names = db_summary.get("table_names", [])
-
-            # Don't modify simple questions about table structure
-            if any(
-                keyword in question.lower()
-                for keyword in [
-                    "what tables",
-                    "table names",
-                    "how many tables",
-                    "show tables",
-                    "list tables",
-                ]
-            ):
-                return question
-
-            # Format enhanced question with table context
-            if table_names and len(table_names) == 1:
-                # Single table case - make it easy
-                return f"Using the table '{table_names[0]}', {question}"
-            elif table_names and len(table_names) > 1:
-                tables_str = ", ".join([f"'{t}'" for t in table_names])
-                return f"Using the tables {tables_str}, {question}"
-
-        # Default case - just return the original question
-        return question
 
     def _get_file_context_string(self, file_id: str = None) -> str:
         """
@@ -1234,6 +1148,13 @@ class TabularDataHandler:
                 # Fallback to string representation if JSON fails
                 context_parts.append(f"Database Summary:\n{str(db_summary)}")
 
+        # In multi-file mode, remind about unified naming and source columns
+        if self.is_multi_file:
+            context_parts.append(
+                "Multi-file unified schema: tables are named `{filename}_{tablename}` "
+                "and include `_source_file_id`, `_source_filename` for attribution."
+            )
+
         context_str = "\n\n".join(context_parts) + "\n\n"
         return context_str
 
@@ -1254,78 +1175,37 @@ class TabularDataHandler:
             self._initialize_agent()
 
         try:
-            # Prepare database_info for formatting and context usage
-            database_info = {}
-            if (
-                self.all_file_infos
-                and self.file_id
-                and self.file_id in self.all_file_infos
-            ):
-                file_info = self.all_file_infos.get(self.file_id, {})
-                database_info = file_info.get("database_summary", {})
+            database_info = self._prepare_database_info()
+            (
+                question_to_process,
+                resolved_question,
+            ) = self._resolve_question_with_history_if_needed(question)
 
-            # Step 1: Handle conversation history if provided
-            if isinstance(question, list) and len(question) > 1:
-                # Extract conversation history and current question
-                conversation_history = question[:-1]
-                current_question = question[-1]
+            # Step 2: Detect user language once from the raw/resolved question
+            # using lingua-based detector (not influenced by schema/DB context).
+            user_language = self._detect_user_language(question_to_process)
 
-                logging.info(
-                    f"Processing question with {len(conversation_history)} history messages"
-                )
-
-                # Retrieve cached previous formatted question for holistic context if available
-                previous_formatted_question = self.previous_formatted_by_file.get(
-                    self.file_id, ""
-                )
-                if previous_formatted_question:
-                    logging.info(
-                        f"Previous formatted question (cached): {previous_formatted_question}"
-                    )
-
-                # Resolve contextual references in the current question (with holistic context)
-                resolved_question = resolve_question_with_history(
-                    conversation_history,
-                    current_question,
-                    previous_formatted_question,
-                    self.previous_resolved_by_file.get(self.file_id, ""),
-                )
-                logging.info(f"Resolved question: {resolved_question}")
-
-                # Use the resolved question for further processing
-                question_to_process = resolved_question
-            elif isinstance(question, list) and len(question) == 1:
-                # Single item in list, extract it
-                question_to_process = question[0]
-            else:
-                # String question, use as-is (backward compatibility)
-                question_to_process = question
-
-            # TODO: In future we can insert an llm agent here to verify if it needs answer from database or
-            # using the last answer can further explain. example question : I want to know more specifically
-            # how to implement and connect this database to my application.
-            # User here Wants answer in detail based on History and non sql answer.
-
-            # Step 2: Use enhanced format_question with intelligent context analysis
+            # Step 3: Use enhanced format_question with intelligent context analysis
             format_result = format_question(
-                database_info, question_to_process, self.model_choice
+                database_info,
+                question_to_process,
+                self.model_choice,
+                user_language=user_language,
             )
             formatted_question = format_result["formatted_question"]
             needs_sql = format_result["needs_sql"]
             classification = format_result.get("classification", {})
-            logging.info(f"Formatted question: {formatted_question}")
-            logging.info(f"Needs SQL: {needs_sql}")
+
             if not needs_sql:
                 # Cache formatted for next turn and return direct summary
-                logging.info("Direct answer provided from database summary")
                 try:
                     self.previous_formatted_by_file[self.file_id] = formatted_question
                 except Exception:
                     pass
                 return {"answer": formatted_question, "intermediate_steps": None}
 
-            # Get query classification for appropriate response formatting
-            logging.info(f"Formatted question: {formatted_question}")
+            # Get query classification for appropriate response formatting.
+            # Language is sourced from detect_lang via user_language override above.
             query_type = classification.get("category", "unknown")
             language = classification.get("language", "en")
 
@@ -1338,7 +1218,6 @@ class TabularDataHandler:
                 pass
 
             # Execute SQL query through agent
-            logging.info("Executing query through SQL agent")
             try:
                 response = self.agent.invoke({"input": formatted_question})
                 return self._process_agent_response(
@@ -1353,6 +1232,7 @@ class TabularDataHandler:
                 )
 
             except Exception as agent_error:
+                logging.error(f"Agent error: {str(agent_error)}")
                 return self._handle_agent_error(
                     agent_error,
                     formatted_question,
@@ -1362,8 +1242,94 @@ class TabularDataHandler:
                 )
 
         except Exception as e:
-            logging.error(f"An error occurred while processing the question: {str(e)}")
+            logging.error(f"Error in ask_question: {str(e)}", exc_info=True)
             raise
+
+    def _prepare_database_info(self) -> dict:
+        """
+        Prepare database_info for formatting and context usage.
+        """
+        database_info: Dict[str, Any] = {}
+
+        try:
+            # Try to get database_info from all_file_infos first
+            if (
+                self.all_file_infos
+                and self.file_id
+                and self.file_id in self.all_file_infos
+            ):
+                file_info = self.all_file_infos.get(self.file_id, {})
+                database_info = file_info.get("database_summary", {})
+            else:
+                # Fallback: check database_summaries for unified sessions
+                # This handles cases where file_id is a unified_session_id
+                if self.file_id in self.database_summaries:
+                    database_info = self.database_summaries[self.file_id]
+        except Exception as e:
+            logging.error(f"Error preparing database info: {str(e)}", exc_info=True)
+        return database_info
+
+    def _resolve_question_with_history_if_needed(
+        self, question: Union[str, List[str]]
+    ) -> tuple[str, str]:
+        """
+        Resolve contextual references using conversation history when needed.
+
+        Returns:
+            (question_to_process, resolved_question)
+        """
+        resolved_question = ""
+
+        # Step 1: Handle conversation history if provided
+        if isinstance(question, list) and len(question) > 1:
+            # Extract conversation history and current question
+            conversation_history = question[:-1]
+            current_question = question[-1]
+
+            # Retrieve cached previous formatted question for holistic context if available
+            previous_formatted_question = self.previous_formatted_by_file.get(
+                self.file_id, ""
+            )
+
+            # Resolve contextual references in the current question (with holistic context)
+            resolved_question = resolve_question_with_history(
+                conversation_history,
+                current_question,
+                previous_formatted_question,
+                self.previous_resolved_by_file.get(self.file_id, ""),
+            )
+
+            # Use the resolved question for further processing
+            question_to_process = resolved_question
+        elif isinstance(question, list) and len(question) == 1:
+            # Single item in list, extract it
+            question_to_process = question[0]
+        else:
+            # String question, use as-is (backward compatibility)
+            question_to_process = question
+
+        return str(question_to_process), str(resolved_question)
+
+    def _detect_user_language(self, question_text: str) -> str:
+        """
+        Detect the user's language from the raw question using lingua
+        (independent of schema/DB context).
+        """
+        try:
+            detected_lang_name = detect_lang(str(question_text))
+            lang_name_lower = (detected_lang_name or "").lower()
+            if "english" in lang_name_lower:
+                user_language = "en"
+            elif "german" in lang_name_lower:
+                user_language = "de"
+            else:
+                user_language = "en"
+            return user_language
+        except Exception as lang_err:
+            logging.warning(
+                f"Language detection failed, defaulting to 'en': {str(lang_err)}"
+            )
+            return "en"
 
     def _process_agent_response(
         self,
@@ -1454,11 +1420,22 @@ class TabularDataHandler:
                 logging.warning(
                     f"Safety filter blocked response in CSV handler: {str(e)}"
                 )
-                formatted_answer = f"I apologize, but I cannot provide a response to this question. {str(e)}"
+                formatted_answer = (
+                    "I apologize, but I cannot provide a response to this question. "
+                    f"{str(e)}"
+                )
+        elif self.model_choice in [
+            "claude-sonnet-4@20250514",
+            "claude-sonnet-4-5",
+        ]:
+            formatted_answer = get_anthropic_non_rag_response(
+                self.config, base_prompt, self.model_choice
+            )
         else:
             formatted_answer = get_azure_non_rag_response(self.config, base_prompt)
 
         # Format intermediate steps for display
+        logging.info("TABULAR FLOW: Formatting intermediate steps for display...")
         formatted_steps = (
             self._format_intermediate_steps(
                 intermediate_steps,

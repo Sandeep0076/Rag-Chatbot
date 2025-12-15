@@ -267,37 +267,163 @@ class AzureChatbot(BaseRAGHandler):
             logging.error(f"Error querying ChromaDB for file {f_id}: {str(e)}")
             return []
 
+    def _retrieve_relevant_docs(self, query_embedding) -> List[str]:
+        """Retrieve relevant documents across the active file set (parallelized for multi-file)."""
+        all_relevant_docs: List[str] = []
+
+        # Parallelise Chroma queries for multiple files
+        if self.is_multi_file and len(self.active_file_ids) > 1:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(4, len(self.active_file_ids))
+            ) as executor:
+                futures = [
+                    executor.submit(self._query_single_file, f_id, query_embedding)
+                    for f_id in self.active_file_ids
+                ]
+                for fut in concurrent.futures.as_completed(futures):
+                    all_relevant_docs.extend(fut.result())
+            return all_relevant_docs
+
+        # Single file or only one file -> sequential
+        for f_id in self.active_file_ids:
+            all_relevant_docs.extend(self._query_single_file(f_id, query_embedding))
+        return all_relevant_docs
+
+    def _build_files_context(self) -> str:
+        """Build human-readable file context (filenames + URLs where applicable)."""
+        if not self.all_file_infos:
+            return ""
+
+        if self.is_multi_file:
+            file_details = []
+            for file_id in self.active_file_ids:
+                if file_id not in self.all_file_infos:
+                    continue
+                file_info = self.all_file_infos.get(file_id, {})
+                original_filename = file_info.get(
+                    "original_filename", f"Unknown filename (ID: {file_id})"
+                )
+                if "url" in file_info:
+                    file_details.append(
+                        f"- {original_filename} (URL: {file_info.get('url')})"
+                    )
+                else:
+                    file_details.append(f"- {original_filename}")
+
+            if not file_details:
+                return ""
+
+            logging.info(
+                f"Added multi-file context with {len(file_details)} files (including URLs where applicable)"
+            )
+            return "Available documents:\n" + "\n".join(file_details) + "\n\n"
+
+        # Single file
+        file_id = self.active_file_ids[0]
+        if file_id not in self.all_file_infos:
+            return ""
+
+        file_info = self.all_file_infos.get(file_id, {})
+        original_filename = file_info.get(
+            "original_filename", f"Unknown filename (ID: {file_id})"
+        )
+        file_context_detail = f"- {original_filename}"
+        if "url" in file_info:
+            file_context_detail += f" (URL: {file_info.get('url')})"
+
+        logging.info(f"Added clean file context for single file: {file_id}")
+        return "File Information:\n" + file_context_detail + "\n\n"
+
+    def _get_system_role(self, deployment: str) -> str:
+        """GPT-5.1 uses 'developer' role instead of 'system'."""
+        deployment_lower = deployment.lower()
+        is_gpt_5_1 = any(term in deployment_lower for term in ["gpt-5.1", "gpt_5_1"])
+        return "developer" if is_gpt_5_1 else "system"
+
+    def _should_use_max_completion_tokens(self, deployment: str) -> bool:
+        deployment_lower = deployment.lower()
+        return any(
+            term in deployment_lower
+            for term in ["o3", "o4", "gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
+        )
+
+    def _add_gpt5_reasoning_params(
+        self, completion_params: dict, deployment: str
+    ) -> None:
+        """Add GPT-5-only reasoning params (safe no-op for non GPT-5 deployments)."""
+        deployment_lower = deployment.lower()
+        is_gpt_5_family = any(
+            term in deployment_lower
+            for term in ["gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
+        )
+        if not is_gpt_5_family:
+            return
+
+        configured_reasoning_effort = (
+            self.configs.llm_hyperparams.reasoning_effort
+            if hasattr(self.configs, "llm_hyperparams")
+            else None
+        )
+        configured_verbosity = (
+            self.configs.llm_hyperparams.verbosity
+            if hasattr(self.configs, "llm_hyperparams")
+            else None
+        )
+
+        is_gpt_5_1 = any(term in deployment_lower for term in ["gpt-5.1", "gpt_5_1"])
+        completion_params["reasoning_effort"] = (
+            configured_reasoning_effort
+            if configured_reasoning_effort is not None
+            else ("none" if is_gpt_5_1 else "minimal")
+        )
+        completion_params["verbosity"] = configured_verbosity or "medium"
+
+    def _build_completion_params(
+        self, messages: list, max_response_tokens: int
+    ) -> dict:
+        """Build Azure OpenAI chat completion params, respecting model family differences."""
+        deployment = self.model_config.deployment
+
+        completion_params = {
+            "model": deployment,
+            "messages": messages,
+        }
+
+        if self._should_use_max_completion_tokens(deployment):
+            completion_params["max_completion_tokens"] = max_response_tokens
+            completion_params[
+                "presence_penalty"
+            ] = self.configs.llm_hyperparams.presence_penalty
+            # 'reasoning_effort' and 'verbosity' are only supported by GPT-5 family, not by O4/O3
+            self._add_gpt5_reasoning_params(completion_params, deployment)
+            # Do NOT include 'stop' for GPT-5/O-series models
+            return completion_params
+
+        # Regular OpenAI models
+        completion_params["temperature"] = self.configs.llm_hyperparams.temperature
+        completion_params["max_tokens"] = max_response_tokens
+        completion_params["top_p"] = self.configs.llm_hyperparams.top_p
+        completion_params[
+            "frequency_penalty"
+        ] = self.configs.llm_hyperparams.frequency_penalty
+        completion_params[
+            "presence_penalty"
+        ] = self.configs.llm_hyperparams.presence_penalty
+        if self.configs.llm_hyperparams.stop is not None:
+            completion_params["stop"] = self.configs.llm_hyperparams.stop
+
+        return completion_params
+
     def get_answer(self, query: str) -> str:
         try:
             logging.info(
                 f"AzureChatbot ({self.model_choice}) get_answer for file(s): {self.active_file_ids}"
             )
-            all_relevant_docs = []
-            # embedding_model_for_rag = "azure"  # AzureChatbot uses Azure embeddings
-
-            # Compute the embedding **once** for the whole request to avoid
-            # redundant Azure OpenAI /embeddings calls when querying multiple
-            # files. This removes N-1 identical HTTP requests and speeds up
-            # multi-file chat dramatically.
+            # Compute the embedding **once** for the whole request to avoid redundant
+            # embeddings calls when querying multiple files.
             query_embedding = self.get_embeddings([query])[0]
 
-            # Parallelise Chroma queries for multiple files
-            if self.is_multi_file and len(self.active_file_ids) > 1:
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=min(4, len(self.active_file_ids))
-                ) as executor:
-                    futures = [
-                        executor.submit(self._query_single_file, f_id, query_embedding)
-                        for f_id in self.active_file_ids
-                    ]
-                    for fut in concurrent.futures.as_completed(futures):
-                        all_relevant_docs.extend(fut.result())
-            else:
-                # Single file or only one file -> sequential
-                for f_id in self.active_file_ids:
-                    all_relevant_docs.extend(
-                        self._query_single_file(f_id, query_embedding)
-                    )
+            all_relevant_docs = self._retrieve_relevant_docs(query_embedding)
 
             if not all_relevant_docs:
                 logging.warning(
@@ -306,68 +432,12 @@ class AzureChatbot(BaseRAGHandler):
                 # Fallback: use a generic response or attempt non-RAG if desired.
                 # For now, we'll proceed, and the LLM will answer based on its general knowledge if context is empty.
 
-            # Prepare additional context about available files for both single and multi-file mode
-            files_context = ""
-            if self.all_file_infos:
-                if self.is_multi_file:
-                    # For multi-file, show list with filenames and URLs if available
-                    file_details = []
-                    for file_id in self.active_file_ids:
-                        if file_id in self.all_file_infos:
-                            file_info = self.all_file_infos.get(file_id, {})
-                            original_filename = file_info.get(
-                                "original_filename", f"Unknown filename (ID: {file_id})"
-                            )
-
-                            # For URL files, include the actual URL in the context
-                            if "url" in file_info:
-                                url = file_info.get("url")
-                                file_details.append(
-                                    f"- {original_filename} (URL: {url})"
-                                )
-                            else:
-                                file_details.append(f"- {original_filename}")
-
-                    if file_details:
-                        files_context = (
-                            "Available documents:\n" + "\n".join(file_details) + "\n\n"
-                        )
-                        logging.info(
-                            f"Added multi-file context with {len(file_details)} files (including URLs where applicable)"
-                        )
-                else:
-                    # For single file, also build a clean context string
-                    file_id = self.active_file_ids[0]
-                    if file_id in self.all_file_infos:
-                        file_info = self.all_file_infos.get(file_id, {})
-                        original_filename = file_info.get(
-                            "original_filename", f"Unknown filename (ID: {file_id})"
-                        )
-
-                        # Start with the filename
-                        file_context_detail = f"- {original_filename}"
-
-                        # If it's a URL, add it
-                        if "url" in file_info:
-                            url = file_info.get("url")
-                            file_context_detail += f" (URL: {url})"
-
-                        files_context = (
-                            "File Information:\n" + file_context_detail + "\n\n"
-                        )
-                        logging.info(
-                            f"Added clean file context for single file: {file_id}"
-                        )
+            files_context = self._build_files_context()
 
             context_str = "\n".join(all_relevant_docs)
 
             system_message = self.configs.chatbot.system_prompt_rag_llm
-            # GPT 5.1 uses "developer" role instead of "system" role
-            deployment_lower = self.model_config.deployment.lower()
-            is_gpt_5_1 = any(
-                term in deployment_lower for term in ["gpt-5.1", "gpt_5_1"]
-            )
-            system_role = "developer" if is_gpt_5_1 else "system"
+            system_role = self._get_system_role(self.model_config.deployment)
             messages = [
                 {"role": system_role, "content": system_message},
                 {
@@ -387,62 +457,9 @@ class AzureChatbot(BaseRAGHandler):
             )
             # logging.debug(f"Messages for LLM: {messages}") # Be careful logging full context
 
-            # Check for O3, O4, or GPT-5 models which use max_completion_tokens
-            deployment_lower = self.model_config.deployment.lower()
-            use_max_completion = any(
-                term in deployment_lower
-                for term in ["o3", "o4", "gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
+            completion_params = self._build_completion_params(
+                messages, max_response_tokens
             )
-
-            # Resolve optional env-configurable advanced params
-            configured_reasoning_effort = (
-                self.configs.llm_hyperparams.reasoning_effort
-                if hasattr(self.configs, "llm_hyperparams")
-                else None
-            )
-            configured_verbosity = (
-                self.configs.llm_hyperparams.verbosity
-                if hasattr(self.configs, "llm_hyperparams")
-                else None
-            )
-
-            # Build params similar to working examples/test-gpt-5.py
-            completion_params = {
-                "model": self.model_config.deployment,
-                "messages": messages,
-            }
-
-            if use_max_completion:
-                completion_params["max_completion_tokens"] = max_response_tokens
-                completion_params[
-                    "presence_penalty"
-                ] = self.configs.llm_hyperparams.presence_penalty
-                # 'reasoning_effort' and 'verbosity' are only supported by GPT-5 family, not by O4/O3
-                if any(
-                    term in deployment_lower
-                    for term in ["gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
-                ):
-                    completion_params["reasoning_effort"] = (
-                        configured_reasoning_effort or "minimal"
-                    )
-                    completion_params["verbosity"] = configured_verbosity or "medium"
-                # Do NOT include 'stop' for GPT-5/O-series models
-            else:
-                # Regular OpenAI models
-                completion_params[
-                    "temperature"
-                ] = self.configs.llm_hyperparams.temperature
-                completion_params["max_tokens"] = max_response_tokens
-                completion_params["top_p"] = self.configs.llm_hyperparams.top_p
-                completion_params[
-                    "frequency_penalty"
-                ] = self.configs.llm_hyperparams.frequency_penalty
-                completion_params[
-                    "presence_penalty"
-                ] = self.configs.llm_hyperparams.presence_penalty
-                if self.configs.llm_hyperparams.stop is not None:
-                    completion_params["stop"] = self.configs.llm_hyperparams.stop
-
             response = self.llm_client.chat.completions.create(**completion_params)
 
             final_answer = response.choices[0].message.content
@@ -563,9 +580,16 @@ def get_azure_non_rag_response(
                 term in deployment_lower
                 for term in ["gpt-5", "gpt_5", "gpt-5.1", "gpt_5_1"]
             ):
-                completion_params["reasoning_effort"] = (
-                    configured_reasoning_effort or "minimal"
+                # GPT-5.1 defaults to 'none', GPT-5 defaults to 'minimal'
+                is_gpt_5_1 = any(
+                    term in deployment_lower for term in ["gpt-5.1", "gpt_5_1"]
                 )
+                if configured_reasoning_effort is not None:
+                    completion_params["reasoning_effort"] = configured_reasoning_effort
+                else:
+                    completion_params["reasoning_effort"] = (
+                        "none" if is_gpt_5_1 else "minimal"
+                    )
                 completion_params["verbosity"] = configured_verbosity or "medium"
             # Do NOT include 'stop' for GPT-5/O-series models
         else:
