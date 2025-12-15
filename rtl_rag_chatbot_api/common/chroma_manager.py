@@ -77,7 +77,13 @@ class ChromaDBManager:
 
             try:
                 settings = Settings(
-                    allow_reset=True, is_persistent=True, anonymized_telemetry=False
+                    allow_reset=True,
+                    is_persistent=True,
+                    anonymized_telemetry=False,
+                    chroma_telemetry_impl="none",  # Completely disable telemetry
+                )
+                logging.debug(
+                    f"Creating ChromaDB instance with telemetry disabled for {instance_key}"
                 )
                 client = chromadb.PersistentClient(path=base_path, settings=settings)
 

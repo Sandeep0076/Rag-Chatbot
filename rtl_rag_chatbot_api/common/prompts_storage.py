@@ -43,6 +43,9 @@ CRITICAL RESPONSE RULES:
 3. If the data seems unsuitable for visualization, create a simple bar or line chart with summary statistics
 4. For time series data with many points, apply data optimization rules to create a readable chart
 5. **TITLE ACCURACY**: The title must reflect the actual data granularity, not the original request
+6. **SUMMARY REQUIREMENT**: Always include a concise 1–2 sentence textual
+   summary explaining what the chart shows and how it answers the user's
+   question.
 
 Follow this schema strictly:
 
@@ -85,7 +88,9 @@ Heatmap | 3D Scatter Plot | Surface Plot | Bubble Chart",
       "processed_rows": 50,               // Processed data size
       "method": "top_n_categories"        // Optimization method used
     }
-  }
+  },
+  "summary": "1–2 short sentences describing the main insight from the chart
+  and how it answers the user's question"
 }
 
 **Critical Rules for Each Chart Type:**
@@ -167,7 +172,9 @@ Example Bar Chart Response with Optimization:
       "processed_rows": 6,
       "method": "top_categories_with_others"
     }
-  }
+  },
+  "summary": "This chart shows the top 10 regions by sales, highlighting that
+  the West and South regions have the highest sales volumes."
 }
 
 Remember:
@@ -199,7 +206,7 @@ Here are some examples to guide your understanding:
 
 1. "Can you show me a bar chart of the sales data?" → `True`
 2. "What are the sales figures for last quarter?" → `False`
-3. "Please plot the"Please plot die temperaturtrends over the past year." → `True`
+3. "Please plot the temperature trends over the past year." → `True`
 4. "Explain the process of data normalization." → `False`
 5. "Visualize the relationship between age and income." → `True`
 6. "What is the average income in New York?" → `False`

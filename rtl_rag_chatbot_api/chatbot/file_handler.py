@@ -376,10 +376,6 @@ class FileHandler:
                 )
 
             metadata["database_summary"] = database_summary
-            logging.info(
-                f"TABULAR FLOW: Successfully extracted database_summary with "
-                f"{len(table_info)} tables and {total_rows} total rows"
-            )
 
         except Exception as e:
             logging.error(
@@ -589,10 +585,6 @@ class FileHandler:
                     update_data = {"database_summary": database_summary}
 
                     self.gcs_handler.update_file_info(existing_file_id, update_data)
-                    logging.info(
-                        f"TABULAR FLOW: Added database_summary to existing file_info.json "
-                        f"with {len(table_info)} tables and {total_rows} total rows"
-                    )
 
                 except Exception as e:
                     logging.error(
@@ -2107,12 +2099,6 @@ class FileHandler:
         Returns:
             Dict with unified_session_id if created, empty dict otherwise
         """
-        logging.info("TABULAR FLOW: create_unified_database_if_needed called")
-        logging.info(f"TABULAR FLOW: processed_file_ids={processed_file_ids}")
-        logging.info(
-            f"TABULAR FLOW: results count={len(results)}, type={type(results)}"
-        )
-
         # Filter tabular files that were successfully processed
         tabular_file_ids = []
         all_file_infos = {}
@@ -2122,37 +2108,26 @@ class FileHandler:
                 continue
 
             result = results[i]
-            logging.info(f"TABULAR FLOW: Processing result {i} for file_id={file_id}")
-            logging.info(f"TABULAR FLOW: Result type={type(result)}")
 
             # Handle both tuple and dict formats for backward compatibility
             if isinstance(result, tuple):
-                logging.info(f"TABULAR FLOW: Result is tuple format: {result}")
                 # Format: (file_id, filename, is_tabular)
                 if len(result) >= 3:
                     is_tabular = result[2]
                     status = "success"  # Tuples indicate successful processing
                 else:
-                    logging.warning(
-                        f"TABULAR FLOW: Unexpected tuple format for result {i}: {result}"
-                    )
+                    logging.warning(f"Unexpected tuple format for result {i}: {result}")
                     continue
             elif isinstance(result, dict):
                 # Dictionary format
                 is_tabular = result.get("is_tabular", False)
                 status = result.get("status", "")
-                logging.info(
-                    f"TABULAR FLOW: Result is dict - is_tabular={is_tabular}, status={status}"
-                )
             else:
-                logging.error(
-                    f"TABULAR FLOW: Unexpected result type for result {i}: {type(result)}"
-                )
+                logging.error(f"Unexpected result type for result {i}: {type(result)}")
                 continue
 
             # Only include successfully processed tabular files
             if is_tabular and status in ["success", "existing"]:
-                logging.info(f"TABULAR FLOW: Adding {file_id} to tabular files list")
                 tabular_file_ids.append(file_id)
 
                 # Get file metadata
@@ -2171,16 +2146,7 @@ class FileHandler:
 
         # Create unified DB only if 2+ tabular files
         if len(tabular_file_ids) < 2:
-            logging.info(
-                f"TABULAR FLOW: Skipping unified DB creation: only {len(tabular_file_ids)} "
-                f"tabular file(s)"
-            )
             return {}
-
-        logging.info(
-            f"TABULAR FLOW: Creating unified database for {len(tabular_file_ids)} "
-            f"tabular files: {tabular_file_ids}"
-        )
 
         try:
             from rtl_rag_chatbot_api.chatbot.unified_db_builder import (
@@ -2190,27 +2156,16 @@ class FileHandler:
             builder = UnifiedDatabaseBuilder()
 
             # Check if unified DB already exists for these files
-            logging.info("TABULAR FLOW: Checking if unified DB already exists")
             existing_unified = builder.check_unified_database_exists(tabular_file_ids)
             if existing_unified:
-                logging.info(
-                    f"TABULAR FLOW: Using existing unified database: "
-                    f"{existing_unified['unified_session_id']}"
-                )
                 return {
                     "unified_session_id": existing_unified["unified_session_id"],
                     "unified_db_path": existing_unified["unified_db_path"],
                 }
 
             # Build new unified database
-            logging.info("TABULAR FLOW: Building new unified database")
             unified_result = builder.build_unified_database(
                 tabular_file_ids, all_file_infos
-            )
-
-            logging.info(
-                f"TABULAR FLOW: Successfully created unified database: "
-                f"{unified_result['unified_session_id']}"
             )
 
             return {

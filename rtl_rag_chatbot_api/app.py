@@ -26,6 +26,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from starlette_exporter import PrometheusMiddleware, handle_metrics
 
+# Disable ChromaDB telemetry before any imports
+from configs import chromadb_telemetry_fix  # noqa: F401
 from configs.app_config import Config, GenerateSystemPromptRequest
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import AzureChatbot as Chatbot
 from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_response
@@ -553,18 +555,12 @@ async def process_files_in_parallel(
         if result.get("status") == "error":
             # For error cases, use the original file_id to maintain tracking
             processed_file_ids.append(file_ids[i])
-            logging.warning(f"Skipping invalid file: {all_files[i].filename}")
         else:
             # For successful cases, use the returned file_id which might be from existing embeddings
             processed_file_ids.append(result["file_id"])
 
         original_filenames.append(all_files[i].filename)
-        # DIAGNOSTIC: Log is_tabular extraction
         is_tab = result.get("is_tabular", False)
-        logging.info(
-            f"TABULAR FLOW: File {i} ({all_files[i].filename}) - "
-            f"is_tabular from result: {is_tab}, status: {result.get('status')}"
-        )
         is_tabular_flags.append(is_tab)
         statuses.append(result.get("status", "success"))
 
@@ -639,7 +635,6 @@ def process_tabular_file(
         },
     )
 
-    logging.info(f"TABULAR FLOW: Completed scheduling for {filename} with ID {file_id}")
     return True
 
 
@@ -755,10 +750,6 @@ def format_upload_response(
                 is_tabular_flags[0] if is_tabular_flags else False
             )
 
-    logging.info(
-        f"Returning file upload response: file_ids={response_data['file_ids']}, "
-        f"multi_file_mode={response_data.get('multi_file_mode', False)}"
-    )
     return JSONResponse(content=response_data)
 
 
@@ -778,9 +769,6 @@ def _split_processed_files_by_type(
         temp_file_path = result.get("temp_file_path")
 
         if not file_id or not temp_file_path:
-            logging.warning(
-                f"Skipping invalid file: {original_filenames[i] if i < len(original_filenames) else 'unknown'}"
-            )
             continue
 
         file_bucket = (
@@ -1439,12 +1427,6 @@ async def _process_normal_upload_flow(
             f"Migration fallback embedding processing failed: {str(mig_err)}",
             exc_info=True,
         )
-
-    # DEBUG: Log the structure of results before passing to combine_upload_results
-    logging.info(f"DEBUG: new_file_results type: {type(new_file_results)}")
-    if new_file_results:
-        logging.info(f"DEBUG: new_file_results[0] type: {type(new_file_results[0])}")
-        logging.info(f"DEBUG: new_file_results[0] value: {new_file_results[0]}")
 
     return await combine_upload_results(existing_results, new_file_results)
 
@@ -2150,21 +2132,9 @@ async def combine_upload_results(
     all_is_tabular_flags = [unique_map[fid][1] for fid in all_file_ids]
 
     # Create unified database if multiple tabular files
-    logging.info(
-        f"TABULAR FLOW: Checking if unified DB needed for {len(all_file_ids)} files"
-    )
-    logging.info(f"TABULAR FLOW: all_file_ids={all_file_ids}")
     unified_db_info = await file_handler.create_unified_database_if_needed(
         all_file_ids, all_results
     )
-
-    if unified_db_info:
-        logging.info(
-            f"TABULAR FLOW: Unified DB created: "
-            f"session_id={unified_db_info.get('unified_session_id')}"
-        )
-    else:
-        logging.info("TABULAR FLOW: No unified DB needed")
 
     # Use existing format_upload_response function with unified DB info
     return format_upload_response(
@@ -2913,6 +2883,8 @@ def handle_visualization(
     is_tabular: bool,
     configs: dict,
     temperature: float,
+    intermediate_steps: Any | None = None,
+    fallback_summary: Optional[str] = None,
 ) -> JSONResponse:
     """
     Generate visualization configuration based on the response.
@@ -2922,6 +2894,7 @@ def handle_visualization(
         query: The original query object
         is_tabular: Whether the data is tabular
         configs: Application configuration dictionary
+        intermediate_steps: Optional execution trace to include with the chart
 
     Returns:
         JSONResponse containing the chart configuration
@@ -2931,7 +2904,10 @@ def handle_visualization(
     """
     try:
         if is_tabular:
-            current_question = query.text[-1] + response + VISUALISATION_PROMPT
+            # Keep clear delimiters to avoid the model merging content and instructions.
+            current_question = (
+                f"{query.text[-1]}\n\n{response}\n\n{VISUALISATION_PROMPT}"
+            )
             try:
                 if query.model_choice.startswith("gemini"):
                     response = get_gemini_non_rag_response(
@@ -2962,16 +2938,38 @@ def handle_visualization(
             response = response.replace("True", "true").replace("False", "false")
             response = response.strip()
             response = response.replace("```json", "").replace("```", "").strip()
-            chart_config = json.loads(response)
+            try:
+                chart_config = json.loads(response)
+            except json.JSONDecodeError:
+                # Be tolerant to models that include leading/trailing text around JSON.
+                # We extract the largest JSON object-looking substring and retry once.
+                start = response.find("{")
+                end = response.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    chart_config = json.loads(response[start : end + 1])
+                else:
+                    raise
         else:
             chart_config = response
+
+        # Extract optional textual summary from the chart config
+        summary = None
+        if isinstance(chart_config, dict):
+            summary = chart_config.pop("summary", None)
+        # If the model did not include a summary, fall back to a provided textual answer
+        if summary is None and fallback_summary:
+            summary = fallback_summary
+
         logging.info(f"Generated chart config: {chart_config}")
-        return JSONResponse(
-            content={
-                "chart_config": chart_config,
-                "is_table": False,
-            }
-        )
+        content = {
+            "chart_config": chart_config,
+            "is_table": False,
+        }
+        if summary:
+            content["summary"] = summary
+        if intermediate_steps is not None:
+            content["intermediate_steps"] = intermediate_steps
+        return JSONResponse(content=content)
     except json.JSONDecodeError as je:
         logging.error(
             f"Invalid chart configuration JSON at position {je.pos}: {je.msg}"
@@ -3444,13 +3442,18 @@ async def _format_chat_response(
             pass
 
     if generate_visualization:
-        viz_response = handle_visualization(
-            response, query, is_tabular, configs, temperature
+        # Use the formatted textual answer as a fallback summary in case the chart JSON
+        # does not include an explicit "summary" field.
+        fallback_summary = str(response) if response is not None else None
+        return handle_visualization(
+            response=response,
+            query=query,
+            is_tabular=is_tabular,
+            configs=configs,
+            temperature=temperature,
+            intermediate_steps=intermediate_steps,
+            fallback_summary=fallback_summary,
         )
-        # Add intermediate steps if available
-        if intermediate_steps:
-            viz_response["intermediate_steps"] = intermediate_steps
-        return viz_response
 
     final_response_data = {
         "response": str(response),
@@ -3544,12 +3547,8 @@ async def _process_file_info(
         file_id_logging = multi_file_info["file_id_logging"]
         is_tabular = multi_file_info["is_tabular"]
 
-        # Adjust visualization settings for multi-file
-        if generate_visualization:
-            logging.info(
-                "Visualization for multi-file chat is not currently supported. Proceeding without visualization."
-            )
-            generate_visualization = False
+        # Multi-file visualization is supported via the same chart_config response format
+        # (frontend renders chart_config). Keep the flag as-is.
 
     elif query.file_id:
         # Process single-file request
@@ -3623,7 +3622,7 @@ async def _detect_visualization_need(
     should_visualize_filter = detect_visualization_need(question)
 
     if should_visualize_filter:
-        question_for_detection = CHART_DETECTION_PROMPT + question
+        question_for_detection = f"{CHART_DETECTION_PROMPT}{question.strip()}\n\nReturn only `True` or `False`."
         try:
             logging.info("Detecting if visualization is needed..")
             # vis_detection_response = get_gemini_non_rag_response(
@@ -3632,11 +3631,16 @@ async def _detect_visualization_need(
             vis_detection_response = get_azure_non_rag_response(
                 configs, question_for_detection, model_choice="gpt_4_1_nano"
             )
-            if (
-                vis_detection_response.lower() == "true"
-                or "true" in vis_detection_response.lower()
-            ):
+            resp = (vis_detection_response or "").strip().lower()
+            # Avoid false positives like "not true" / "untrue".
+            if resp == "true" or resp.startswith("true\n") or resp.startswith("true "):
                 generate_visualization = True
+            elif (
+                resp == "false"
+                or resp.startswith("false\n")
+                or resp.startswith("false ")
+            ):
+                generate_visualization = False
         except Exception as e:
             # For any errors with Azure OpenAI, default to False
             logging.error(f"Error in visualization detection: {str(e)}")
@@ -3750,17 +3754,13 @@ async def chat(query: Query, current_user=Depends(get_current_user)):
                     custom_gpt=query.custom_gpt,
                     system_prompt=query.system_prompt,
                 )
-                logging.info(
-                    f"TABULAR FLOW: Model initialized - type={type(model).__name__}, "
-                    f"is_tabular={is_tabular}"
-                )
             else:
-                logging.info(
-                    f"TABULAR FLOW: Using cached model - type={type(model).__name__}"
-                )
+                pass
 
             if generate_visualization and not is_tabular:
-                question_to_model = current_actual_question + VISUALISATION_PROMPT
+                question_to_model = (
+                    f"{current_actual_question}\n\n{VISUALISATION_PROMPT}"
+                )
             else:
                 question_to_model = current_actual_question
 
@@ -5120,8 +5120,6 @@ def _create_tabular_data_handler(
                 logging.error(f"  Error getting file info: {str(e)}")
 
     try:
-        logging.info("TABULAR FLOW: Creating TabularDataHandler instance...")
-        logging.info(f"TABULAR FLOW: file_ids={file_ids}, model_choice={model_choice}")
         handler = TabularDataHandler(
             configs,
             file_id=file_ids[0],  # For backward compatibility
@@ -5131,7 +5129,6 @@ def _create_tabular_data_handler(
             all_file_infos=all_file_infos,
             temperature=temperature,
         )
-        logging.info("TABULAR FLOW: TabularDataHandler instance created successfully")
         return handler
     except Exception as e:
         logging.error(f"Failed to create TabularDataHandler: {str(e)}")

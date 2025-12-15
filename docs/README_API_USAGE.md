@@ -333,6 +333,18 @@ Process chat queries against document content using specified language models.
     "rows": [["value1", "value2"], ...]
   }
   ```
+- When `generate_visualization` is `true`, the response returns a chart configuration instead of plain text:
+  ```json
+  {
+    "chart_config": { "...": "..." },
+    "summary": "Short explanation of what this chart shows.",
+    "is_table": false,
+    "intermediate_steps": ["optional diagnostics from tabular flows"]
+  }
+  ```
+  - `chart_config`: Visualization payload ready to render
+  - `summary`: 1–2 sentence textual explanation accompanying the chart
+  - `intermediate_steps`: Included when available to surface tabular execution steps
 - **Usage Examples**:
 
   **Basic Example**:

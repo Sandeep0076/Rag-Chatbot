@@ -15,6 +15,8 @@ from streamlit_image_generation import handle_image_generation
 
 # Define API URL as it's used across functions
 API_URL = "http://localhost:8080"
+# Preferred default text model (non-image)
+DEFAULT_TEXT_MODEL = "claude-sonnet-4-5"
 
 # Suppress warnings from google-cloud-aiplatform and vertexai
 warnings.filterwarnings(
@@ -1725,14 +1727,16 @@ def _display_messages():
     for message in st.session_state.messages:
         # Render chart messages outside of the chat container to avoid CSS conflicts
         if "chart" in message:
-            if message.get("content"):
-                st.write(message["content"])
             try:
                 fig = plot_chart(message["chart"])
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 st.error(f"Error rendering chart: {str(e)}")
                 st.write("Raw chart data:", message["chart"])
+
+            # Show textual summary below the chart (if provided)
+            if message.get("content"):
+                st.write(message["content"])
 
             # Show intermediate steps for chart messages if available
             if "intermediate_steps" in message:
@@ -1774,11 +1778,16 @@ def _handle_chat_response(chat_response):
         if "chart_config" in chat_result:
             try:
                 chart_config = chat_result["chart_config"]
+                summary = chat_result.get("summary")
                 ai_message = {
                     "role": "assistant",
                     "content": (
-                        f"Generated {chart_config['chart_type']} "
-                        f"visualization: {chart_config['title']}"
+                        summary
+                        if summary
+                        else (
+                            f"Generated {chart_config['chart_type']} "
+                            f"visualization: {chart_config['title']}"
+                        )
                     ),
                     "chart": chart_config,
                 }
