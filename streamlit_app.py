@@ -2985,21 +2985,10 @@ def _render_model_selection():
     if "temp_model_choice" not in st.session_state:
         st.session_state.temp_model_choice = st.session_state.model_choice
 
-    # Get the current index safely
-    try:
-        current_index = st.session_state.available_models.index(
-            st.session_state.model_choice
-        )
-    except ValueError:
-        # If current model choice is not in available models, default to first one
-        current_index = 0
-        st.session_state.model_choice = st.session_state.available_models[0]
-        st.session_state.temp_model_choice = st.session_state.model_choice
-
+    # Don't set index when using session state key - let session state handle the value
     st.selectbox(
         "Select Model",
         options=st.session_state.available_models,
-        index=current_index,
         key="temp_model_choice",
         on_change=on_model_change,
         label_visibility="collapsed",
