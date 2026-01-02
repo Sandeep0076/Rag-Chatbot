@@ -4,6 +4,7 @@ from typing import List, Optional
 from anthropic import AnthropicVertex
 
 from rtl_rag_chatbot_api.chatbot.utils.vertexai_common import VertexAIRAGHandler
+from rtl_rag_chatbot_api.common.retry_utils import retry_with_exponential_backoff
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -71,8 +72,15 @@ class AnthropicHandler(VertexAIRAGHandler):
         self.generative_model_name = actual_model
         logger.info("Initialized Anthropic model: %s", actual_model)
 
+    @retry_with_exponential_backoff(
+        max_retries=3,
+        initial_delay=2.0,
+        max_delay=30.0,
+        exponential_base=2.0,
+        exceptions=(Exception,),
+    )
     def _call_model(self, prompt: str) -> str:
-        """Call Anthropic Vertex model with the prompt."""
+        """Call Anthropic Vertex model with the prompt (with retry logic)."""
         try:
             message = self.client.messages.create(
                 model=self.generative_model_name,
@@ -93,9 +101,16 @@ class AnthropicHandler(VertexAIRAGHandler):
             return message.model_dump_json(indent=2)
         except Exception as e:
             logger.error("Error calling Anthropic model: %s", str(e))
-            return str(message) if "message" in locals() else str(e)
+            raise
 
 
+@retry_with_exponential_backoff(
+    max_retries=3,
+    initial_delay=2.0,
+    max_delay=30.0,
+    exponential_base=2.0,
+    exceptions=(Exception,),
+)
 def get_anthropic_non_rag_response(
     config,
     prompt: str,
@@ -103,7 +118,7 @@ def get_anthropic_non_rag_response(
     temperature: float = 0.6,
     max_tokens: int = 4096,
 ) -> str:
-    """Get a response from Anthropic Vertex model without using RAG context."""
+    """Get response from Anthropic Vertex model without RAG (with retry logic)."""
     try:
         model_mapping = {
             "claude-sonnet-4@20250514": config.anthropic.model_sonnet,
@@ -112,7 +127,8 @@ def get_anthropic_non_rag_response(
         model_name = model_mapping.get(model_choice)
         if not model_name:
             raise ValueError(
-                f"Invalid Anthropic model choice: {model_choice}. Available: {list(model_mapping.keys())}"
+                f"Invalid Anthropic model choice: {model_choice}. "
+                f"Available: {list(model_mapping.keys())}"
             )
 
         # Initialize Vertex AI and client
@@ -149,4 +165,4 @@ def get_anthropic_non_rag_response(
         logging.error(
             "Error in get_anthropic_non_rag_response: %s", str(e), exc_info=True
         )
-        return f"Error generating response: {str(e)}"
+        raise
