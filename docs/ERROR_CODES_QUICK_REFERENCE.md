@@ -41,6 +41,8 @@
 | 4011 | ERROR_EMBEDDINGS_NOT_FOUND | File not processed yet | Wait for processing |
 | 4012 | ERROR_AGENT_EXECUTION_FAILED | Query execution failed | Try simpler query |
 | 4013 | ERROR_TITLE_GENERATION_FAILED | Title generation failed | Title not created |
+| 4014 | ERROR_API_OVERLOADED | API service overloaded | Wait and retry automatically |
+| 4015 | ERROR_API_RETRY_EXHAUSTED | All retry attempts failed | Try again later |
 
 ## 📝 Common Error Scenarios
 
@@ -82,6 +84,14 @@
 - **Error 3003**: Generation failed
   - ✅ Solution: Retry or try simpler prompt
 
+### Scenario: "API overloaded error"
+
+**Most likely errors:**
+- **Error 4014**: API service temporarily overloaded
+  - ✅ Solution: System automatically retries (3 attempts with delays)
+- **Error 4015**: All retry attempts exhausted
+  - ✅ Solution: Wait 1-2 minutes and try again
+
 ## 🎯 Error Code Ranges
 
 - **1000-1999**: System, authentication, general errors
@@ -106,4 +116,4 @@
 
 ---
 
-Last updated: 2025-01-06
+Last updated: 2025-12-30
