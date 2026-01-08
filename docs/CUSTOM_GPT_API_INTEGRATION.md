@@ -19,10 +19,11 @@ This document provides a comprehensive guide for integrating Custom GPT function
 ## Overview
 
 The Custom GPT creation process consists of 9 steps:
-1. **Steps 0-6**: Configuration through guided questions (each supports a **Skip** button)
-2. **Step 7**: System prompt generation
-3. **Step 8**: Optional document upload
-4. **Step 9**: Chat initiation
+1. **Steps 0-5**: Configuration through guided questions (each supports a **Skip** button)
+2. **Step 6**: Custom Instructions or Additional Requirements (optional text input, supports **Skip** button)
+3. **Step 7**: System prompt generation
+4. **Step 8**: Optional document upload
+5. **Step 9**: Chat initiation
 
 ### Base Configuration
 
@@ -129,8 +130,9 @@ Plain text response with resolved answer.
 - Step 2: Audience Understanding
 - Step 4: Capabilities Definition
 - Step 5: Knowledge & Context
-- Step 6: Examples Collection
 - Answer Resolution (before saving user input)
+
+**Note**: Step 6 (Custom Instructions) does not use this endpoint - it's a simple text input field.
 
 ---
 
@@ -138,14 +140,14 @@ Plain text response with resolved answer.
 
 **Endpoint**: `POST /gpt/generate-system-prompt`
 
-**Purpose**: Synthesize all collected inputs into a production-ready system prompt
+**Purpose**: Synthesize all collected inputs into a production-ready system prompt and GPT name
 
 **Authentication**: Required
 
 **Request**:
 ```json
 {
-  "name": "Customer Service Assistant",
+  "initial_idea": "I want to create a customer service assistant",
   "purpose": "Help customers troubleshoot common issues",
   "audience": "Support team members",
   "tone": "Professional & Concise",
@@ -161,15 +163,21 @@ Plain text response with resolved answer.
 **Response**:
 ```json
 {
+  "gpt_name": "Customer Support Helper",
   "system_prompt": "You are a Customer Service Assistant...[full prompt text]"
 }
 ```
+
+**Response Fields**:
+- `gpt_name`: Auto-generated GPT name (2-5 words, in detected language)
+- `system_prompt`: Complete production-ready system prompt
 
 **Benefits**:
 - Backend validation
 - Optimized parameters (temperature=1.0, max_tokens=2000)
 - Automatic prompt extraction
 - Language-aware generation
+- Auto-generated GPT name based on configuration
 
 ---
 
@@ -375,14 +383,31 @@ const purposeData = await purposeResponse.json();
 
 ---
 
-### Steps 1-6: Guided Configuration
+### Steps 1-5: Guided Configuration
 
-Each step follows this pattern:
+Steps 1-5 follow this pattern:
 
 1. **Display Question**: Show question and examples from previous API call
 2. **User Input**: User provides answer (or skips)
 3. **Answer Resolution** (OPTIONAL, separate API call): Resolve references to examples
 4. **Next Question Generation** (separate API call): Generate next step's question
+
+### Step 6: Custom Instructions or Additional Requirements
+
+**Different from Steps 1-5**: This step does NOT use the Azure API for question generation.
+
+**Implementation**:
+1. **Display**: Show a simple text area with the label "Custom Instructions or Additional Requirements"
+2. **Placeholder**: "Enter any additional instructions or requirements for your GPT (optional)"
+3. **User Input**: User can enter free-form text or skip
+4. **No API Call**: No question generation or answer resolution needed
+5. **Save**: Store the input (or empty string if skipped) as `custom_instructions`
+6. **Next**: Proceed directly to Step 7 (System Prompt Generation)
+
+**UI Elements**:
+- Text area (200px height recommended)
+- Optional "Skip →" button
+- "Finish and Generate System Prompt →" button
 
 #### Important: Answer Resolution is a Separate API Call
 
@@ -405,7 +430,8 @@ Next Question Displayed
 
 Each step (1-6) supports a **Skip →** button:
 - If skipped, empty string (`""`) is passed to next step
-- Next question is still generated but without that context
+- For Steps 1-5: Next question is still generated but without that context
+- For Step 6: Directly proceed to Step 7 (no API call needed)
 - System prompt generator receives empty strings for skipped fields
 - **No Answer Resolution call is made when skipping**
 
@@ -633,7 +659,7 @@ sequenceDiagram
 
   // Generated Configuration
   "custom_gpt_system_prompt": "You are a...",
-  "custom_gpt_name": "My Assistant",
+  "custom_gpt_name": "My Assistant",  // Auto-populated from API response
   "custom_gpt_language": "English",
 
   // Documents (if uploaded)
@@ -663,8 +689,7 @@ sequenceDiagram
   "top_capabilities": "...",
   "avoid_doing": "...",
   "specialized_knowledge": "...",
-  "ideal_interaction": "...",
-  "custom_instructions": "..."
+  "custom_instructions": "..."  // Step 6: Free-form text input (no ideal_interaction)
 }
 ```
 
@@ -900,9 +925,9 @@ export async function processStep(
   return nextQuestionData; // Returns { question, examples } in JSON format
 }
 
-// Step 7: Generate System Prompt
+// Step 7: Generate System Prompt and GPT Name
 export async function generateSystemPrompt(config: {
-  name: string;
+  initial_idea: string;
   purpose: string;
   audience: string;
   tone: string;
@@ -913,11 +938,11 @@ export async function generateSystemPrompt(config: {
   custom_instructions?: string;
   language: string;
 }) {
-  return await apiRequest<{ system_prompt: string }>(
+  return await apiRequest<{ gpt_name: string; system_prompt: string }>(
     '/gpt/generate-system-prompt',
     'POST',
     {
-      name: config.name,
+      initial_idea: config.initial_idea,
       purpose: config.purpose,
       audience: config.audience,
       tone: config.tone,
@@ -1210,12 +1235,12 @@ def upload_documents(files: List, username: str) -> Dict:
 
 # Usage examples
 if __name__ == "__main__":
-    # Generate system prompt
-    system_prompt = api_request(
+    # Generate system prompt and GPT name
+    result = api_request(
         "/gpt/generate-system-prompt",
         method="POST",
         json_data={
-            "name": "Test Assistant",
+            "initial_idea": "I need a testing assistant",
             "purpose": "Help users",
             "audience": "Developers",
             "tone": "Professional & Concise",
@@ -1228,6 +1253,10 @@ if __name__ == "__main__":
         }
     )
 
+    # Extract both gpt_name and system_prompt
+    gpt_name = result["gpt_name"]
+    system_prompt = result["system_prompt"]
+
     # Chat with documents
     chat_response = api_request(
         "/file/chat",
@@ -1239,7 +1268,7 @@ if __name__ == "__main__":
             "generate_visualization": False,
             "session_id": "session-xyz",
             "custom_gpt": True,
-            "system_prompt": system_prompt["system_prompt"],
+            "system_prompt": system_prompt,
             "file_ids": ["file-abc123"],
             "temperature": 0.7
         }
@@ -1278,9 +1307,10 @@ if __name__ == "__main__":
 
 ### Sample Test Data
 
+**Request**:
 ```json
 {
-  "name": "Test Assistant",
+  "initial_idea": "I need a testing assistant",
   "purpose": "Help users test the system",
   "audience": "Developers and QA engineers",
   "tone": "Technical & Detailed",
@@ -1290,6 +1320,14 @@ if __name__ == "__main__":
   "example_interaction": "User: How do I test this? Bot: Here's how...",
   "custom_instructions": "Always provide code examples",
   "language": "English"
+}
+```
+
+**Expected Response**:
+```json
+{
+  "gpt_name": "Testing Helper",
+  "system_prompt": "You are a Testing Helper designed to help users test the system..."
 }
 ```
 
@@ -1340,11 +1378,14 @@ All prompt templates are defined in [`streamlit_components/custom_gpt_prompts.py
 - `AUDIENCE_UNDERSTANDING_PROMPT`
 - `CAPABILITIES_PROMPT`
 - `KNOWLEDGE_CONTEXT_PROMPT`
-- `EXAMPLES_PROMPT`
 - `ANSWER_RESOLUTION_PROMPT`
 - `CONVERSATION_STARTERS_PROMPT`
 
+**Note**: Step 6 (Custom Instructions) does not use a prompt template - it's a simple text input field.
+
 Copy these templates to your frontend or backend for consistent question generation.
+
+**Note**: Step 3 (Tone & Style) does not use a prompt template. Instead, it calls the `/custom-gpt/tone-options` endpoint which returns predefined tone options.
 
 ---
 

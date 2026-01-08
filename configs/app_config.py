@@ -114,7 +114,9 @@ class GenerateSystemPromptRequest(BaseModel):
     of truth for request models and easier reuse across modules.
     """
 
-    name: str = Field(..., description="Name of the custom GPT")
+    initial_idea: str = Field(
+        ..., description="User's initial idea or concept for the custom GPT"
+    )
     purpose: str = Field(..., description="Purpose and problems to solve")
     audience: str = Field(..., description="Target audience and expertise level")
     tone: str = Field(..., description="Communication tone and style")

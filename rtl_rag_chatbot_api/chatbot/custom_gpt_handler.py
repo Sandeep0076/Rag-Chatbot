@@ -267,3 +267,35 @@ def handle_custom_gpt_step_request(request, configs) -> PlainTextResponse:
         )
 
     return PlainTextResponse(answer)
+
+
+def get_tone_options(language: str = "en") -> dict:
+    """
+    Get predefined tone and style options for custom GPT creation.
+
+    Args:
+        language: Language code for internationalization (default: "en")
+
+    Returns:
+        dict: Question and examples in the format:
+            {
+                "question": "How should your GPT communicate?",
+                "examples": [
+                    "Professional & Concise - Clear, direct, and to-the-point. No fluff.",
+                    "Friendly & Encouraging - Warm, supportive, and patient like a helpful mentor.",
+                    "Casual & Conversational - Relaxed, easy-going, like chatting with a colleague.",
+                    "Technical & Detailed - Precise, thorough, with technical depth and accuracy.",
+                    "Witty & Engaging - Smart humor, personality-driven, keeps things interesting."
+                ]
+            }
+    """
+    return {
+        "question": "How should your GPT communicate?",
+        "examples": [
+            "Professional & Concise - Clear, direct, and to-the-point. No fluff.",
+            "Friendly & Encouraging - Warm, supportive, and patient like a helpful mentor.",
+            "Casual & Conversational - Relaxed, easy-going, like chatting with a colleague.",
+            "Technical & Detailed - Precise, thorough, with technical depth and accuracy.",
+            "Witty & Engaging - Smart humor, personality-driven, keeps things interesting.",
+        ],
+    }

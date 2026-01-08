@@ -87,12 +87,16 @@ Work through 6 steps of thoughtful questions that guide you through:
 
 Each step includes clear questions and examples. There are no wrong answers - be honest about your needs.
 
-#### Step 4: Review Generated Prompt
-The system synthesizes all your inputs into a comprehensive instruction set (system prompt) that defines your GPT's behavior. Review it to ensure it captures your vision.
+#### Step 4: Review Generated Prompt and Name
+The system synthesizes all your inputs into:
+- **GPT Name**: Auto-generated based on your configuration (2-5 words, in your detected language)
+- **System Prompt**: Comprehensive instruction set that defines your GPT's behavior
+
+Review both to ensure they capture your vision. You can edit the GPT name if desired.
 
 #### Step 5: Configure Settings
 On the settings page:
-1. **Enter a name** for your GPT (e.g., "Customer Support Pro", "Python Tutor")
+1. **Review/Edit GPT name** - Auto-populated from generation, but you can customize it
 2. **Select a model** from available options (see Settings & Configuration section below for details)
 3. **Adjust temperature** to control response creativity (see Settings & Configuration section below for recommended values)
 4. **Upload documents** (optional):
@@ -266,15 +270,16 @@ Maximum recommendations:
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ Step 7: System Prompt Generation                            │
+│ Step 7: System Prompt & Name Generation                     │
 │ - System synthesizes all inputs                             │
+│ - Generates GPT name (auto, 2-5 words)                      │
 │ - Generates comprehensive system prompt                     │
-│ - User can review and edit                                  │
+│ - User can review and edit both                             │
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ Step 8: Settings Configuration                              │
-│ - User enters GPT name                                      │
+│ - GPT name auto-populated (user can edit)                   │
 │ - User selects model                                        │
 │ - User adjusts temperature                                  │
 │ - User uploads documents (optional)                          │
@@ -313,15 +318,18 @@ For each step:
 5. System displays next question
 6. Process repeats for next step
 
-#### Step 7: System Prompt Generation
-1. After Step 6 completion, system automatically generates prompt
+#### Step 7: System Prompt & Name Generation
+1. After Step 6 completion, system automatically generates prompt and name
 2. **Backend API Call**: `POST /gpt/generate-system-prompt`
-3. System displays generated prompt
-4. User can edit and save changes
+3. System displays:
+   - Auto-generated GPT name (2-5 words, in detected language)
+   - Generated system prompt
+4. User can edit and save changes to both
 5. User can regenerate if needed
 
 #### Step 8: Settings & Document Upload
-1. User configures GPT name, model, and temperature
+1. GPT name auto-populated from Step 7 (user can edit)
+2. User configures model and temperature
 2. **Optional**: User uploads documents
    - **Backend API Call**: `POST /file/upload` (with `custom_gpt: true`)
    - System processes documents and stores file IDs
@@ -518,13 +526,15 @@ const resolvedAnswer = await resolveAnswer(userInput, question, examples);
 const nextQuestion = await getNextQuestion(stepNumber, resolvedAnswer);
 ```
 
-**System Prompt Generation**:
+**System Prompt & Name Generation**:
 ```javascript
-const { system_prompt } = await generateSystemPrompt({
+const { gpt_name, system_prompt } = await generateSystemPrompt({
   name, purpose, audience, tone, capabilities,
   constraints, knowledge, example_interaction,
   custom_instructions, language
 });
+// gpt_name is auto-generated (2-5 words, in detected language)
+// User can edit it in settings if desired
 ```
 
 **Document Upload**:

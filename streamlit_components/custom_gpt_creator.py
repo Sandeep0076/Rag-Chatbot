@@ -12,7 +12,6 @@ from streamlit_components.custom_gpt_prompts import (
     AUDIENCE_UNDERSTANDING_PROMPT,
     CAPABILITIES_PROMPT,
     CONVERSATION_STARTERS_PROMPT,
-    EXAMPLES_PROMPT,
     KNOWLEDGE_CONTEXT_PROMPT,
     PURPOSE_CLARIFICATION_PROMPT,
 )
@@ -306,6 +305,7 @@ def _initialize_session_state():
     for key in [
         "purpose_clarification",
         "audience_understanding",
+        "tone_style",
         "capabilities",
         "knowledge_context",
         "examples",
@@ -592,32 +592,37 @@ def _display_tone_style_step(user_initial_response):
     if st.session_state.current_step < 3:
         return
 
-    st.subheader("Tone & Style")
-    st.write("How should your GPT communicate? Choose the style that fits best:")
+    # Get detected language
+    detected = st.session_state.get("custom_gpt_language", "English")
 
-    tone_options = [
-        "Professional & Concise - Clear, direct, and to-the-point. No fluff.",
-        "Friendly & Encouraging - Warm, supportive, and patient like a helpful mentor.",
-        "Casual & Conversational - Relaxed, easy-going, like chatting with a colleague.",
-        "Technical & Detailed - Precise, thorough, with technical depth and accuracy.",
-        "Witty & Engaging - Smart humor, personality-driven, keeps things interesting.",
-    ]
-    current_index = 0
-    if st.session_state.last_tone_style:
-        for idx, option in enumerate(tone_options):
-            if option.startswith(st.session_state.last_tone_style):
-                current_index = idx
-                break
+    # Call tone options API before displaying step
+    if st.session_state.tone_style_response is None:
+        with st.spinner("Loading tone options..."):
+            try:
+                response = requests.get(
+                    f"{API_URL}/custom-gpt/tone-options",
+                    params={"language": detected},
+                    headers={"Content-Type": "application/json"},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                st.session_state.tone_style_response = response.json()
+                # Parse and store data
+                st.session_state.tone_style_data = st.session_state.tone_style_response
+            except Exception as e:
+                st.error(f"Error loading tone options: {str(e)}")
+                return
+
+    st.subheader("Tone & Style")
+    _display_step_response("tone_style")
 
     if st.session_state.current_step == 3:
-        communication_style = st.radio(
-            "Select communication style:",
-            tone_options,
-            index=current_index,
-            label_visibility="collapsed",
+        tone_style_input = st.text_area(
+            "How should your GPT communicate?",
+            value=st.session_state.last_tone_style,
+            height=100,
+            placeholder="Describe the communication style or select from examples above...",
         )
-
-        tone_style = communication_style.split(" - ")[0]
 
         col1, col2 = st.columns([1, 1])
         with col1:
@@ -625,29 +630,34 @@ def _display_tone_style_step(user_initial_response):
                 "Next →",
                 key="next_tone",
                 use_container_width=True,
-                disabled=not communication_style,
+                disabled=not tone_style_input,
             ):
                 if (
                     st.session_state.last_tone_style
-                    and tone_style != st.session_state.last_tone_style
+                    and tone_style_input != st.session_state.last_tone_style
                 ):
                     st.session_state.capabilities_response = None
                     st.session_state.capabilities_data = None
 
-                st.session_state.last_tone_style = tone_style
+                # Resolve the user input
+                resolved_tone = _resolve_user_input(
+                    user_input=tone_style_input,
+                    question_text="How should your GPT communicate?",
+                    previous_step_key="tone_style",
+                    step_name="tone_style",
+                )
+                st.session_state.last_tone_style = resolved_tone
 
                 if st.session_state.capabilities_response is None:
-                    # Extract examples from audience understanding step
-                    audience_data = getattr(
-                        st.session_state, "audience_understanding_data", None
-                    )
+                    # Extract examples from tone style step
+                    tone_data = getattr(st.session_state, "tone_style_data", None)
                     previous_examples = []
                     if (
-                        audience_data
-                        and isinstance(audience_data, dict)
-                        and "examples" in audience_data
+                        tone_data
+                        and isinstance(tone_data, dict)
+                        and "examples" in tone_data
                     ):
-                        previous_examples = audience_data["examples"]
+                        previous_examples = tone_data["examples"]
 
                     _call_azure_api_generic(
                         prompt_template=CAPABILITIES_PROMPT,
@@ -655,7 +665,7 @@ def _display_tone_style_step(user_initial_response):
                             "{USER_INITIAL_RESPONSE}": user_initial_response,
                             "{PURPOSE_RESPONSE}": st.session_state.last_purpose_response,
                             "{AUDIENCE_RESPONSE}": st.session_state.target_audience,
-                            "{TONE_STYLE_RESPONSE}": tone_style,
+                            "{TONE_STYLE_RESPONSE}": resolved_tone,
                         },
                         response_key="capabilities",
                         spinner_text="Analyzing requirements and generating capability questions...",
@@ -674,17 +684,15 @@ def _display_tone_style_step(user_initial_response):
                 st.session_state.last_tone_style = ""
                 st.session_state.capabilities_response = None
                 st.session_state.capabilities_data = None
-                # Extract examples from audience understanding step
-                audience_data = getattr(
-                    st.session_state, "audience_understanding_data", None
-                )
+                # Extract examples from tone style step
+                tone_data = getattr(st.session_state, "tone_style_data", None)
                 previous_examples = []
                 if (
-                    audience_data
-                    and isinstance(audience_data, dict)
-                    and "examples" in audience_data
+                    tone_data
+                    and isinstance(tone_data, dict)
+                    and "examples" in tone_data
                 ):
-                    previous_examples = audience_data["examples"]
+                    previous_examples = tone_data["examples"]
                 _call_azure_api_generic(
                     prompt_template=CAPABILITIES_PROMPT,
                     replacements={
@@ -868,35 +876,6 @@ def _display_knowledge_context_step():
                 )
 
                 st.session_state.specialized_knowledge = resolved_knowledge
-
-                if st.session_state.examples_response is None:
-                    # Extract examples from knowledge context step
-                    knowledge_data = getattr(
-                        st.session_state, "knowledge_context_data", None
-                    )
-                    previous_examples = []
-                    if (
-                        knowledge_data
-                        and isinstance(knowledge_data, dict)
-                        and "examples" in knowledge_data
-                    ):
-                        previous_examples = knowledge_data["examples"]
-
-                    _call_azure_api_generic(
-                        prompt_template=EXAMPLES_PROMPT,
-                        replacements={
-                            "{USER_INITIAL_RESPONSE}": st.session_state.last_initial_response,
-                            "{PURPOSE_RESPONSE}": st.session_state.last_purpose_response,
-                            "{AUDIENCE_RESPONSE}": st.session_state.target_audience,
-                            "{TONE_STYLE_RESPONSE}": st.session_state.last_tone_style,
-                            "{CAPABILITIES_RESPONSE}": st.session_state.top_capabilities,
-                            "{KNOWLEDGE_RESPONSE}": resolved_knowledge,
-                        },
-                        response_key="examples",
-                        spinner_text="Generating example interaction questions...",
-                        step_name="examples",
-                        previous_step_examples=previous_examples,
-                    )
                 st.session_state.current_step = 6
                 st.rerun()
         with col2:
@@ -907,34 +886,6 @@ def _display_knowledge_context_step():
             ):
                 # Skip this step and set empty value
                 st.session_state.specialized_knowledge = ""
-                st.session_state.examples_response = None
-                st.session_state.examples_data = None
-                # Extract examples from knowledge context step
-                knowledge_data = getattr(
-                    st.session_state, "knowledge_context_data", None
-                )
-                previous_examples = []
-                if (
-                    knowledge_data
-                    and isinstance(knowledge_data, dict)
-                    and "examples" in knowledge_data
-                ):
-                    previous_examples = knowledge_data["examples"]
-                _call_azure_api_generic(
-                    prompt_template=EXAMPLES_PROMPT,
-                    replacements={
-                        "{USER_INITIAL_RESPONSE}": st.session_state.last_initial_response,
-                        "{PURPOSE_RESPONSE}": st.session_state.last_purpose_response,
-                        "{AUDIENCE_RESPONSE}": st.session_state.target_audience,
-                        "{TONE_STYLE_RESPONSE}": st.session_state.last_tone_style,
-                        "{CAPABILITIES_RESPONSE}": st.session_state.top_capabilities,
-                        "{KNOWLEDGE_RESPONSE}": "",
-                    },
-                    response_key="examples",
-                    spinner_text="Skipping knowledge; generating example interaction questions...",
-                    step_name="examples",
-                    previous_step_examples=previous_examples,
-                )
                 st.session_state.current_step = 6
                 st.rerun()
     else:
@@ -943,67 +894,61 @@ def _display_knowledge_context_step():
 
 
 def _display_examples_collection_step():
-    """Display Step 6: Examples Collection."""
+    """Display Step 6: Custom Instructions or Additional Requirements."""
     if st.session_state.current_step < 6:
         return
 
-    st.subheader("Examples Collection")
-    _display_step_response("examples")
+    st.subheader("Custom Instructions or Additional Requirements")
+    st.info(
+        "📝 Add any specific instructions, constraints, or requirements that "
+        "haven't been covered in the previous steps. This is optional."
+    )
 
     if st.session_state.current_step == 6:
-        ideal_interaction = st.text_area(
-            "Can you give me an example of an ideal interaction?",
-            value=st.session_state.ideal_interaction,
-        )
         custom_instructions = st.text_area(
-            "Any custom instructions or additional requirements? (Optional)",
+            "Custom Instructions (Optional)",
             value=st.session_state.custom_instructions,
+            height=200,
             placeholder=(
-                "Add any specific instructions, constraints, or requirements that haven't been "
-                "covered in the previous questions..."
+                "Examples:\n"
+                "- Always cite sources when referencing specific information\n"
+                "- Use bullet points for lists of 3 or more items\n"
+                "- Avoid using technical jargon unless specifically asked\n"
+                "- Keep responses under 500 words unless more detail is requested"
             ),
             help=(
-                "Use this field to add any additional context, rules, or instructions that are "
-                "important for your GPT but weren't captured in the previous steps."
+                "Use this field to add any additional context, rules, or "
+                "instructions that are important for your GPT."
             ),
         )
 
         col1, col2 = st.columns([1, 1])
         with col1:
             if st.button(
-                "Generate System Prompt →",
-                key="generate_prompt",
+                "Finish and Generate System Prompt →",
+                key="finish_and_generate",
                 use_container_width=True,
-                disabled=not ideal_interaction,
+                type="primary",
             ):
-                # Resolve input
-                resolved_interaction = _resolve_user_input(
-                    user_input=ideal_interaction,
-                    question_text="Can you give me an example of an ideal interaction?",
-                    previous_step_key="examples",
-                    step_name="examples",
-                )
-                st.session_state.ideal_interaction = resolved_interaction
                 st.session_state.custom_instructions = custom_instructions
                 st.session_state.current_step = 7
                 st.rerun()
         with col2:
             if st.button(
                 "Skip →",
-                key="skip_examples",
+                key="skip_custom_instructions",
                 use_container_width=True,
             ):
-                # Skip this step and set empty values
-                st.session_state.ideal_interaction = ""
                 st.session_state.custom_instructions = ""
                 st.session_state.current_step = 7
                 st.rerun()
     else:
-        st.markdown(f"**Your answer:** {st.session_state.ideal_interaction}")
         if st.session_state.custom_instructions:
             st.markdown(
                 f"**Custom instructions:** {st.session_state.custom_instructions}"
             )
+        else:
+            st.markdown("**Custom instructions:** None provided")
         st.markdown("---")
 
 
@@ -1028,7 +973,7 @@ target_users: {st.session_state.target_audience}
 tone_style: {st.session_state.last_tone_style}
 must_do_capabilities: {st.session_state.top_capabilities}
 specialized_knowledge: {st.session_state.specialized_knowledge}
-example_interaction: {st.session_state.ideal_interaction}
+example_interaction: {st.session_state.get('ideal_interaction', '')}
 """
 
         # Format the prompt with replacements
@@ -1114,14 +1059,16 @@ def _display_system_prompt_step():
                 response = requests.post(
                     f"{API_URL}/gpt/generate-system-prompt",
                     json={
-                        "name": st.session_state.last_initial_response,
+                        "initial_idea": st.session_state.last_initial_response,
                         "purpose": st.session_state.last_purpose_response,
                         "audience": st.session_state.target_audience,
                         "tone": st.session_state.last_tone_style,
                         "capabilities": st.session_state.top_capabilities,
                         "constraints": st.session_state.avoid_doing or None,
                         "knowledge": st.session_state.specialized_knowledge,
-                        "example_interaction": st.session_state.ideal_interaction,
+                        "example_interaction": st.session_state.get(
+                            "ideal_interaction", ""
+                        ),
                         "custom_instructions": st.session_state.custom_instructions
                         or None,
                         "language": language,
@@ -1131,6 +1078,10 @@ def _display_system_prompt_step():
                     data = response.json()
                     st.session_state.system_prompt_generator_response = data.get(
                         "system_prompt", ""
+                    )
+                    # Extract and store GPT name from response
+                    st.session_state.custom_gpt_name = data.get(
+                        "gpt_name", st.session_state.last_initial_response
                     )
                 else:
                     st.session_state.system_prompt_generator_response = None

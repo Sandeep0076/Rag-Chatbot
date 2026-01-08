@@ -13,6 +13,7 @@ This guide provides detailed instructions on how to use each endpoint of the RAG
   - [Get Available Models](#get-available-models)
   - [Chat with Gemini](#chat-with-gemini)
   - [Generate Chat Title](#generate-chat-title)
+  - [Enhance Prompt](#enhance-prompt)
   - [Get Neighbors](#get-neighbors)
   - [Analyze Image](#analyze-image)
   - [Generate Image](#generate-image)
@@ -556,6 +557,115 @@ Generate an automatically generated title for a chat conversation based on its c
   7. Click "Send" to generate the title
 
 Note : for the title generation the input messages in text is question and answer however for image is just prompts, prompt1 prompt2.
+
+### Enhance Prompt
+
+Enhance user prompts for better image generation results using AI-powered prompt refinement. The endpoint automatically detects the language and enhances the prompt while maintaining the original intent.
+
+- **Endpoint URL**: `/enhance-prompt`
+- **HTTP Method**: POST
+- **Request Headers**:
+  - `Authorization`: Your auth token
+  - `Content-Type`: `application/json`
+- **Request Body**:
+  ```json
+  {
+    "prompt": "a cat"
+  }
+  ```
+- **Request Parameters**:
+  - `prompt` (required): The original user prompt to enhance
+- **Response Format**:
+  ```json
+  {
+    "original_prompt": "a cat",
+    "enhanced_prompt": "A photorealistic portrait of an elegant domestic cat with detailed fur texture, sitting gracefully in natural lighting, professional photography style",
+    "language": "English"
+  }
+  ```
+- **Response Fields**:
+  - `original_prompt` (str): The original prompt provided by the user
+  - `enhanced_prompt` (str): The AI-enhanced version of the prompt
+  - `language` (str): Detected language of the prompt (e.g., "English", "German")
+- **Language Detection**:
+  - Automatically detects the language from the input prompt
+  - Supports multiple languages including English and German
+  - Enhanced prompt is generated in the same language as the input
+- **Model Used**:
+  - GPT-4o-mini (`gpt_5_mini`) for prompt enhancement
+  - Max tokens: 500
+  - Optimized for fast, high-quality prompt refinement
+- **Usage Examples**:
+
+  **Basic English Prompt Enhancement**:
+  ```json
+  {
+    "prompt": "a sunset"
+  }
+  ```
+  Response:
+  ```json
+  {
+    "original_prompt": "a sunset",
+    "enhanced_prompt": "A breathtaking sunset scene with vibrant orange and pink hues painting the sky, golden hour lighting, dramatic cloud formations, professional landscape photography",
+    "language": "English"
+  }
+  ```
+
+  **German Prompt Enhancement**:
+  ```json
+  {
+    "prompt": "ein Hund im Park"
+  }
+  ```
+  Response:
+  ```json
+  {
+    "original_prompt": "ein Hund im Park",
+    "enhanced_prompt": "Ein fröhlicher Hund spielt in einem sonnigen Park, detaillierte Fellstruktur, natürliches Tageslicht, lebendige Farben, professionelle Tierfotografie",
+    "language": "German"
+  }
+  ```
+
+  **Complex Scene Enhancement**:
+  ```json
+  {
+    "prompt": "futuristic city"
+  }
+  ```
+  Response:
+  ```json
+  {
+    "original_prompt": "futuristic city",
+    "enhanced_prompt": "A stunning futuristic cityscape with towering skyscrapers featuring sleek glass and metal architecture, neon lights illuminating the night sky, flying vehicles, holographic advertisements, cyberpunk aesthetic, ultra-detailed, cinematic composition",
+    "language": "English"
+  }
+  ```
+
+- **Postman Usage**:
+  1. Create a new request in Postman
+  2. Set the request method to POST
+  3. Enter the URL: `http://your-api-domain/enhance-prompt`
+  4. Go to the "Body" tab and select "raw" and "JSON"
+  5. Enter the JSON request body:
+     ```json
+     {
+       "prompt": "your prompt here"
+     }
+     ```
+  6. Click "Send" to enhance the prompt
+  7. The response will contain the enhanced prompt ready for image generation
+
+- **Integration with Image Generation**:
+  - Use the `enhanced_prompt` from the response as input to `/image/generate` or `/image/generate-combined`
+  - Improves image quality by providing more detailed, specific prompts
+  - Maintains user intent while adding professional photography/art direction details
+
+- **Error Handling**:
+  - Returns 400 if `prompt` field is missing or empty
+  - Returns 500 if enhancement process fails
+  - Error responses include descriptive messages for troubleshooting
+
 ### Get Neighbors
 
 Retrieve nearest neighbors for a given text query from a specific file.

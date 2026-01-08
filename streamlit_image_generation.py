@@ -13,6 +13,24 @@ logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
+def _call_enhance_prompt_api(prompt):
+    """Call the enhance-prompt API endpoint."""
+    try:
+        response = requests.post(
+            f"{API_URL}/enhance-prompt", json={"prompt": prompt}, timeout=30
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.error(f"Enhance prompt API error: {response.status_code}")
+            st.error(f"Failed to enhance prompt: {response.text}")
+            return None
+    except Exception as e:
+        logger.error(f"Error calling enhance prompt API: {str(e)}")
+        st.error(f"Error enhancing prompt: {str(e)}")
+        return None
+
+
 def display_app_header():
     """Display the app header with modern neumorphic design."""
     st.markdown(
@@ -196,7 +214,7 @@ def get_image_generation_inputs():
                 else:
                     input_image_base64 = None
 
-    # Create a text area for the prompt
+    # Create a text area for the prompt with enhance button
     has_images = input_image_base64 is not None and (
         (isinstance(input_image_base64, list) and len(input_image_base64) > 0)
         or (isinstance(input_image_base64, str) and input_image_base64)
@@ -207,16 +225,44 @@ def get_image_generation_inputs():
         else "Enter a prompt describing the image you want to generate:"
     )
     prompt_placeholder = (
-        "Example: Take the couple from the first picture and make them stand near that stone building..."
+        "Example: Take the couple from the first picture and make them stand near "
+        "that stone building..."
         if (is_nanobanana and has_images)
         else "Example: A photo of a cat in space..."
     )
 
-    prompt = st.text_area(
-        prompt_label,
-        placeholder=prompt_placeholder,
-        height=100,
-    )
+    # Initialize session state for prompt if not exists
+    if "current_prompt" not in st.session_state:
+        st.session_state.current_prompt = ""
+
+    # Create columns for prompt and enhance button
+    prompt_col, enhance_col = st.columns([5, 1])
+
+    with prompt_col:
+        prompt = st.text_area(
+            prompt_label,
+            value=st.session_state.current_prompt,
+            placeholder=prompt_placeholder,
+            height=100,
+            key="prompt_input",
+        )
+
+    with enhance_col:
+        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+        if st.button("✨ Enhance", help="Enhance prompt for better results"):
+            if prompt:
+                with st.spinner("Enhancing prompt..."):
+                    result = _call_enhance_prompt_api(prompt)
+                    if result and "enhanced_prompt" in result:
+                        st.session_state.current_prompt = result["enhanced_prompt"]
+                        st.success("✅ Prompt enhanced!")
+                        st.rerun()
+            else:
+                st.warning("Please enter a prompt first")
+
+    # Update prompt from session state
+    if st.session_state.current_prompt != prompt:
+        st.session_state.current_prompt = prompt
 
     # Create a horizontal layout with columns for size and number options
     col1, col2 = st.columns(2)
