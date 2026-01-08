@@ -34,6 +34,7 @@ from rtl_rag_chatbot_api.chatbot.chatbot_creator import get_azure_non_rag_respon
 from rtl_rag_chatbot_api.chatbot.combined_image_handler import CombinedImageGenerator
 from rtl_rag_chatbot_api.chatbot.csv_handler import TabularDataHandler
 from rtl_rag_chatbot_api.chatbot.custom_gpt_handler import (
+    get_tone_options,
     handle_custom_gpt_azure_request,
     handle_custom_gpt_step_request,
 )
@@ -4402,6 +4403,51 @@ async def detect_language(
         return JSONResponse(content={"language": "German"}, status_code=200)
 
 
+@app.post("/enhance-prompt")
+async def enhance_prompt_endpoint(
+    request: Dict[str, str] = Body(...), current_user=Depends(get_current_user)
+):
+    """
+    Enhance a user prompt for better image generation results.
+
+    Args:
+        request: Dictionary containing 'prompt' key with the text to enhance
+        current_user: Authenticated user information
+
+    Returns:
+        JSONResponse with enhanced prompt details
+    """
+    try:
+        from rtl_rag_chatbot_api.chatbot.utils.prompt_enhancer import enhance_prompt
+
+        user_prompt = request.get("prompt", "")
+        if not user_prompt:
+            return JSONResponse(
+                content={"error": "Prompt is required"}, status_code=400
+            )
+
+        # Define callback for Azure GPT-4o-mini
+        def azure_callback(prompt_text: str) -> str:
+            return get_azure_non_rag_response(
+                configs=configs,
+                query=prompt_text,
+                model_choice="gpt_5_mini",
+                max_tokens=500,
+            )
+
+        # Enhance the prompt
+        result = enhance_prompt(user_prompt, azure_callback)
+
+        return JSONResponse(content=result, status_code=200)
+
+    except Exception as e:
+        logging.error(f"Prompt enhancement error: {str(e)}")
+        return JSONResponse(
+            content={"error": f"Failed to enhance prompt: {str(e)}"},
+            status_code=500,
+        )
+
+
 @app.get("/long-task")
 async def long_task():
     """
@@ -5830,6 +5876,25 @@ async def _prepare_migration_file_for_pipeline(
     return file_id, original_filename, is_tabular_flag
 
 
+@app.get("/custom-gpt/tone-options", tags=["Custom GPT"])
+async def get_custom_gpt_tone_options(
+    language: str = QueryParam(
+        default="en", description="Language code for tone options"
+    )
+):
+    """
+    Get predefined tone and style options for custom GPT creation.
+
+    Returns a static list of tone options without requiring AI generation.
+    """
+    try:
+        result = get_tone_options(language=language)
+        return result
+    except Exception as e:
+        logging.error(f"Error getting tone options: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/gpt/generate-system-prompt")
 async def generate_system_prompt(
     request: GenerateSystemPromptRequest, current_user=Depends(get_current_user)
@@ -5857,7 +5922,7 @@ async def generate_system_prompt(
 
         # Build structured input for system prompt generation
         structured_input = f"""
-user_initial_response: {request.name}
+user_initial_response: {request.initial_idea}
 problems_to_solve: {request.purpose}
 target_users: {request.audience}
 tone_style: {request.tone}
@@ -5871,9 +5936,9 @@ custom_instructions: {request.custom_instructions or "No additional custom instr
         # Combine template with input
         full_prompt = system_prompt_template + "\n\n" + structured_input
 
-        logging.info(f"Generating system prompt for GPT: {request.name}")
+        logging.info(f"Generating system prompt for GPT: {request.initial_idea}")
 
-        # Call Azure OpenAI to generate system prompt
+        # Call Azure OpenAI to generate system prompt and GPT name
         response = get_azure_non_rag_response(
             configs=configs,
             query=full_prompt,
@@ -5882,23 +5947,40 @@ custom_instructions: {request.custom_instructions or "No additional custom instr
             max_tokens=2000,
         )
 
-        # Extract system prompt from between markers
-        system_prompt = response.strip()
-        if (
-            "BEGIN SYSTEM PROMPT" in system_prompt
-            and "END SYSTEM PROMPT" in system_prompt
-        ):
-            start_idx = system_prompt.find("BEGIN SYSTEM PROMPT") + len(
-                "BEGIN SYSTEM PROMPT"
+        # Parse JSON response containing both gpt_name and system_prompt
+        try:
+            # Clean response - remove markdown code blocks if present
+            cleaned_response = response.strip()
+            if cleaned_response.startswith("```json"):
+                cleaned_response = cleaned_response[7:]
+            if cleaned_response.startswith("```"):
+                cleaned_response = cleaned_response[3:]
+            if cleaned_response.endswith("```"):
+                cleaned_response = cleaned_response[:-3]
+            cleaned_response = cleaned_response.strip()
+
+            # Parse JSON
+            parsed_response = json.loads(cleaned_response)
+            gpt_name = parsed_response.get("gpt_name", "").strip()
+            system_prompt = parsed_response.get("system_prompt", "").strip()
+
+            if not gpt_name or not system_prompt:
+                raise ValueError("Missing gpt_name or system_prompt in response")
+
+            logging.info(
+                f"Successfully generated GPT name: '{gpt_name}' and "
+                f"system prompt (length: {len(system_prompt)})"
             )
-            end_idx = system_prompt.find("END SYSTEM PROMPT")
-            system_prompt = system_prompt[start_idx:end_idx].strip()
 
-        logging.info(
-            f"Successfully generated system prompt (length: {len(system_prompt)})"
-        )
+            return {"gpt_name": gpt_name, "system_prompt": system_prompt}
 
-        return {"system_prompt": system_prompt}
+        except (json.JSONDecodeError, ValueError) as e:
+            logging.error(f"Failed to parse JSON response: {str(e)}")
+            logging.error(f"Raw response: {response}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to parse system prompt response: {str(e)}",
+            )
 
     except Exception as e:
         logging.error(f"Error generating system prompt: {str(e)}")
